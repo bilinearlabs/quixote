@@ -2,10 +2,6 @@
 
 //! Module that handles the connection to the DuckDB database.
 
-const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
-const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
-const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
-
 use alloy::{
     primitives::{B256, keccak256},
     rpc::types::Log,
@@ -13,6 +9,10 @@ use alloy::{
 use anyhow::Result;
 use duckdb::Connection;
 use std::sync::Mutex;
+
+const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
+const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
+const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
 
 pub trait Storage: Send + Sync + 'static {
     fn add_events(&self, events: &[Log]) -> Result<()>;
@@ -27,36 +27,39 @@ impl Storage for DuckDBStorage {
         for log in events {
             // Extract event signature (topic0) - this is the event hash
             let topics = log.topics();
-            let topic0 = topics.first().ok_or_else(|| {
-                anyhow::anyhow!("Log missing topic0 (event signature)")
-            })?;
-            
+            let topic0 = topics
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Log missing topic0 (event signature)"))?;
+
             let event_hash = topic0.to_string();
-            
+
             // Ensure the event table exists
             DuckDBStorage::create_event_schema(&self.conn, &event_hash)?;
-            
+
             // Extract log data
-            let block_number = log.block_number
+            let block_number = log
+                .block_number
                 .ok_or_else(|| anyhow::anyhow!("Log missing block_number"))?
                 as i64;
-            
-            let transaction_hash = log.transaction_hash
+
+            let transaction_hash = log
+                .transaction_hash
                 .ok_or_else(|| anyhow::anyhow!("Log missing transaction_hash"))?
                 .to_string();
-            
-            let log_index = log.log_index
+
+            let log_index = log
+                .log_index
                 .ok_or_else(|| anyhow::anyhow!("Log missing log_index"))?
                 as i16;
-            
+
             let contract_address = log.address().to_string();
-            
+
             // Extract topics (up to 4 topics)
             let topic0_str = topic0.to_string();
             let topic1_str = topics.get(1).map(|t| t.to_string());
             let topic2_str = topics.get(2).map(|t| t.to_string());
             let topic3_str = topics.get(3).map(|t| t.to_string());
-            
+
             // Insert into the event table
             {
                 let conn = self.conn.lock().unwrap();
@@ -64,7 +67,7 @@ impl Storage for DuckDBStorage {
                 let topic1_val = topic1_str.as_deref().unwrap_or("");
                 let topic2_val = topic2_str.as_deref().unwrap_or("");
                 let topic3_val = topic3_str.as_deref().unwrap_or("");
-                
+
                 // Use INSERT OR IGNORE to handle duplicates (DuckDB supports this)
                 conn.execute(
                     &format!(
@@ -84,13 +87,11 @@ impl Storage for DuckDBStorage {
                     ],
                 )?;
             }
-            
+
             // Update blocks table if needed
             if let Some(block_hash) = log.block_hash {
-                let block_timestamp = log.block_timestamp
-                    .unwrap_or(0)
-                    as i64;
-                
+                let block_timestamp = log.block_timestamp.unwrap_or(0) as i64;
+
                 {
                     let conn = self.conn.lock().unwrap();
                     conn.execute(
@@ -105,7 +106,7 @@ impl Storage for DuckDBStorage {
                 }
             }
         }
-        
+
         Ok(())
     }
 }

@@ -12,8 +12,8 @@ use alloy::{
 };
 use anyhow::Result;
 use clap::Parser;
-use etherduck::{EventCollector, EventProcessor};
 use etherduck::{DuckDBStorage, RpcHost};
+use etherduck::{EventCollector, EventProcessor};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -50,6 +50,12 @@ struct Args {
         help = "Start block to index (decimal).\nExample => 28837711\nDefault: latest"
     )]
     start_block: Option<String>,
+    #[arg(
+        short,
+        long,
+        help = "Path to the database file. Default: etherduck_indexer.duckdb"
+    )]
+    database: Option<String>,
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -72,7 +78,7 @@ impl RetryPolicy for AlwaysRetryPolicy {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let (rpc_hosts, contract_address, events, start_block) = parse_arguments(args)?;
+    let (rpc_hosts, contract_address, events, start_block) = parse_arguments(&args)?;
 
     println!("RPC hosts: {:?}", rpc_hosts);
     println!("Contract address: {:?}", contract_address);
@@ -108,7 +114,11 @@ async fn main() -> Result<()> {
         producer_buffer,
     );
 
-    let storage = DuckDBStorage::new()?;
+    let storage = if let Some(db_path) = &args.database {
+        DuckDBStorage::with_db(&db_path)?
+    } else {
+        DuckDBStorage::new()?
+    };
     storage.include_events(&events)?;
 
     let mut event_processor = EventProcessor::new(Arc::new(storage), consumer_buffer);
@@ -123,7 +133,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn parse_arguments(args: Args) -> Result<(Vec<RpcHost>, Address, Vec<String>, BlockNumberOrTag)> {
+fn parse_arguments(args: &Args) -> Result<(Vec<RpcHost>, Address, Vec<String>, BlockNumberOrTag)> {
     let rpc_hosts = args
         .rpc_hosts
         .iter()
@@ -136,9 +146,9 @@ fn parse_arguments(args: Args) -> Result<(Vec<RpcHost>, Address, Vec<String>, Bl
 
     println!("Contract address: {:?}", contract_address);
 
-    let events = args.events;
+    let events = args.events.clone();
 
-    let start_block = if let Some(block) = args.start_block {
+    let start_block = if let Some(block) = &args.start_block {
         BlockNumberOrTag::Number(block.parse::<u64>()?)
     } else {
         BlockNumberOrTag::Latest
