@@ -13,7 +13,7 @@ use alloy::{
 use anyhow::Result;
 use clap::Parser;
 use etherduck::EventCollector;
-use etherduck::RpcHost;
+use etherduck::{DuckDBStorage, RpcHost};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -108,6 +108,8 @@ async fn main() -> Result<()> {
         producer_buffer,
     );
 
+    let storage = DuckDBStorage::new()?;
+    storage.include_events(&events)?;
     event_collector.collect().await?;
 
     Ok(())

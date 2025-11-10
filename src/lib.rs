@@ -6,6 +6,8 @@ pub mod event_collector_runner;
 pub use event_collector_runner::*;
 pub mod event_collector;
 pub use event_collector::*;
+pub mod storage_duckdb;
+pub use storage_duckdb::*;
 
 use alloy::{
     primitives::{Address, U256},
