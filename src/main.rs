@@ -2,7 +2,7 @@
 
 use alloy::{
     eips::BlockNumberOrTag,
-    primitives::{Address, U256},
+    primitives::Address,
     providers::ProviderBuilder,
     rpc::client::RpcClient,
     transports::{
@@ -12,7 +12,7 @@ use alloy::{
 };
 use anyhow::Result;
 use clap::Parser;
-use etherduck::EventCollector;
+use etherduck::{EventCollector, EventProcessor};
 use etherduck::{DuckDBStorage, RpcHost};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
         ),
     );
 
-    let (producer_buffer, mut consumer_buffer) = mpsc::channel(100);
+    let (producer_buffer, consumer_buffer) = mpsc::channel(100);
 
     let event_collector = EventCollector::new(
         &contract_address,
@@ -110,7 +110,15 @@ async fn main() -> Result<()> {
 
     let storage = DuckDBStorage::new()?;
     storage.include_events(&events)?;
+
+    let mut event_processor = EventProcessor::new(Arc::new(storage), consumer_buffer);
     event_collector.collect().await?;
+
+    let handle = tokio::spawn(async move {
+        event_processor.process().await.unwrap();
+    });
+
+    handle.await?;
 
     Ok(())
 }

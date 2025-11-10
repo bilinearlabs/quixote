@@ -3,11 +3,13 @@
 //! Library of the Etherduck crate.
 
 pub mod event_collector_runner;
-pub use event_collector_runner::*;
+//pub use event_collector_runner::*;
 pub mod event_collector;
 pub use event_collector::*;
 pub mod storage_duckdb;
 pub use storage_duckdb::*;
+pub mod event_processor;
+pub use event_processor::*;
 
 use alloy::{
     primitives::{Address, U256},

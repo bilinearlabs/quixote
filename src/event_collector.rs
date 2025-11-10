@@ -61,7 +61,6 @@ impl<'a> EventCollector<'a> {
             )
             .await?;
 
-        println!("Events: {:?}", events);
         self.producer_buffer.send(events).await?;
 
         Ok(())
