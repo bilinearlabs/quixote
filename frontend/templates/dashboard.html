@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Etherduck Dashboard - {{ contract_name }} - {{ event_name }}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .header h2 {
+            font-size: 1.5em;
+            opacity: 0.9;
+            font-weight: normal;
+        }
+        
+        .controls {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .btn {
+            background: white;
+            color: #667eea;
+            border: none;
+            padding: 12px 30px;
+            font-size: 16px;
+            border-radius: 25px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            transition: all 0.3s;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0,0,0,0.3);
+        }
+        
+        .gauges {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .gauge-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+        
+        .gauge-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .gauge-value {
+            font-size: 3em;
+            font-weight: bold;
+            color: #764ba2;
+            margin: 10px 0;
+        }
+        
+        .chart-container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+        }
+        
+        .chart-container h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .table-container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+        }
+        
+        .table-container h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        th {
+            background: #667eea;
+            color: white;
+            font-weight: bold;
+        }
+        
+        tr:hover {
+            background: #f5f5f5;
+        }
+        
+        .loading {
+            text-align: center;
+            color: white;
+            font-size: 1.2em;
+            padding: 20px;
+        }
+        
+        .error {
+            background: #ff6b6b;
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Etherduck Dashboard</h1>
+            <h2>{{ contract_name }} - {{ event_name }}</h2>
+        </div>
+        
+        <div class="controls">
+            <button class="btn" onclick="loadData()">Refresh Data</button>
+        </div>
+        
+        <div id="loading" class="loading">Loading data...</div>
+        <div id="error" class="error" style="display: none;"></div>
+        
+        <div id="content" style="display: none;">
+            <div class="gauges">
+                <div class="gauge-card">
+                    <h3>Last 5 Minutes</h3>
+                    <div class="gauge-value" id="gauge-5min">0</div>
+                </div>
+                <div class="gauge-card">
+                    <h3>Last 30 Minutes</h3>
+                    <div class="gauge-value" id="gauge-30min">0</div>
+                </div>
+                <div class="gauge-card">
+                    <h3>Last 1 Hour</h3>
+                    <div class="gauge-value" id="gauge-1h">0</div>
+                </div>
+                <div class="gauge-card">
+                    <h3>Last 24 Hours</h3>
+                    <div class="gauge-value" id="gauge-24h">0</div>
+                </div>
+            </div>
+            
+            <div class="chart-container">
+                <h2>Events per Hour (Last 7 Days)</h2>
+                <canvas id="eventsChart"></canvas>
+            </div>
+            
+            <div class="table-container">
+                <h2>Top 5 Addresses by Transaction Count (Last 24 Hours)</h2>
+                <table id="addressesTable">
+                    <thead>
+                        <tr>
+                            <th>Address</th>
+                            <th>Transaction Count</th>
+                        </tr>
+                    </thead>
+                    <tbody id="addressesTableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let eventsChart = null;
+        
+        async function loadData() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('content').style.display = 'none';
+            
+            try {
+                // Load all data in parallel
+                const [eventsData, addressesData, gaugesData] = await Promise.all([
+                    fetch('/api/events').then(r => r.json()),
+                    fetch('/api/top_addresses').then(r => r.json()),
+                    fetch('/api/gauges').then(r => r.json())
+                ]);
+                
+                // Update gauges
+                document.getElementById('gauge-5min').textContent = gaugesData['5min'].toLocaleString();
+                document.getElementById('gauge-30min').textContent = gaugesData['30min'].toLocaleString();
+                document.getElementById('gauge-1h').textContent = gaugesData['1h'].toLocaleString();
+                document.getElementById('gauge-24h').textContent = gaugesData['24h'].toLocaleString();
+                
+                // Update chart
+                updateChart(eventsData);
+                
+                // Update table
+                updateTable(addressesData);
+                
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('content').style.display = 'block';
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = 'Error loading data: ' + error.message;
+            }
+        }
+        
+        function updateChart(data) {
+            const ctx = document.getElementById('eventsChart').getContext('2d');
+            
+            const labels = data.map(d => new Date(d.timestamp).toLocaleString());
+            const counts = data.map(d => d.count);
+            
+            if (eventsChart) {
+                eventsChart.destroy();
+            }
+            
+            eventsChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Events per Hour',
+                        data: counts,
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 3,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Number of Events'
+                            },
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+        
+        function updateTable(data) {
+            const tbody = document.getElementById('addressesTableBody');
+            tbody.innerHTML = '';
+            
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" style="text-align: center;">No data available</td></tr>';
+                return;
+            }
+            
+            data.forEach(item => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${item.address}</td>
+                    <td>${item.transaction_count.toLocaleString()}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        // Load data on page load
+        loadData();
+        
+        // Auto-refresh every 60 seconds
+        setInterval(loadData, 60000);
+    </script>
+</body>
+</html>
+

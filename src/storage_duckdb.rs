@@ -2,12 +2,15 @@
 
 //! Module that handles the connection to the DuckDB database.
 
+use crate::{ContractDescriptorDb, Event, EventDb, EventDescriptorDb, StorageQuery};
 use alloy::{
-    primitives::{B256, keccak256},
+    primitives::{Address, B256, keccak256},
     rpc::types::Log,
 };
 use anyhow::Result;
-use duckdb::Connection;
+use chrono::{DateTime, Utc};
+use duckdb::{Connection, params};
+use std::string::ToString;
 use std::sync::Mutex;
 
 const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
@@ -16,6 +19,8 @@ const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
 
 pub trait Storage: Send + Sync + 'static {
     fn add_events(&self, events: &[Log]) -> Result<()>;
+    fn last_block(&self) -> Result<u64>;
+    fn first_block(&self) -> Result<u64>;
 }
 
 pub struct DuckDBStorage {
@@ -24,90 +29,130 @@ pub struct DuckDBStorage {
 
 impl Storage for DuckDBStorage {
     fn add_events(&self, events: &[Log]) -> Result<()> {
-        for log in events {
-            // Extract event signature (topic0) - this is the event hash
-            let topics = log.topics();
-            let topic0 = topics
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("Log missing topic0 (event signature)"))?;
+        println!("Sending batch query to the DB");
+        // Ensure the event table exists
+        let event_hash = events.first().unwrap().topic0().unwrap().to_string();
+        DuckDBStorage::create_event_schema(&self.conn, &event_hash)?;
 
-            let event_hash = topic0.to_string();
+        if let Ok(mut conn) = self.conn.lock() {
+            println!("Adding events to the DB");
+            let tx = conn.transaction()?;
 
-            // Ensure the event table exists
-            DuckDBStorage::create_event_schema(&self.conn, &event_hash)?;
-
-            // Extract log data
-            let block_number = log
-                .block_number
-                .ok_or_else(|| anyhow::anyhow!("Log missing block_number"))?
-                as i64;
-
-            let transaction_hash = log
-                .transaction_hash
-                .ok_or_else(|| anyhow::anyhow!("Log missing transaction_hash"))?
-                .to_string();
-
-            let log_index = log
-                .log_index
-                .ok_or_else(|| anyhow::anyhow!("Log missing log_index"))?
-                as i16;
-
-            let contract_address = log.address().to_string();
-
-            // Extract topics (up to 4 topics)
-            let topic0_str = topic0.to_string();
-            let topic1_str = topics.get(1).map(|t| t.to_string());
-            let topic2_str = topics.get(2).map(|t| t.to_string());
-            let topic3_str = topics.get(3).map(|t| t.to_string());
-
-            // Insert into the event table
+            // Populate the blocks table so the event_X table can reference the block_number from this table.
             {
-                let conn = self.conn.lock().unwrap();
-                // Handle optional topics - use empty string for NULL
-                let topic1_val = topic1_str.as_deref().unwrap_or("");
-                let topic2_val = topic2_str.as_deref().unwrap_or("");
-                let topic3_val = topic3_str.as_deref().unwrap_or("");
+                // Ensure unique blocks are added to the blocks table.
+                let mut blocks_appender = tx.appender("blocks")?;
+                let mut last_block_number = 0;
+                for event in events {
+                    if event.block_number.unwrap() != last_block_number {
+                        blocks_appender.append_row(params![
+                            event.block_number.unwrap().to_string(),
+                            event.block_hash.unwrap().to_string(),
+                            event.block_timestamp.unwrap().to_string()
+                        ])?;
+                        last_block_number = event.block_number.unwrap();
+                    } else {
+                        continue;
+                    }
+                }
 
-                // Use INSERT OR IGNORE to handle duplicates (DuckDB supports this)
-                conn.execute(
-                    &format!(
-                        "INSERT OR IGNORE INTO event_{} (block_number, transaction_hash, log_index, contract_address, topic0, topic1, topic2, topic3) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
-                        event_hash
-                    ),
-                    [
-                        &block_number.to_string(),
-                        &transaction_hash,
-                        &log_index.to_string(),
-                        &contract_address,
-                        &topic0_str,
+                blocks_appender.flush()?;
+            }
+
+            let event_hash = events.first().unwrap().topic0().unwrap().to_string();
+
+            {
+                let mut event_appender = tx.appender(&format!("event_{}", event_hash))?;
+
+                for log in events {
+                    let topics = log.topics();
+                    let topic0 = topics
+                        .first()
+                        .ok_or_else(|| anyhow::anyhow!("Log missing topic0 (event signature)"))?;
+
+                    // Extract log data
+                    let block_number = log
+                        .block_number
+                        .ok_or_else(|| anyhow::anyhow!("Log missing block_number"))?
+                        as u64;
+
+                    let transaction_hash = log
+                        .transaction_hash
+                        .ok_or_else(|| anyhow::anyhow!("Log missing transaction_hash"))?
+                        .to_string();
+
+                    let log_index = log
+                        .log_index
+                        .ok_or_else(|| anyhow::anyhow!("Log missing log_index"))?
+                        as u16;
+
+                    let contract_address = log.address().to_string();
+
+                    // Extract topics (up to 4 topics)
+                    let topic0_str = topic0.to_string();
+                    let topic1_str = topics.get(1).map(|t| t.to_string());
+                    let topic2_str = topics.get(2).map(|t| t.to_string());
+                    let topic3_str = topics.get(3).map(|t| t.to_string());
+
+                    let topic1_val = topic1_str.as_deref().unwrap_or("");
+                    let topic2_val = topic2_str.as_deref().unwrap_or("");
+                    let topic3_val = topic3_str.as_deref().unwrap_or("");
+
+                    println!(
+                        "Adding event to the DB: {block_number} - {transaction_hash} - {log_index}"
+                    );
+
+                    event_appender.append_row(params![
+                        block_number.to_string(),
+                        transaction_hash,
+                        log_index.to_string(),
+                        contract_address,
+                        topic0_str,
                         topic1_val,
                         topic2_val,
                         topic3_val,
-                    ],
-                )?;
-            }
-
-            // Update blocks table if needed
-            if let Some(block_hash) = log.block_hash {
-                let block_timestamp = log.block_timestamp.unwrap_or(0) as i64;
-
-                {
-                    let conn = self.conn.lock().unwrap();
-                    conn.execute(
-                        "INSERT OR IGNORE INTO blocks (block_number, block_hash, block_timestamp) 
-                        VALUES (?, ?, ?);",
-                        [
-                            &block_number.to_string(),
-                            &block_hash.to_string(),
-                            &block_timestamp.to_string(),
-                        ],
-                    )?;
+                    ])?;
                 }
+
+                event_appender.flush()?;
             }
+
+            // Explicitly commit the transaction
+            tx.commit()?;
         }
 
+        // If we reach this point, the entire transaction was executed, thus we can update the last block with the
+        // value from the last of the list.
+        let last_block_number = events.last().unwrap().block_number.unwrap();
+        self.update_last_block(last_block_number)?;
+
         Ok(())
+    }
+
+    #[inline]
+    fn last_block(&self) -> Result<u64> {
+        if let Ok(conn) = self.conn.lock() {
+            Ok(conn.query_row(
+                &format!("SELECT last_block FROM {}", DUCKDB_BASE_TABLE_NAME),
+                [],
+                |row| row.get(0),
+            )?)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
+    }
+
+    #[inline]
+    fn first_block(&self) -> Result<u64> {
+        if let Ok(conn) = self.conn.lock() {
+            Ok(conn.query_row(
+                &format!("SELECT first_block FROM {}", DUCKDB_BASE_TABLE_NAME),
+                [],
+                |row| row.get(0),
+            )?)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
     }
 }
 
@@ -175,15 +220,15 @@ impl DuckDBStorage {
             "
             BEGIN;
             CREATE TABLE IF NOT EXISTS {DUCKDB_BASE_TABLE_NAME}(
-                version VARCHAR NOT NULL, 
-                first_block BIGINT, 
-                last_block BIGINT,
+                version VARCHAR NOT NULL,
+                first_block UBIGINT,
+                last_block UBIGINT,
                 PRIMARY KEY (version)
             );
             CREATE TABLE IF NOT EXISTS blocks(
-                block_number BIGINT NOT NULL,
+                block_number UBIGINT NOT NULL,
                 block_hash VARCHAR(42) NOT NULL,
-                block_timestamp BIGINT NOT NULL,
+                block_timestamp UBIGINT NOT NULL,
                 PRIMARY KEY (block_number)
             );
             CREATE TABLE IF NOT EXISTS event_descriptor(
@@ -203,7 +248,7 @@ impl DuckDBStorage {
             let conn = conn.lock().unwrap();
             conn.execute(
                 &format!(
-                    "INSERT INTO {} (version, first_block, last_block) 
+                    "INSERT INTO {} (version, first_block, last_block)
                     VALUES (?, 0, 0);",
                     DUCKDB_BASE_TABLE_NAME
                 ),
@@ -214,7 +259,7 @@ impl DuckDBStorage {
         {
             let conn = conn.lock().unwrap();
             conn.execute(
-                "INSERT INTO event_descriptor (event_signature, event_name, event_type) 
+                "INSERT INTO event_descriptor (event_signature, event_name, event_type)
                 VALUES (?, ?, ?);",
                 [
                     B256::from(keccak256(b"Transfer")).to_string(),
@@ -231,15 +276,15 @@ impl DuckDBStorage {
         let statement = &format!(
             "
                 CREATE TABLE IF NOT EXISTS event_{event_hash}(
-                    block_number BIGINT NOT NULL,
+                    block_number UBIGINT NOT NULL,
                     transaction_hash VARCHAR(42) NOT NULL,
-                    log_index SMALLINT NOT NULL,
+                    log_index USMALLINT NOT NULL,
                     contract_address VARCHAR(42) NOT NULL,
                     topic0 VARCHAR(42),
                     topic1 VARCHAR(42),
                     topic2 VARCHAR(42),
                     topic3 VARCHAR(42),
-                    PRIMARY KEY (block_number, transaction_hash)
+                    PRIMARY KEY (block_number, transaction_hash, log_index)
                 );
             ",
         );
@@ -248,5 +293,150 @@ impl DuckDBStorage {
         conn.execute(statement, [])?;
 
         Ok(())
+    }
+
+    #[inline]
+    fn update_last_block(&self, block_number: u64) -> Result<()> {
+        if let Ok(conn) = self.conn.lock() {
+            conn.execute(
+                &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET last_block = ?"),
+                [block_number.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn set_first_block(&self, block_number: u64) -> Result<()> {
+        if let Ok(conn) = self.conn.lock() {
+            conn.execute(
+                &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET first_block = ?"),
+                [block_number.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn get_db_tables(&self) -> Result<Vec<String>> {
+        if let Ok(conn) = self.conn.lock() {
+            let mut rows = conn.prepare("SHOW tables")?;
+            let tables = rows
+                .query_map([], |row| Ok(row.get(0).unwrap()))?
+                .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+                .collect::<Result<Vec<String>>>()?;
+            Ok(tables)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
+    }
+}
+
+impl StorageQuery for DuckDBStorage {
+    fn list_events(&self) -> Result<Vec<EventDescriptorDb>> {
+        if let Ok(conn) = self.conn.lock() {
+            let mut rows = conn.prepare("SELECT * FROM event_descriptor")?;
+            let events = rows
+                .query_map([], |row| {
+                    Ok(EventDescriptorDb {
+                        event_signature: row.get(0).unwrap(),
+                        event_name: row.get(1).unwrap(),
+                        event_type: row.get(2).unwrap(),
+                    })
+                })?
+                .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+                .collect::<Result<Vec<EventDescriptorDb>>>()?;
+
+            Ok(events)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
+    }
+
+    fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
+        let tables = self
+            .get_db_tables()?
+            .iter()
+            .filter(|table| table.starts_with("event_"))
+            .map(|t| ContractDescriptorDb {
+                contract_address: t.clone(),
+                contract_name: None,
+            })
+            .collect::<Vec<ContractDescriptorDb>>();
+
+        Ok(tables)
+    }
+    fn get_events(
+        &self,
+        _event: Event,
+        contract: Address,
+        start_time: DateTime<Utc>,
+        end_time: Option<DateTime<Utc>>,
+    ) -> Result<Vec<EventDb>> {
+        if let Ok(conn) = self.conn.lock() {
+            // TODO
+            //let event_hash = keccak256(event.to_string().as_bytes()).to_string();
+            let event_hash = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+            // Convert timestamps to Unix timestamps (seconds since epoch)
+            let start_timestamp = start_time.timestamp() as u64;
+            let end_timestamp = end_time
+                .map(|dt| dt.timestamp() as u64)
+                .unwrap_or(Utc::now().timestamp() as u64);
+
+            // Normalize contract address to lowercase for case-insensitive comparison
+            let contract_str = contract.to_string().to_lowercase();
+
+            println!("Querying events for contract: {}", contract_str);
+            println!("start_timestamp: {} ({})", start_timestamp, start_time);
+            println!(
+                "end_timestamp: {} ({})",
+                end_timestamp,
+                end_time
+                    .map(|dt| dt.to_string())
+                    .unwrap_or_else(|| "now".to_string())
+            );
+
+            let mut stmt = conn.prepare(&format!(
+                "
+                SELECT e.block_number, e.transaction_hash, e.log_index, e.contract_address, 
+                       e.topic0, e.topic1, e.topic2, e.topic3, b.block_timestamp
+                FROM event_{event_hash} e
+                NATURAL JOIN blocks b
+                WHERE LOWER(e.contract_address) = LOWER(?) 
+                  AND b.block_timestamp >= ? 
+                  AND b.block_timestamp <= ?
+                ORDER BY e.block_number
+            "
+            ))?;
+
+            let events = stmt
+                .query_map(
+                    params![
+                        contract_str,
+                        start_timestamp, // Pass as u64, not string
+                        end_timestamp    // Pass as u64, not string
+                    ],
+                    |row| {
+                        Ok(EventDb {
+                            block_number: row.get(0)?,
+                            transaction_hash: row.get(1)?,
+                            log_index: row.get::<_, u16>(2)? as u64,
+                            contract_address: row.get::<_, String>(3)?.parse().unwrap_or(contract),
+                            topic0: row.get(4)?,
+                            topic1: row.get::<_, Option<String>>(5)?,
+                            topic2: row.get::<_, Option<String>>(6)?,
+                            topic3: row.get::<_, Option<String>>(7)?,
+                            block_timestamp: row.get::<_, u64>(8)?, // Read as u64 directly
+                        })
+                    },
+                )?
+                .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+                .collect::<Result<Vec<EventDb>>>()?;
+
+            println!("Found {} events", events.len());
+            Ok(events)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
     }
 }

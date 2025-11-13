@@ -3,13 +3,15 @@
 //! Library of the Etherduck crate.
 
 pub mod event_collector_runner;
-//pub use event_collector_runner::*;
+pub use event_collector_runner::*;
 pub mod event_collector;
 pub use event_collector::*;
 pub mod storage_duckdb;
 pub use storage_duckdb::*;
 pub mod event_processor;
 pub use event_processor::*;
+pub mod storage_query;
+pub use storage_query::*;
 
 use alloy::{
     primitives::{Address, U256},
@@ -45,6 +47,33 @@ pub enum Erc721Event {
     Transfer(Address, Address, U256),
     Approval(Address, Address, U256),
     ApprovalForAll(Address, Address, bool),
+}
+
+pub struct LogChunk {
+    pub start_block: u64,
+    pub end_block: u64,
+    pub events: Vec<alloy::rpc::types::Log>,
+}
+
+pub type TxLogChunk = tokio::sync::mpsc::Sender<LogChunk>;
+pub type RxLogChunk = tokio::sync::mpsc::Receiver<LogChunk>;
+pub type RxCancellationToken = tokio::sync::broadcast::Receiver<()>;
+
+#[derive(Clone)]
+pub struct CancellationToken(tokio::sync::broadcast::Sender<()>);
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self(tokio::sync::broadcast::Sender::new(1))
+    }
+
+    pub fn subscribe(&self) -> RxCancellationToken {
+        self.0.subscribe()
+    }
+
+    pub fn graceful_shutdown(&self) {
+        self.0.send(()).unwrap();
+    }
 }
 
 impl std::str::FromStr for RpcHost {

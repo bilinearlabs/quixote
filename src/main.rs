@@ -1,21 +1,16 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use alloy::{
-    eips::BlockNumberOrTag,
-    primitives::Address,
-    providers::ProviderBuilder,
-    rpc::client::RpcClient,
-    transports::{
-        TransportError,
-        layers::{RetryBackoffLayer, RetryPolicy},
-    },
-};
+use alloy::{eips::BlockNumberOrTag, primitives::Address};
 use anyhow::Result;
+use axum::{Router, extract::State, http::StatusCode, response::Json, routing::post};
+use chrono::{DateTime, Utc};
 use clap::Parser;
-use etherduck::{DuckDBStorage, RpcHost};
-use etherduck::{EventCollector, EventProcessor};
+use etherduck::{CancellationToken, DuckDBStorage, RpcHost, StorageQuery};
+use etherduck::{Erc20Event, Event, EventCollectorRunner, EventProcessor, Storage};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::signal::ctrl_c;
+use tokio::sync::{Mutex, mpsc};
 
 #[derive(Parser, Debug)]
 #[command(author = "Bilinear Labs")]
@@ -58,22 +53,6 @@ struct Args {
     database: Option<String>,
 }
 
-#[derive(Debug, Copy, Clone, Default)]
-#[non_exhaustive]
-pub struct AlwaysRetryPolicy;
-
-impl RetryPolicy for AlwaysRetryPolicy {
-    fn should_retry(&self, _error: &TransportError) -> bool {
-        // TODO: Be more granular with the retry policy.
-        // we don't want to retry in some cases.
-        true
-    }
-
-    fn backoff_hint(&self, _error: &TransportError) -> Option<std::time::Duration> {
-        None
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -85,52 +64,352 @@ async fn main() -> Result<()> {
     println!("Events: {:?}", events);
     println!("Start block: {:?}", start_block);
 
-    // TODO: support multiple RPC hosts
-    let rpc_host = rpc_hosts.iter().take(1).next().unwrap();
-    let max_retry: u32 = 100;
-    let backoff: u64 = 2000;
-    let cups: u64 = 100;
-    let always_retry_policy = AlwaysRetryPolicy::default();
-
-    let retry_policy =
-        RetryBackoffLayer::new_with_policy(max_retry, backoff, cups, always_retry_policy);
-
-    let provider = Arc::new(
-        ProviderBuilder::new().connect_client(
-            RpcClient::builder()
-                .layer(retry_policy)
-                .http(rpc_host.try_into()?),
-        ),
-    );
-
     let (producer_buffer, consumer_buffer) = mpsc::channel(100);
 
-    let event_collector = EventCollector::new(
-        &contract_address,
-        &events,
-        &start_block,
-        &BlockNumberOrTag::Latest,
-        provider,
-        producer_buffer,
-    );
+    let cancellation_token = CancellationToken::new();
 
     let storage = if let Some(db_path) = &args.database {
         DuckDBStorage::with_db(&db_path)?
     } else {
         DuckDBStorage::new()?
     };
+    let storage = Arc::new(storage);
     storage.include_events(&events)?;
+    storage.set_first_block(start_block.as_number().unwrap())?;
 
-    let mut event_processor = EventProcessor::new(Arc::new(storage), consumer_buffer);
-    event_collector.collect().await?;
+    // let storage_for_api = if let Some(db_path) = &args.database {
+    //     DuckDBStorage::with_db(&db_path)?
+    // } else {
+    //     DuckDBStorage::new()?
+    // };
+    let storage_for_api = storage.clone();
 
-    let handle = tokio::spawn(async move {
-        event_processor.process().await.unwrap();
+    let last_block = storage.last_block()?;
+    let first_block = storage.first_block()?;
+    println!("Last block: {:?}", last_block);
+    println!("First block: {:?}", first_block);
+
+    // Uninitialized database
+    let target_block = if first_block == 0 && first_block == last_block {
+        println!("Database is empty. Starting from the start block: {start_block}");
+        start_block
+    } else {
+        choose_target_block(first_block, last_block, start_block)
+    };
+
+    let event_collector_runner = EventCollectorRunner::new(
+        rpc_hosts.as_slice(),
+        contract_address,
+        events,
+        target_block,
+        producer_buffer,
+    )?;
+
+    let mut event_processor = EventProcessor::new(
+        storage,
+        target_block.as_number().unwrap(),
+        consumer_buffer,
+        cancellation_token.clone(),
+    );
+
+    // Start the REST API server
+    let api_handle = tokio::spawn(async move {
+        let app = Router::new()
+            .route("/list_events", post(list_events_handler))
+            .route("/list_contracts", post(list_contracts_handler))
+            .route("/get_events", post(get_events_handler))
+            .with_state(storage_for_api);
+
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:9988")
+            .await
+            .expect("Failed to bind to port 9988");
+        println!("REST API server listening on http://0.0.0.0:9988");
+        axum::serve(listener, app).await.expect("API server error");
     });
 
-    handle.await?;
+    // Spawn both tasks concurrently
+    let collector_handle = tokio::spawn(async move { event_collector_runner.run().await });
+
+    let processor_handle = tokio::spawn(async move { event_processor.process().await });
+
+    // Wrap handles in Arc<Mutex<>> so we can abort them from Ctrl+C handler
+    let collector_handle_arc = Arc::new(Mutex::new(Some(collector_handle)));
+    let processor_handle_arc = Arc::new(Mutex::new(Some(processor_handle)));
+    let api_handle_arc = Arc::new(Mutex::new(Some(api_handle)));
+    let collector_handle_for_ctrl_c = collector_handle_arc.clone();
+    let cancellation_token_for_ctrl_c = cancellation_token.clone();
+
+    // Spawn a task that handles Ctrl+C and aborts the collector
+    let api_handle_for_ctrl_c = api_handle_arc.clone();
+    let ctrl_c_task = tokio::spawn(async move {
+        ctrl_c().await.ok();
+        println!("\nReceived Ctrl+C, shutting down gracefully...");
+        // Abort the collector task immediately - this will stop all its child tasks
+        if let Some(handle) = collector_handle_for_ctrl_c.lock().await.take() {
+            handle.abort();
+        }
+        // Signal cancellation to processor
+        cancellation_token_for_ctrl_c.graceful_shutdown();
+        // Abort the API server
+        if let Some(handle) = api_handle_for_ctrl_c.lock().await.take() {
+            handle.abort();
+        }
+    });
+
+    // Wait for either Ctrl+C task or both tasks to complete
+    tokio::select! {
+        _ = ctrl_c_task => {
+            // Ctrl+C was received, tasks are being aborted
+            // Wait for all tasks to finish
+            let collector_handle = collector_handle_arc.lock().await.take();
+            let processor_handle = processor_handle_arc.lock().await.take();
+            let api_handle = api_handle_arc.lock().await.take();
+            let (collector_result, processor_result, api_result) = tokio::join!(
+                async {
+                    if let Some(handle) = collector_handle {
+                        handle.await
+                    } else {
+                        Ok(Err(anyhow::anyhow!("Collector was aborted")))
+                    }
+                },
+                async {
+                    if let Some(handle) = processor_handle {
+                        handle.await
+                    } else {
+                        Ok(Err(anyhow::anyhow!("Processor was aborted")))
+                    }
+                },
+                async {
+                    if let Some(handle) = api_handle {
+                        handle.await
+                    } else {
+                        Ok(())
+                    }
+                }
+            );
+
+            match collector_result {
+                Ok(_) | Err(_) => {
+                    // Collector was aborted or completed
+                }
+            }
+
+            match processor_result {
+                Ok(Ok(())) => {
+                    println!("Event processor stopped gracefully");
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Event processor error during shutdown: {}", e);
+                }
+                Err(e) => {
+                    eprintln!("Event processor task panicked during shutdown: {}", e);
+                }
+            }
+
+            match api_result {
+                Ok(_) => {
+                    println!("API server stopped");
+                }
+                Err(e) => {
+                    eprintln!("API server error during shutdown: {}", e);
+                }
+            }
+
+            println!("Shutdown complete");
+        }
+        _ = async {
+            // Wait for all tasks to complete
+            let collector_handle = collector_handle_arc.lock().await.take();
+            let processor_handle = processor_handle_arc.lock().await.take();
+            let api_handle = api_handle_arc.lock().await.take();
+            let (collector_result, processor_result, api_result) = tokio::join!(
+                async {
+                    if let Some(handle) = collector_handle {
+                        handle.await
+                    } else {
+                        Ok(Err(anyhow::anyhow!("Collector was aborted")))
+                    }
+                },
+                async {
+                    if let Some(handle) = processor_handle {
+                        handle.await
+                    } else {
+                        Ok(Err(anyhow::anyhow!("Processor was aborted")))
+                    }
+                },
+                async {
+                    if let Some(handle) = api_handle {
+                        handle.await
+                    } else {
+                        Ok(())
+                    }
+                }
+            );
+
+            match collector_result {
+                Ok(Ok(())) => {
+                    println!("Event collector completed");
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Event collector error: {}", e);
+                }
+                Err(e) => {
+                    eprintln!("Event collector task panicked: {}", e);
+                }
+            }
+
+            match processor_result {
+                Ok(Ok(())) => {
+                    println!("Event processor completed");
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Event processor error: {}", e);
+                }
+                Err(e) => {
+                    eprintln!("Event processor task panicked: {}", e);
+                }
+            }
+
+            match api_result {
+                Ok(_) => {
+                    println!("API server completed");
+                }
+                Err(e) => {
+                    eprintln!("API server error: {}", e);
+                }
+            }
+        } => {}
+    }
 
     Ok(())
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
+// Request/Response types for list_events endpoint
+#[derive(Serialize)]
+struct ListEventsResponse {
+    events: Vec<etherduck::EventDescriptorDb>,
+}
+
+// Request/Response types for list_contracts endpoint
+#[derive(Serialize)]
+struct ListContractsResponse {
+    contracts: Vec<etherduck::ContractDescriptorDb>,
+}
+
+// Request type for get_events endpoint
+#[derive(Deserialize)]
+struct GetEventsRequest {
+    #[serde(default)]
+    #[allow(dead_code)] // Not used in implementation, but kept for API compatibility
+    event: Option<String>, // Not used in implementation, but required by trait
+    contract: String,
+    start_time: String,       // ISO 8601 format (RFC3339)
+    end_time: Option<String>, // ISO 8601 format (RFC3339)
+}
+
+// Response type for get_events endpoint
+#[derive(Serialize)]
+struct GetEventsResponse {
+    events: Vec<etherduck::EventDb>,
+}
+
+// POST handler for list_events
+async fn list_events_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+) -> Result<Json<ListEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    match storage.list_events() {
+        Ok(events) => Ok(Json(ListEventsResponse { events })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+// POST handler for list_contracts
+async fn list_contracts_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+) -> Result<Json<ListContractsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    match storage.list_contracts() {
+        Ok(contracts) => Ok(Json(ListContractsResponse { contracts })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+// POST handler for get_events
+async fn get_events_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+    Json(payload): Json<GetEventsRequest>,
+) -> Result<Json<GetEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Parse contract address
+    let contract = payload.contract.parse::<Address>().map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid contract address: {}", e),
+            }),
+        )
+    })?;
+
+    // Parse start_time
+    let start_time = DateTime::parse_from_rfc3339(&payload.start_time)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid start_time format (expected RFC3339): {}", e),
+                }),
+            )
+        })?
+        .with_timezone(&Utc);
+
+    // Parse end_time if provided
+    let end_time = if let Some(end_time_str) = payload.end_time {
+        Some(
+            DateTime::parse_from_rfc3339(&end_time_str)
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: format!("Invalid end_time format (expected RFC3339): {}", e),
+                        }),
+                    )
+                })?
+                .with_timezone(&Utc),
+        )
+    } else {
+        None
+    };
+
+    // Create a dummy Event since it's not used in the implementation
+    // Using a placeholder ERC20 Transfer event
+    let dummy_event = Event::Erc20Event(Erc20Event::Transfer(
+        Address::ZERO,
+        Address::ZERO,
+        alloy::primitives::U256::ZERO,
+    ));
+
+    match storage.get_events(dummy_event, contract, start_time, end_time) {
+        Ok(events) => Ok(Json(GetEventsResponse { events })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
 }
 
 fn parse_arguments(args: &Args) -> Result<(Vec<RpcHost>, Address, Vec<String>, BlockNumberOrTag)> {
@@ -155,4 +434,13 @@ fn parse_arguments(args: &Args) -> Result<(Vec<RpcHost>, Address, Vec<String>, B
     };
 
     Ok((rpc_hosts, contract_address, events, start_block))
+}
+
+// TODO: Implement this
+fn choose_target_block(
+    _first_block: u64,
+    _last_block: u64,
+    start_block: BlockNumberOrTag,
+) -> BlockNumberOrTag {
+    start_block
 }
