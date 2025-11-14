@@ -1,0 +1,178 @@
+// Copyright (C) 2025 Bilinear Labs - All Rights Reserved
+
+use crate::{DuckDBStorage, Erc20Event, Event, StorageQuery};
+use alloy::primitives::Address;
+use anyhow::Result;
+use axum::{Router, extract::State, http::StatusCode, response::Json, routing::post};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::Arc;
+
+#[derive(Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
+}
+
+// Request/Response types for list_events endpoint
+#[derive(Serialize)]
+pub struct ListEventsResponse {
+    pub events: Vec<crate::EventDescriptorDb>,
+}
+
+// Request/Response types for list_contracts endpoint
+#[derive(Serialize)]
+pub struct ListContractsResponse {
+    pub contracts: Vec<crate::ContractDescriptorDb>,
+}
+
+// Request type for get_events endpoint
+#[derive(Deserialize)]
+pub struct GetEventsRequest {
+    #[serde(default)]
+    #[allow(dead_code)] // Not used in implementation, but kept for API compatibility
+    pub event: Option<String>, // Not used in implementation, but required by trait
+    pub contract: String,
+    pub start_time: String,       // ISO 8601 format (RFC3339)
+    pub end_time: Option<String>, // ISO 8601 format (RFC3339)
+}
+
+// Response type for get_events endpoint
+#[derive(Serialize)]
+pub struct GetEventsResponse {
+    pub events: Vec<crate::EventDb>,
+}
+
+// Request type for raw_query endpoint
+#[derive(Deserialize)]
+pub struct RawQueryRequest {
+    pub query: String,
+}
+
+// Response type for raw_query endpoint
+#[derive(Serialize)]
+pub struct RawQueryResponse {
+    pub query_result: Value,
+}
+
+// POST handler for list_events
+async fn list_events_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+) -> Result<Json<ListEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    match storage.list_events() {
+        Ok(events) => Ok(Json(ListEventsResponse { events })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+// POST handler for list_contracts
+async fn list_contracts_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+) -> Result<Json<ListContractsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    match storage.list_contracts() {
+        Ok(contracts) => Ok(Json(ListContractsResponse { contracts })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+// POST handler for get_events
+async fn get_events_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+    Json(payload): Json<GetEventsRequest>,
+) -> Result<Json<GetEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Parse contract address
+    let contract = payload.contract.parse::<Address>().map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid contract address: {}", e),
+            }),
+        )
+    })?;
+
+    // Parse start_time
+    let start_time = DateTime::parse_from_rfc3339(&payload.start_time)
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid start_time format (expected RFC3339): {}", e),
+                }),
+            )
+        })?
+        .with_timezone(&Utc);
+
+    // Parse end_time if provided
+    let end_time = if let Some(end_time_str) = payload.end_time {
+        Some(
+            DateTime::parse_from_rfc3339(&end_time_str)
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: format!("Invalid end_time format (expected RFC3339): {}", e),
+                        }),
+                    )
+                })?
+                .with_timezone(&Utc),
+        )
+    } else {
+        None
+    };
+
+    // Create a dummy Event since it's not used in the implementation
+    // Using a placeholder ERC20 Transfer event
+    let dummy_event = Event::Erc20Event(Erc20Event::Transfer(
+        Address::ZERO,
+        Address::ZERO,
+        alloy::primitives::U256::ZERO,
+    ));
+
+    match storage.get_events(dummy_event, contract, start_time, end_time) {
+        Ok(events) => Ok(Json(GetEventsResponse { events })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+// POST handler for raw_query
+async fn raw_query_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+    Json(payload): Json<RawQueryRequest>,
+) -> Result<Json<RawQueryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    match storage.send_raw_query(&payload.query) {
+        Ok(result) => Ok(Json(RawQueryResponse {
+            query_result: result,
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+/// Creates and returns the REST API router
+pub fn create_router(storage: Arc<DuckDBStorage>) -> Router {
+    Router::new()
+        .route("/list_events", post(list_events_handler))
+        .route("/list_contracts", post(list_contracts_handler))
+        .route("/get_events", post(get_events_handler))
+        .route("/raw_query", post(raw_query_handler))
+        .with_state(storage)
+}

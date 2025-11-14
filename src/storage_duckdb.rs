@@ -10,9 +10,9 @@ use alloy::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, params};
+use serde_json::{Map, Number, Value, json};
 use std::string::ToString;
 use std::sync::Mutex;
-use serde_json::{json, Map, Number, Value};
 
 const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
 const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
@@ -207,11 +207,13 @@ impl DuckDBStorage {
 
         // This regex will match the table names after FROM and any JOINs (supports INNER, LEFT, RIGHT, FULL, CROSS).
         // It captures each table name in group 1, ignoring keywords.
-        let table_regex = regex::Regex::new(
-            r"(?i)(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)"
-        ).unwrap();
+        let table_regex =
+            regex::Regex::new(r"(?i)(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
 
-        Ok(DuckDBStorage { conn: conn_lock, table_regex })
+        Ok(DuckDBStorage {
+            conn: conn_lock,
+            table_regex,
+        })
     }
 
     pub fn include_events(&self, events: &[String]) -> Result<()> {
@@ -342,7 +344,8 @@ impl DuckDBStorage {
     fn get_table_schema(&self, table_name: &str) -> Result<Vec<(String, String)>> {
         if let Ok(conn) = self.conn.lock() {
             let mut rows = conn.prepare(&format!("DESCRIBE {}", table_name))?;
-            let schema = rows.query_map([], |row| Ok((row.get(0).unwrap(), row.get(1).unwrap())))?
+            let schema = rows
+                .query_map([], |row| Ok((row.get(0).unwrap(), row.get(1).unwrap())))?
                 .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
                 .collect::<Result<Vec<(String, String)>>>()?;
             Ok(schema)
@@ -352,7 +355,10 @@ impl DuckDBStorage {
     }
 
     fn parse_table_names_from_query(&self, query: &str) -> Vec<String> {
-        self.table_regex.find_iter(query).map(|m| m.as_str().split(' ').last().unwrap().to_owned()).collect::<Vec<String>>()
+        self.table_regex
+            .find_iter(query)
+            .map(|m| m.as_str().split(' ').last().unwrap().to_owned())
+            .collect::<Vec<String>>()
     }
 
     // Helper function to convert a value from the row based on the type string

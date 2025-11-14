@@ -12,6 +12,8 @@ pub mod event_processor;
 pub use event_processor::*;
 pub mod storage_query;
 pub use storage_query::*;
+pub mod api_rest;
+pub use api_rest::*;
 
 use alloy::{
     primitives::{Address, U256},
