@@ -14,6 +14,8 @@ pub mod storage_query;
 pub use storage_query::*;
 pub mod api_rest;
 pub use api_rest::*;
+pub mod abi_parser;
+pub use abi_parser::*;
 
 use alloy::{
     primitives::{Address, U256},

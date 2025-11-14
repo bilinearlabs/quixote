@@ -27,6 +27,7 @@ pub trait Storage: Send + Sync + 'static {
 pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     table_regex: regex::Regex,
+    has_extra_events: bool,
 }
 
 impl Storage for DuckDBStorage {
@@ -94,16 +95,43 @@ impl Storage for DuckDBStorage {
                     let topic2_val = topic2_str.as_deref().unwrap_or("");
                     let topic3_val = topic3_str.as_deref().unwrap_or("");
 
-                    event_appender.append_row(params![
-                        block_number.to_string(),
-                        transaction_hash,
-                        log_index.to_string(),
-                        contract_address,
-                        topic0_str,
-                        topic1_val,
-                        topic2_val,
-                        topic3_val,
-                    ])?;
+                    // Extract only the first 32 bytes (256 bits) of the data field if needed
+                    let data_hex = if self.has_extra_events {
+                        // Access the data bytes from LogData's inner data field
+                        let data_bytes = log.data().data.as_ref();
+                        let first_256_bits = &data_bytes[..data_bytes.len().min(32)];
+                        Some(format!("0x{}", alloy::hex::encode(first_256_bits)))
+                    } else {
+                        None
+                    };
+
+                    // Build params conditionally based on has_extra_events
+                    let params = if let Some(ref data) = data_hex {
+                        params![
+                            block_number.to_string(),
+                            transaction_hash,
+                            log_index.to_string(),
+                            contract_address,
+                            topic0_str,
+                            topic1_val,
+                            topic2_val,
+                            topic3_val,
+                            data.clone(),
+                        ]
+                    } else {
+                        params![
+                            block_number.to_string(),
+                            transaction_hash,
+                            log_index.to_string(),
+                            contract_address,
+                            topic0_str,
+                            topic1_val,
+                            topic2_val,
+                            topic3_val,
+                        ]
+                    };
+
+                    event_appender.append_row(params)?;
                 }
 
                 event_appender.flush()?;
@@ -149,13 +177,13 @@ impl Storage for DuckDBStorage {
 }
 
 impl DuckDBStorage {
-    pub fn new() -> Result<DuckDBStorage> {
+    pub fn new(extra_events: bool) -> Result<DuckDBStorage> {
         println!("Using the default DB");
-        Self::with_db(DUCKDB_FILE_PATH)
+        Self::with_db(DUCKDB_FILE_PATH, extra_events)
     }
 
     /// Creates a new DuckDBStorage with the given database path.
-    pub fn with_db(db_path: &str) -> Result<DuckDBStorage> {
+    pub fn with_db(db_path: &str, extra_events: bool) -> Result<DuckDBStorage> {
         let conn = Connection::open(db_path).expect("failed to open duckdb database");
         let conn_lock = Mutex::new(conn);
 
@@ -203,14 +231,20 @@ impl DuckDBStorage {
         Ok(DuckDBStorage {
             conn: conn_lock,
             table_regex,
+            has_extra_events: extra_events,
         })
     }
 
-    pub fn include_events(&self, events: &[String]) -> Result<()> {
+    pub fn include_events(
+        &self,
+        events: &[String],
+        extra_events: Option<Vec<String>>,
+    ) -> Result<()> {
         for event in events {
             let hash = keccak256(event.as_bytes());
             let event_hash = B256::from(hash).to_string();
-            DuckDBStorage::create_event_schema(&self.conn, &event_hash)?;
+            // Fix this clone!
+            DuckDBStorage::create_event_schema(&self.conn, &event_hash, extra_events.clone())?;
         }
         Ok(())
     }
@@ -227,12 +261,12 @@ impl DuckDBStorage {
             );
             CREATE TABLE IF NOT EXISTS blocks(
                 block_number UBIGINT NOT NULL,
-                block_hash VARCHAR(42) NOT NULL,
+                block_hash VARCHAR(66) NOT NULL,
                 block_timestamp UBIGINT NOT NULL,
                 PRIMARY KEY (block_number)
             );
             CREATE TABLE IF NOT EXISTS event_descriptor(
-                event_signature VARCHAR(42) NOT NULL,
+                event_signature VARCHAR(66) NOT NULL,
                 event_name VARCHAR NOT NULL,
                 event_type VARCHAR NOT NULL,
                 PRIMARY KEY (event_signature)
@@ -272,25 +306,35 @@ impl DuckDBStorage {
         Ok(())
     }
 
-    fn create_event_schema(conn: &Mutex<Connection>, event_hash: &str) -> Result<()> {
-        let statement = &format!(
+    fn create_event_schema(
+        conn: &Mutex<Connection>,
+        event_hash: &str,
+        not_indexed_params: Option<Vec<String>>,
+    ) -> Result<()> {
+        let mut statement = format!(
             "
                 CREATE TABLE IF NOT EXISTS event_{event_hash}(
                     block_number UBIGINT NOT NULL,
                     transaction_hash VARCHAR(42) NOT NULL,
                     log_index USMALLINT NOT NULL,
                     contract_address VARCHAR(42) NOT NULL,
-                    topic0 VARCHAR(42),
-                    topic1 VARCHAR(42),
-                    topic2 VARCHAR(42),
-                    topic3 VARCHAR(42),
-                    PRIMARY KEY (block_number, transaction_hash, log_index)
-                );
+                    topic0 VARCHAR(66),
+                    topic1 VARCHAR(66),
+                    topic2 VARCHAR(66),
+                    topic3 VARCHAR(66),
             ",
         );
 
+        if let Some(not_indexed_params) = not_indexed_params {
+            for param in not_indexed_params {
+                statement.push_str(&format!("{} VARCHAR(66),", param));
+            }
+        }
+
+        statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
+
         let conn = conn.lock().unwrap();
-        conn.execute(statement, [])?;
+        conn.execute(&statement, [])?;
 
         Ok(())
     }

@@ -52,6 +52,12 @@ struct Args {
         help = "Path to the database file. Default: etherduck_indexer.duckdb"
     )]
     database: Option<String>,
+    #[arg(
+        short,
+        long,
+        help = "Path for the ABI JSON spec of the indexed contract"
+    )]
+    abi_spec: Option<String>,
 }
 
 #[tokio::main]
@@ -64,18 +70,33 @@ async fn main() -> Result<()> {
     println!("Contract address: {:?}", contract_address);
     println!("Events: {:?}", events);
     println!("Start block: {:?}", start_block);
+    println!("ABI spec: {:?}", args.abi_spec);
+
+    let not_indexed_params = if let Some(abi_spec) = &args.abi_spec {
+        let abi_spec = std::fs::read_to_string(abi_spec)?;
+        let abi_parser =
+            etherduck::AbiParser::new(serde_json::from_str::<serde_json::Value>(&abi_spec)?);
+        let event_parts: Vec<String> = events[0].split('(').map(ToOwned::to_owned).collect();
+        let event_name: &str = event_parts.first().map(|s| s.as_str()).unwrap_or("");
+        println!("Event name: {:?}", event_name);
+        let not_indexed_params = abi_parser.find_event_not_indexed_params(event_name)?;
+        println!("Not indexed params: {:?}", not_indexed_params);
+        not_indexed_params
+    } else {
+        None
+    };
 
     let (producer_buffer, consumer_buffer) = mpsc::channel(100);
 
     let cancellation_token = CancellationToken::new();
 
     let storage = if let Some(db_path) = &args.database {
-        DuckDBStorage::with_db(&db_path)?
+        DuckDBStorage::with_db(&db_path, not_indexed_params.is_some())?
     } else {
-        DuckDBStorage::new()?
+        DuckDBStorage::new(not_indexed_params.is_some())?
     };
     let storage = Arc::new(storage);
-    storage.include_events(&events)?;
+    storage.include_events(&events, not_indexed_params)?;
 
     // let storage_for_api = if let Some(db_path) = &args.database {
     //     DuckDBStorage::with_db(&db_path)?
