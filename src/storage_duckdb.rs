@@ -31,11 +31,6 @@ pub struct DuckDBStorage {
 
 impl Storage for DuckDBStorage {
     fn add_events(&self, events: &[Log]) -> Result<()> {
-        println!("Sending batch query to the DB");
-        // Ensure the event table exists
-        let event_hash = events.first().unwrap().topic0().unwrap().to_string();
-        DuckDBStorage::create_event_schema(&self.conn, &event_hash)?;
-
         if let Ok(mut conn) = self.conn.lock() {
             let tx = conn.transaction()?;
 
