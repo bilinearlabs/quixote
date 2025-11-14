@@ -76,7 +76,6 @@ async fn main() -> Result<()> {
     };
     let storage = Arc::new(storage);
     storage.include_events(&events)?;
-    storage.set_first_block(start_block.as_number().unwrap())?;
 
     // let storage_for_api = if let Some(db_path) = &args.database {
     //     DuckDBStorage::with_db(&db_path)?
@@ -90,13 +89,8 @@ async fn main() -> Result<()> {
     println!("Last block: {:?}", last_block);
     println!("First block: {:?}", first_block);
 
-    // Uninitialized database
-    let target_block = if first_block == 0 && first_block == last_block {
-        println!("Database is empty. Starting from the start block: {start_block}");
-        start_block
-    } else {
-        choose_target_block(first_block, last_block, start_block)
-    };
+    // Select the target block based on the input and the current DB status.
+    let target_block = choose_target_block(&storage, start_block)?;
 
     let event_collector_runner = EventCollectorRunner::new(
         rpc_hosts.as_slice(),
@@ -297,7 +291,11 @@ fn parse_arguments(args: &Args) -> Result<(Vec<RpcHost>, Address, Vec<String>, B
     let events = args.events.clone();
 
     let start_block = if let Some(block) = &args.start_block {
-        BlockNumberOrTag::Number(block.parse::<u64>()?)
+        if let Ok(block_num) = block.parse::<u64>() {
+            BlockNumberOrTag::Number(block_num)
+        } else {
+            BlockNumberOrTag::Latest
+        }
     } else {
         BlockNumberOrTag::Latest
     };
@@ -305,11 +303,39 @@ fn parse_arguments(args: &Args) -> Result<(Vec<RpcHost>, Address, Vec<String>, B
     Ok((rpc_hosts, contract_address, events, start_block))
 }
 
-// TODO: Implement this
+/// Chooses the starting block based on the input and the current DB status.
 fn choose_target_block(
-    _first_block: u64,
-    _last_block: u64,
+    db_conn: &DuckDBStorage,
     start_block: BlockNumberOrTag,
-) -> BlockNumberOrTag {
-    start_block
+) -> Result<BlockNumberOrTag> {
+    // The DB's first and last synchronized blocks.
+    let db_start_block = db_conn.first_block()?;
+    let db_last_block = db_conn.last_block()?;
+
+    // Starting block selection logic:
+    // 1. If the input is older than the DB's start block, backfill from there.
+    // 2. If the input is newer than the DB's last block, continue from the latest synchronized block in the DB.
+    // 3. Otherwise, continue from the latest block in the DB.
+    match start_block {
+        BlockNumberOrTag::Number(n) => {
+            // Initial DB state, simply sync from the user's choice
+            if db_start_block == 0 && db_start_block == db_last_block {
+                println!("Database is empty. Starting from the start block: {n}");
+                Ok(BlockNumberOrTag::Number(n))
+            } else {
+                if n < db_start_block {
+                    println!("Backfilling from the start block: {db_start_block}");
+                    Ok(BlockNumberOrTag::Number(db_start_block))
+                } else {
+                    println!("Continuing from the latest block: {db_last_block}");
+                    Ok(BlockNumberOrTag::Number(db_last_block + 1))
+                }
+            }
+        }
+        // Continue where the DB left off.
+        _ => {
+            println!("Continuing from the latest block: {db_last_block}");
+            Ok(BlockNumberOrTag::Number(db_last_block + 1))
+        }
+    }
 }
