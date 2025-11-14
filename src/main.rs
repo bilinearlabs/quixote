@@ -323,13 +323,8 @@ fn choose_target_block(
                 println!("Database is empty. Starting from the start block: {n}");
                 Ok(BlockNumberOrTag::Number(n))
             } else {
-                if n < db_start_block {
-                    println!("Backfilling from the start block: {db_start_block}");
-                    Ok(BlockNumberOrTag::Number(db_start_block))
-                } else {
-                    println!("Continuing from the latest block: {db_last_block}");
-                    Ok(BlockNumberOrTag::Number(db_last_block + 1))
-                }
+                println!("Continuing from the latest block: {db_last_block}");
+                Ok(BlockNumberOrTag::Number(db_last_block + 1))
             }
         }
         // Continue where the DB left off.
