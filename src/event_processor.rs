@@ -50,7 +50,6 @@ impl EventProcessor {
                             // expected chunk must start exactly at `last_processed + 1`.
                             while let Some((end, ev)) = buffer.remove(&(last_processed + 1)) {
                                 // TODO: Maybe add the start and end block chunks.
-                                println!("Adding events to the DB" );
                                 if let Err(e) = self.storage.add_events(&ev.as_slice()) {
                                     eprintln!("Error adding events: {}", e);
                                     return Err(e);

@@ -37,7 +37,6 @@ impl Storage for DuckDBStorage {
         DuckDBStorage::create_event_schema(&self.conn, &event_hash)?;
 
         if let Ok(mut conn) = self.conn.lock() {
-            println!("Adding events to the DB");
             let tx = conn.transaction()?;
 
             // Populate the blocks table so the event_X table can reference the block_number from this table.
@@ -99,10 +98,6 @@ impl Storage for DuckDBStorage {
                     let topic1_val = topic1_str.as_deref().unwrap_or("");
                     let topic2_val = topic2_str.as_deref().unwrap_or("");
                     let topic3_val = topic3_str.as_deref().unwrap_or("");
-
-                    println!(
-                        "Adding event to the DB: {block_number} - {transaction_hash} - {log_index}"
-                    );
 
                     event_appender.append_row(params![
                         block_number.to_string(),
