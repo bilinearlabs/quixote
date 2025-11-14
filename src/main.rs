@@ -8,6 +8,7 @@ use clap::Parser;
 use etherduck::{CancellationToken, DuckDBStorage, RpcHost, StorageQuery};
 use etherduck::{Erc20Event, Event, EventCollectorRunner, EventProcessor, Storage};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::signal::ctrl_c;
 use tokio::sync::{Mutex, mpsc};
@@ -118,6 +119,7 @@ async fn main() -> Result<()> {
             .route("/list_events", post(list_events_handler))
             .route("/list_contracts", post(list_contracts_handler))
             .route("/get_events", post(get_events_handler))
+            .route("/raw_query", post(raw_query_handler))
             .with_state(storage_for_api);
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:9988")
@@ -403,6 +405,34 @@ async fn get_events_handler(
 
     match storage.get_events(dummy_event, contract, start_time, end_time) {
         Ok(events) => Ok(Json(GetEventsResponse { events })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )),
+    }
+}
+
+// Request type for raw_query endpoint
+#[derive(Deserialize)]
+struct RawQueryRequest {
+    query: String,
+}
+
+// Response type for raw_query endpoint
+#[derive(Serialize)]
+struct RawQueryResponse {
+    query_result: Value,
+}
+
+// POST handler for raw_query
+async fn raw_query_handler(
+    State(storage): State<Arc<DuckDBStorage>>,
+    Json(payload): Json<RawQueryRequest>,
+) -> Result<Json<RawQueryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    match storage.send_raw_query(&payload.query) {
+        Ok(result) => Ok(Json(RawQueryResponse { query_result: result })),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {

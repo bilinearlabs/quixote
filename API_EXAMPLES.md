@@ -192,6 +192,85 @@ curl -X POST http://localhost:9988/get_events \
 
 ---
 
+### 4. Raw Query
+
+Execute a raw SQL query against the database.
+
+**Endpoint:** `POST /raw_query`
+
+**Request Body:**
+
+```json
+{
+  "query": "SELECT * FROM blocks LIMIT 10"
+}
+```
+
+**Parameters:**
+- `query` (required): SQL SELECT query string
+
+**Examples:**
+
+#### Simple SELECT query
+
+```bash
+curl -X POST http://localhost:9988/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT * FROM blocks LIMIT 10"
+  }'
+```
+
+#### Query with WHERE clause
+
+```bash
+curl -X POST http://localhost:9988/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT block_number, block_timestamp FROM blocks WHERE block_number > 23780000 ORDER BY block_number DESC LIMIT 5"
+  }'
+```
+
+#### Query event tables
+
+```bash
+curl -X POST http://localhost:9988/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT COUNT(*) as total_events FROM event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+  }'
+```
+
+**Expected Response:**
+
+The response format depends on the query result. It will be a JSON object with a `result` field containing the query results:
+
+```json
+{
+  "result": {
+    "error": "Empty result from the query"
+  }
+}
+```
+
+Or when the query returns data (once fully implemented):
+
+```json
+{
+  "result": [
+    {
+      "block_number": 23783860,
+      "block_hash": "0x...",
+      "block_timestamp": 1731420743
+    }
+  ]
+}
+```
+
+**Note:** Currently, the implementation returns an error message. The actual query execution will be implemented in a future update.
+
+---
+
 ## Error Responses
 
 All endpoints return errors in the following format:
@@ -278,6 +357,13 @@ curl -X POST $API_URL/get_events \
     \"start_time\": \"$START_TIME\",
     \"end_time\": \"$END_TIME\"
   }" | jq '.'
+
+echo -e "\n=== Testing Raw Query ==="
+curl -X POST $API_URL/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "SELECT * FROM blocks LIMIT 5"
+  }' | jq '.'
 ```
 
 Save this as `test_api.sh`, make it executable (`chmod +x test_api.sh`), and run it.

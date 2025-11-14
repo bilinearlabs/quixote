@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use duckdb::{Connection, params};
 use std::string::ToString;
 use std::sync::Mutex;
+use serde_json::{json, Map, Number, Value};
 
 const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
 const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
@@ -25,6 +26,7 @@ pub trait Storage: Send + Sync + 'static {
 
 pub struct DuckDBStorage {
     conn: Mutex<Connection>,
+    table_regex: regex::Regex,
 }
 
 impl Storage for DuckDBStorage {
@@ -203,7 +205,13 @@ impl DuckDBStorage {
 
         println!("Your database is loaded and ready to use.");
 
-        Ok(DuckDBStorage { conn: conn_lock })
+        // This regex will match the table names after FROM and any JOINs (supports INNER, LEFT, RIGHT, FULL, CROSS).
+        // It captures each table name in group 1, ignoring keywords.
+        let table_regex = regex::Regex::new(
+            r"(?i)(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+        ).unwrap();
+
+        Ok(DuckDBStorage { conn: conn_lock, table_regex })
     }
 
     pub fn include_events(&self, events: &[String]) -> Result<()> {
@@ -329,6 +337,47 @@ impl DuckDBStorage {
             Err(anyhow::anyhow!("Failed to acquire lock on database"))
         }
     }
+
+    // Returns pairs (Column Name, Column Type)
+    fn get_table_schema(&self, table_name: &str) -> Result<Vec<(String, String)>> {
+        if let Ok(conn) = self.conn.lock() {
+            let mut rows = conn.prepare(&format!("DESCRIBE {}", table_name))?;
+            let schema = rows.query_map([], |row| Ok((row.get(0).unwrap(), row.get(1).unwrap())))?
+                .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+                .collect::<Result<Vec<(String, String)>>>()?;
+            Ok(schema)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
+    }
+
+    fn parse_table_names_from_query(&self, query: &str) -> Vec<String> {
+        self.table_regex.find_iter(query).map(|m| m.as_str().split(' ').last().unwrap().to_owned()).collect::<Vec<String>>()
+    }
+
+    // Helper function to convert a value from the row based on the type string
+    fn get_value_by_type(row: &duckdb::Row, col_idx: usize, db_type: &str) -> Result<Value> {
+        match db_type {
+            "UBIGINT" => {
+                let val: u64 = row.get(col_idx)?;
+                // Convert u64 to Number (may need to use i64 for very large numbers)
+                Ok(Value::Number(Number::from(val)))
+            }
+            "USMALLINT" => {
+                let val: u16 = row.get(col_idx)?;
+                Ok(Value::Number(Number::from(val)))
+            }
+            "VARCHAR(42)" | "VARCHAR" => {
+                let val: String = row.get(col_idx)?;
+                Ok(Value::String(val))
+            }
+            _ => {
+                // Try as string for unknown types
+                let val: String = row.get(col_idx)?;
+                Ok(Value::String(val))
+            }
+        }
+    }
 }
 
 impl StorageQuery for DuckDBStorage {
@@ -435,6 +484,41 @@ impl StorageQuery for DuckDBStorage {
 
             println!("Found {} events", events.len());
             Ok(events)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
+    }
+
+    fn send_raw_query(&self, query: &str) -> Result<Value> {
+        if query.find("SELECT").is_none() {
+            return Ok(json!({ "error": "Query must be a SELECT statement" }));
+        }
+
+        // First retrieve the table schema to figure out what we shall expect from the query
+        let table_names = self.parse_table_names_from_query(query);
+        let table_schema = table_names
+            .iter()
+            .map(|t| self.get_table_schema(t))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<(String, String)>>();
+
+        if let Ok(conn) = self.conn.lock() {
+            let mut results = Vec::new();
+            let mut stmt = conn.prepare(query)?;
+            let mut rows = stmt.query([])?;
+
+            while let Some(row) = rows.next()? {
+                let mut result_obj = Map::new();
+                for (i, (col_name, col_type)) in table_schema.iter().enumerate() {
+                    let value = DuckDBStorage::get_value_by_type(&row, i, col_type)?;
+                    result_obj.insert(col_name.clone(), value);
+                }
+                results.push(Value::Object(result_obj));
+            }
+
+            Ok(Value::Array(results))
         } else {
             Err(anyhow::anyhow!("Failed to acquire lock on database"))
         }

@@ -5,6 +5,7 @@ use alloy::primitives::Address;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Serializer};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EventDescriptorDb {
@@ -53,4 +54,5 @@ pub trait StorageQuery {
         start_time: DateTime<Utc>,
         end_time: Option<DateTime<Utc>>,
     ) -> Result<Vec<EventDb>>;
+    fn send_raw_query(&self, query: &str) -> Result<Value>;
 }
