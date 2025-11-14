@@ -98,12 +98,11 @@ async fn main() -> Result<()> {
     let storage = Arc::new(storage);
     storage.include_events(&events, not_indexed_params)?;
 
-    // let storage_for_api = if let Some(db_path) = &args.database {
-    //     DuckDBStorage::with_db(&db_path)?
-    // } else {
-    //     DuckDBStorage::new()?
-    // };
-    let storage_for_api = storage.clone();
+    let storage_for_api = if let Some(db_path) = &args.database {
+        Arc::new(DuckDBStorage::with_db(&db_path, true)?)
+    } else {
+        Arc::new(DuckDBStorage::new(true)?)
+    };
 
     let last_block = storage.last_block()?;
     let first_block = storage.first_block()?;
