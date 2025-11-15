@@ -3,6 +3,8 @@
 //! Module that handles the connection to the DuckDB database.
 
 use crate::{ContractDescriptorDb, Event, EventDb, EventDescriptorDb, StorageQuery};
+use alloy::dyn_abi::{DecodedEvent, EventExt};
+use alloy::json_abi::Event as JsonEvent;
 use alloy::{
     primitives::{Address, B256, keccak256},
     rpc::types::Log,
@@ -59,10 +61,16 @@ impl Storage for DuckDBStorage {
             let event_hash = events.first().unwrap().topic0().unwrap().to_string();
 
             {
-                let mut event_appender = tx.appender(&format!("event_{}", event_hash))?;
+                let table_name = format!("event_{}", event_hash);
 
                 for log in events {
                     let topics = log.topics();
+                    let parsed_event = JsonEvent::parse(
+                        "event Transfer(address indexed from_, address indexed to_, uint256 amount)",
+                    )?;
+                    //parsed_event.inputs
+                    let decoded = parsed_event.decode_log(&log.data())?;
+                    println!("Decoded: {:?}", decoded);
                     let topic0 = topics
                         .first()
                         .ok_or_else(|| anyhow::anyhow!("Log missing topic0 (event signature)"))?;
@@ -97,7 +105,6 @@ impl Storage for DuckDBStorage {
 
                     // Extract only the first 32 bytes (256 bits) of the data field if needed
                     let data_hex = if self.has_extra_events {
-                        // Access the data bytes from LogData's inner data field
                         let data_bytes = log.data().data.as_ref();
                         let first_256_bits = &data_bytes[..data_bytes.len().min(32)];
                         Some(format!("0x{}", alloy::hex::encode(first_256_bits)))
@@ -105,36 +112,62 @@ impl Storage for DuckDBStorage {
                         None
                     };
 
-                    // Build params conditionally based on has_extra_events
-                    let params = if let Some(ref data) = data_hex {
-                        params![
-                            block_number.to_string(),
-                            transaction_hash,
-                            log_index.to_string(),
-                            contract_address,
-                            topic0_str,
-                            topic1_val,
-                            topic2_val,
-                            topic3_val,
-                            data.clone(),
-                        ]
-                    } else {
-                        params![
-                            block_number.to_string(),
-                            transaction_hash,
-                            log_index.to_string(),
-                            contract_address,
-                            topic0_str,
-                            topic1_val,
-                            topic2_val,
-                            topic3_val,
-                        ]
-                    };
+                    // ---------------- Build the dynamic row -----------------
+                    let mut row_vals: Vec<String> = vec![
+                        block_number.to_string(),
+                        transaction_hash,
+                        log_index.to_string(),
+                        contract_address,
+                        topic0_str,
+                        topic1_val.to_string(),
+                        topic2_val.to_string(),
+                        topic3_val.to_string(),
+                    ];
 
-                    event_appender.append_row(params)?;
+                    // Append decoded parameters in declaration order
+                    let DecodedEvent { indexed, body, .. } = parsed_event
+                        .decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())?;
+                    let mut i_idx = 0usize;
+                    let mut i_body = 0usize;
+                    use alloy::dyn_abi::DynSolValue;
+
+                    for input in &parsed_event.inputs {
+                        let sval = if input.indexed {
+                            match &indexed[i_idx] {
+                                DynSolValue::Address(a) => a.to_string(),
+                                DynSolValue::Bool(b) => b.to_string(),
+                                other => format!("{:?}", other),
+                            }
+                        } else {
+                            match &body[i_body] {
+                                DynSolValue::Address(a) => a.to_string(),
+                                DynSolValue::Bool(b) => b.to_string(),
+                                other => format!("{:?}", other),
+                            }
+                        };
+
+                        if input.indexed {
+                            i_idx += 1;
+                        } else {
+                            i_body += 1;
+                        }
+                        row_vals.push(sval);
+                    }
+
+                    // Optional extra data column (has_extra_events)
+                    if let Some(hex) = data_hex {
+                        row_vals.push(hex);
+                    }
+
+                    // Build placeholders and execute insert.
+                    let placeholders = vec!["?"; row_vals.len()].join(",");
+                    tx.execute(
+                        &format!("INSERT INTO {} VALUES ({})", table_name, placeholders),
+                        duckdb::params_from_iter(row_vals.iter()),
+                    )?;
                 }
 
-                event_appender.flush()?;
+                // Transaction will be committed later
             }
 
             // Explicitly commit the transaction
@@ -327,12 +360,24 @@ impl DuckDBStorage {
 
         if let Some(not_indexed_params) = not_indexed_params {
             for param in not_indexed_params {
+                // unsure what this is for
                 statement.push_str(&format!("{} VARCHAR(66),", param));
             }
         }
 
+        // TODO: heads up, cant use the keyword "from" as its reserved.
+        // i think there is a way without changing the name,
+        let parsed_event = JsonEvent::parse(
+            "event Transfer(address indexed from_, address indexed to_, uint256 amount)",
+        )?;
+        for input in parsed_event.inputs {
+            statement.push_str(&format!("{} VARCHAR(66),", input.name));
+            println!("-------> {}", input.name);
+        }
+
         statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
 
+        println!("Statement: {}", statement);
         let conn = conn.lock().unwrap();
         conn.execute(&statement, [])?;
 
