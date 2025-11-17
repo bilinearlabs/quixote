@@ -13,6 +13,8 @@ use tokio::{
     sync::{Mutex, mpsc},
 };
 
+const DEFAULT_API_SERVER_ADDRESS: &str = "127.0.0.1:9720";
+
 #[derive(Parser, Debug)]
 #[command(author = "Bilinear Labs")]
 #[command(version = "0.1.0")]
@@ -130,7 +132,9 @@ async fn main() -> Result<()> {
         cancellation_token.clone(),
     );
 
-    let api_server_address = args.api_server.unwrap_or("127.0.0.1:9720".to_string());
+    let api_server_address = args
+        .api_server
+        .unwrap_or(DEFAULT_API_SERVER_ADDRESS.to_string());
 
     // Start the REST API server
     start_api_server(
