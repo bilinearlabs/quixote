@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::Parser;
 use etherduck::{
     CancellationToken, DuckDBStorage, EventCollectorRunner, EventProcessor, RpcHost, Storage,
-    api_rest::create_router,
+    api_rest::start_api_server,
 };
 use std::sync::Arc;
 use tokio::{
@@ -59,7 +59,7 @@ struct Args {
     )]
     abi_spec: Option<String>,
     #[arg(
-        short='j',
+        short = 'j',
         long,
         help = "Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720"
     )]
@@ -136,16 +136,11 @@ async fn main() -> Result<()> {
     let api_server_address = args.api_server.unwrap_or("127.0.0.1:9720".to_string());
 
     // Start the REST API server
-    let api_handle = tokio::spawn(async move {
-        let app = create_router(storage_for_api);
-        let port = api_server_address.split(":").nth(1).unwrap().to_string();
-
-        println!("REST API server listening on {api_server_address}");
-        let listener = tokio::net::TcpListener::bind(api_server_address)
-            .await
-            .expect(&format!("Failed to bind to port {port}"));
-        axum::serve(listener, app).await.expect("API server error");
-    });
+    start_api_server(
+        api_server_address.as_str(),
+        storage_for_api,
+        cancellation_token.clone(),
+    )?;
 
     // Spawn both tasks concurrently
     let collector_handle = tokio::spawn(async move { event_collector_runner.run().await });
@@ -155,12 +150,10 @@ async fn main() -> Result<()> {
     // Wrap handles in Arc<Mutex<>> so we can abort them from Ctrl+C handler
     let collector_handle_arc = Arc::new(Mutex::new(Some(collector_handle)));
     let processor_handle_arc = Arc::new(Mutex::new(Some(processor_handle)));
-    let api_handle_arc = Arc::new(Mutex::new(Some(api_handle)));
     let collector_handle_for_ctrl_c = collector_handle_arc.clone();
     let cancellation_token_for_ctrl_c = cancellation_token.clone();
 
     // Spawn a task that handles Ctrl+C and aborts the collector
-    let api_handle_for_ctrl_c = api_handle_arc.clone();
     let ctrl_c_task = tokio::spawn(async move {
         ctrl_c().await.ok();
         println!("\nReceived Ctrl+C, shutting down gracefully...");
@@ -170,10 +163,6 @@ async fn main() -> Result<()> {
         }
         // Signal cancellation to processor
         cancellation_token_for_ctrl_c.graceful_shutdown();
-        // Abort the API server
-        if let Some(handle) = api_handle_for_ctrl_c.lock().await.take() {
-            handle.abort();
-        }
     });
 
     // Wait for either Ctrl+C task or both tasks to complete
@@ -183,8 +172,7 @@ async fn main() -> Result<()> {
             // Wait for all tasks to finish
             let collector_handle = collector_handle_arc.lock().await.take();
             let processor_handle = processor_handle_arc.lock().await.take();
-            let api_handle = api_handle_arc.lock().await.take();
-            let (collector_result, processor_result, api_result) = tokio::join!(
+            let (collector_result, processor_result) = tokio::join!(
                 async {
                     if let Some(handle) = collector_handle {
                         handle.await
@@ -199,13 +187,6 @@ async fn main() -> Result<()> {
                         Ok(Err(anyhow::anyhow!("Processor was aborted")))
                     }
                 },
-                async {
-                    if let Some(handle) = api_handle {
-                        handle.await
-                    } else {
-                        Ok(())
-                    }
-                }
             );
 
             match collector_result {
@@ -226,23 +207,13 @@ async fn main() -> Result<()> {
                 }
             }
 
-            match api_result {
-                Ok(_) => {
-                    println!("API server stopped");
-                }
-                Err(e) => {
-                    eprintln!("API server error during shutdown: {}", e);
-                }
-            }
-
             println!("Shutdown complete");
         }
         _ = async {
             // Wait for all tasks to complete
             let collector_handle = collector_handle_arc.lock().await.take();
             let processor_handle = processor_handle_arc.lock().await.take();
-            let api_handle = api_handle_arc.lock().await.take();
-            let (collector_result, processor_result, api_result) = tokio::join!(
+            let (collector_result, processor_result) = tokio::join!(
                 async {
                     if let Some(handle) = collector_handle {
                         handle.await
@@ -257,13 +228,6 @@ async fn main() -> Result<()> {
                         Ok(Err(anyhow::anyhow!("Processor was aborted")))
                     }
                 },
-                async {
-                    if let Some(handle) = api_handle {
-                        handle.await
-                    } else {
-                        Ok(())
-                    }
-                }
             );
 
             match collector_result {
@@ -290,14 +254,6 @@ async fn main() -> Result<()> {
                 }
             }
 
-            match api_result {
-                Ok(_) => {
-                    println!("API server completed");
-                }
-                Err(e) => {
-                    eprintln!("API server error: {}", e);
-                }
-            }
         } => {}
     }
 
