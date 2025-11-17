@@ -102,13 +102,10 @@ async fn main() -> Result<()> {
         DuckDBStorage::new(not_indexed_params.is_some())?
     };
     let storage = Arc::new(storage);
-    storage.include_events(&events, not_indexed_params)?;
-
-    let storage_for_api = if let Some(db_path) = &args.database {
-        Arc::new(DuckDBStorage::with_db(&db_path, true)?)
-    } else {
-        Arc::new(DuckDBStorage::new(true)?)
-    };
+    storage.include_events(&events, not_indexed_params.clone())?;
+    // Clone the inner DuckDBStorage to create a concurrent new connection for the API server.
+    let storage_for_api = Arc::new((*storage).clone());
+    storage_for_api.include_events(&events, not_indexed_params)?;
 
     let last_block = storage.last_block()?;
     let first_block = storage.first_block()?;

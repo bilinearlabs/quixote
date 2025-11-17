@@ -28,6 +28,13 @@ pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     table_regex: regex::Regex,
     has_extra_events: bool,
+    db_path: String,
+}
+
+impl Clone for DuckDBStorage {
+    fn clone(&self) -> Self {
+        DuckDBStorage::with_db(&self.db_path, self.has_extra_events).unwrap()
+    }
 }
 
 impl Storage for DuckDBStorage {
@@ -232,6 +239,7 @@ impl DuckDBStorage {
             conn: conn_lock,
             table_regex,
             has_extra_events: extra_events,
+            db_path: db_path.to_string(),
         })
     }
 
