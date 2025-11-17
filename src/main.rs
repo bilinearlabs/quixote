@@ -140,119 +140,22 @@ async fn main() -> Result<()> {
     )?;
 
     // Spawn both tasks concurrently
-    let collector_handle = tokio::spawn(async move { event_collector_runner.run().await });
+    let _ = tokio::spawn(async move { event_collector_runner.run().await });
 
     let processor_handle = tokio::spawn(async move { event_processor.process().await });
-
-    // Wrap handles in Arc<Mutex<>> so we can abort them from Ctrl+C handler
-    let collector_handle_arc = Arc::new(Mutex::new(Some(collector_handle)));
-    let processor_handle_arc = Arc::new(Mutex::new(Some(processor_handle)));
-    let collector_handle_for_ctrl_c = collector_handle_arc.clone();
-    let cancellation_token_for_ctrl_c = cancellation_token.clone();
 
     // Spawn a task that handles Ctrl+C and aborts the collector
     let ctrl_c_task = tokio::spawn(async move {
         ctrl_c().await.ok();
         println!("\nReceived Ctrl+C, shutting down gracefully...");
-        // Abort the collector task immediately - this will stop all its child tasks
-        if let Some(handle) = collector_handle_for_ctrl_c.lock().await.take() {
-            handle.abort();
-        }
         // Signal cancellation to processor
-        cancellation_token_for_ctrl_c.graceful_shutdown();
+        cancellation_token.graceful_shutdown();
     });
 
-    // Wait for either Ctrl+C task or both tasks to complete
-    tokio::select! {
-        _ = ctrl_c_task => {
-            // Ctrl+C was received, tasks are being aborted
-            // Wait for all tasks to finish
-            let collector_handle = collector_handle_arc.lock().await.take();
-            let processor_handle = processor_handle_arc.lock().await.take();
-            let (collector_result, processor_result) = tokio::join!(
-                async {
-                    if let Some(handle) = collector_handle {
-                        handle.await
-                    } else {
-                        Ok(Err(anyhow::anyhow!("Collector was aborted")))
-                    }
-                },
-                async {
-                    if let Some(handle) = processor_handle {
-                        handle.await
-                    } else {
-                        Ok(Err(anyhow::anyhow!("Processor was aborted")))
-                    }
-                },
-            );
+    // Collector tasks can be safely killed without the token, so these will be dropped automatically.
+    let _ = tokio::join!(ctrl_c_task, processor_handle);
 
-            match collector_result {
-                Ok(_) | Err(_) => {
-                    // Collector was aborted or completed
-                }
-            }
-
-            match processor_result {
-                Ok(Ok(())) => {
-                    println!("Event processor stopped gracefully");
-                }
-                Ok(Err(e)) => {
-                    eprintln!("Event processor error during shutdown: {}", e);
-                }
-                Err(e) => {
-                    eprintln!("Event processor task panicked during shutdown: {}", e);
-                }
-            }
-
-            println!("Shutdown complete");
-        }
-        _ = async {
-            // Wait for all tasks to complete
-            let collector_handle = collector_handle_arc.lock().await.take();
-            let processor_handle = processor_handle_arc.lock().await.take();
-            let (collector_result, processor_result) = tokio::join!(
-                async {
-                    if let Some(handle) = collector_handle {
-                        handle.await
-                    } else {
-                        Ok(Err(anyhow::anyhow!("Collector was aborted")))
-                    }
-                },
-                async {
-                    if let Some(handle) = processor_handle {
-                        handle.await
-                    } else {
-                        Ok(Err(anyhow::anyhow!("Processor was aborted")))
-                    }
-                },
-            );
-
-            match collector_result {
-                Ok(Ok(())) => {
-                    println!("Event collector completed");
-                }
-                Ok(Err(e)) => {
-                    eprintln!("Event collector error: {}", e);
-                }
-                Err(e) => {
-                    eprintln!("Event collector task panicked: {}", e);
-                }
-            }
-
-            match processor_result {
-                Ok(Ok(())) => {
-                    println!("Event processor completed");
-                }
-                Ok(Err(e)) => {
-                    eprintln!("Event processor error: {}", e);
-                }
-                Err(e) => {
-                    eprintln!("Event processor task panicked: {}", e);
-                }
-            }
-
-        } => {}
-    }
+    println!("Shutdown complete");
 
     Ok(())
 }
