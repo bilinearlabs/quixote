@@ -55,9 +55,15 @@ struct Args {
     #[arg(
         short,
         long,
-        help = "Path for the ABI JSON spec of the indexed contract"
+        help = "Path for the ABI JSON spec of the indexed contract."
     )]
     abi_spec: Option<String>,
+    #[arg(
+        short='j',
+        long,
+        help = "Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720"
+    )]
+    api_server: Option<String>,
 }
 
 #[tokio::main]
@@ -127,14 +133,17 @@ async fn main() -> Result<()> {
         cancellation_token.clone(),
     );
 
+    let api_server_address = args.api_server.unwrap_or("127.0.0.1:9720".to_string());
+
     // Start the REST API server
     let api_handle = tokio::spawn(async move {
         let app = create_router(storage_for_api);
+        let port = api_server_address.split(":").nth(1).unwrap().to_string();
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:9988")
+        println!("REST API server listening on {api_server_address}");
+        let listener = tokio::net::TcpListener::bind(api_server_address)
             .await
-            .expect("Failed to bind to port 9988");
-        println!("REST API server listening on http://0.0.0.0:9988");
+            .expect(&format!("Failed to bind to port {port}"));
         axum::serve(listener, app).await.expect("API server error");
     });
 

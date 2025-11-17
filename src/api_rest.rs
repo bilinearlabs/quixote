@@ -1,6 +1,6 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use crate::{DuckDBStorage, Erc20Event, Event, StorageQuery};
+use crate::{CancellationToken, Erc20Event, Event, StorageQuery};
 use alloy::primitives::Address;
 use anyhow::Result;
 use axum::{Router, extract::State, http::StatusCode, response::Json, routing::post};
@@ -57,7 +57,7 @@ pub struct RawQueryResponse {
 
 // POST handler for list_events
 async fn list_events_handler(
-    State(storage): State<Arc<DuckDBStorage>>,
+    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
 ) -> Result<Json<ListEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
     match storage.list_events() {
         Ok(events) => Ok(Json(ListEventsResponse { events })),
@@ -72,7 +72,7 @@ async fn list_events_handler(
 
 // POST handler for list_contracts
 async fn list_contracts_handler(
-    State(storage): State<Arc<DuckDBStorage>>,
+    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
 ) -> Result<Json<ListContractsResponse>, (StatusCode, Json<ErrorResponse>)> {
     match storage.list_contracts() {
         Ok(contracts) => Ok(Json(ListContractsResponse { contracts })),
@@ -87,7 +87,7 @@ async fn list_contracts_handler(
 
 // POST handler for get_events
 async fn get_events_handler(
-    State(storage): State<Arc<DuckDBStorage>>,
+    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
     Json(payload): Json<GetEventsRequest>,
 ) -> Result<Json<GetEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Parse contract address
@@ -151,7 +151,7 @@ async fn get_events_handler(
 
 // POST handler for raw_query
 async fn raw_query_handler(
-    State(storage): State<Arc<DuckDBStorage>>,
+    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
     Json(payload): Json<RawQueryRequest>,
 ) -> Result<Json<RawQueryResponse>, (StatusCode, Json<ErrorResponse>)> {
     match storage.send_raw_query(&payload.query) {
@@ -168,11 +168,40 @@ async fn raw_query_handler(
 }
 
 /// Creates and returns the REST API router
-pub fn create_router(storage: Arc<DuckDBStorage>) -> Router {
+pub fn create_router(storage: Arc<dyn StorageQuery + Send + Sync>) -> Router {
     Router::new()
         .route("/list_events", post(list_events_handler))
         .route("/list_contracts", post(list_contracts_handler))
         .route("/get_events", post(get_events_handler))
         .route("/raw_query", post(raw_query_handler))
         .with_state(storage)
+}
+
+/// Starts the REST API server in a separate thread
+pub fn start_api_server(
+    server_address: &str,
+    storage_backend: Arc<dyn StorageQuery + Send + Sync>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+    let server_address = server_address.to_string();
+    let _ = tokio::spawn(async move {
+        let app = create_router(storage_backend);
+        let port = server_address.split(":").nth(1).unwrap().to_string();
+
+        println!("REST API server listening on {server_address}");
+        let listener = tokio::net::TcpListener::bind(server_address)
+            .await
+            .expect(&format!("Failed to bind to port {port}"));
+        axum::serve(listener, app)
+            .with_graceful_shutdown(sthutdown_signal(cancellation_token))
+            .await
+            .expect("API server error");
+    });
+
+    Ok(())
+}
+
+async fn sthutdown_signal(cancellation_token: CancellationToken) {
+    let _ = cancellation_token.subscribe().recv().await;
+    println!("API server shutdown signal received");
 }
