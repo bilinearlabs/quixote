@@ -30,7 +30,7 @@ impl EventProcessor {
         }
     }
 
-    pub async fn process(&mut self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
         let mut cancellation_receiver = self.cancellation_token.subscribe();
         let mut last_processed = self.start_block.saturating_sub(1);
         let mut buffer: BTreeMap<u64, (u64, Vec<Log>)> = BTreeMap::new();

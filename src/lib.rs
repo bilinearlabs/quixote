@@ -12,10 +12,12 @@ pub mod event_processor;
 pub use event_processor::*;
 pub mod storage_query;
 pub use storage_query::*;
-pub mod api_rest;
-pub use api_rest::*;
 pub mod abi_parser;
+pub mod api_rest;
 pub use abi_parser::*;
+pub mod cli;
+pub mod indexing_app;
+pub use indexing_app::IndexingApp;
 
 use alloy::{
     primitives::{Address, U256},
@@ -23,6 +25,13 @@ use alloy::{
 };
 use anyhow::Result;
 use secrecy::{ExposeSecret, SecretString};
+
+pub mod constants {
+    /// Enables back pressure for the indexing buffer, as producers might overwhelm the buffer when the RPC server is powerful.
+    pub const DEFAULT_INDEXING_BUFFER: usize = 10;
+    /// Base address for the API server that runs locally.
+    pub const DEFAULT_API_SERVER_ADDRESS: &str = "127.0.0.1:9720";
+}
 
 #[derive(Debug, Clone)]
 pub struct RpcHost {

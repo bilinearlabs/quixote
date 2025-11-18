@@ -20,6 +20,8 @@ const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
 
 pub trait Storage: Send + Sync + 'static {
     fn add_events(&self, events: &[Log]) -> Result<()>;
+
+    fn include_events(&self, events: &[String], extra_events: Option<Vec<String>>) -> Result<()>;
     fn last_block(&self) -> Result<u64>;
     fn first_block(&self) -> Result<u64>;
 }
@@ -181,6 +183,16 @@ impl Storage for DuckDBStorage {
             Err(anyhow::anyhow!("Failed to acquire lock on database"))
         }
     }
+
+    fn include_events(&self, events: &[String], extra_events: Option<Vec<String>>) -> Result<()> {
+        for event in events {
+            let hash = keccak256(event.as_bytes());
+            let event_hash = B256::from(hash).to_string();
+            // Fix this clone!
+            DuckDBStorage::create_event_schema(&self.conn, &event_hash, extra_events.clone())?;
+        }
+        Ok(())
+    }
 }
 
 impl DuckDBStorage {
@@ -241,20 +253,6 @@ impl DuckDBStorage {
             has_extra_events: extra_events,
             db_path: db_path.to_string(),
         })
-    }
-
-    pub fn include_events(
-        &self,
-        events: &[String],
-        extra_events: Option<Vec<String>>,
-    ) -> Result<()> {
-        for event in events {
-            let hash = keccak256(event.as_bytes());
-            let event_hash = B256::from(hash).to_string();
-            // Fix this clone!
-            DuckDBStorage::create_event_schema(&self.conn, &event_hash, extra_events.clone())?;
-        }
-        Ok(())
     }
 
     fn create_db_base(conn: &Mutex<Connection>) -> Result<()> {
