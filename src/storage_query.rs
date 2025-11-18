@@ -1,7 +1,6 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use crate::Event;
-use alloy::primitives::Address;
+use alloy::{json_abi::Event, primitives::Address};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Serializer};
@@ -9,9 +8,9 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EventDescriptorDb {
+    pub event_hash: String,
     pub event_signature: String,
     pub event_name: String,
-    pub event_type: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -2,9 +2,10 @@
 
 //! Module that handles the connection to the DuckDB database.
 
-use crate::{ContractDescriptorDb, Event, EventDb, EventDescriptorDb, StorageQuery};
+use crate::{ContractDescriptorDb, EventDb, EventDescriptorDb, StorageQuery};
 use alloy::{
-    primitives::{Address, B256, keccak256},
+    json_abi::Event,
+    primitives::{Address, B256},
     rpc::types::Log,
 };
 use anyhow::Result;
@@ -20,8 +21,9 @@ const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
 
 pub trait Storage: Send + Sync + 'static {
     fn add_events(&self, events: &[Log]) -> Result<()>;
+    fn list_indexed_events(&self) -> Result<Vec<Event>>;
 
-    fn include_events(&self, events: &[String], extra_events: Option<Vec<String>>) -> Result<()>;
+    fn include_events(&self, events: &[Event]) -> Result<()>;
     fn last_block(&self) -> Result<u64>;
     fn first_block(&self) -> Result<u64>;
 }
@@ -148,6 +150,8 @@ impl Storage for DuckDBStorage {
 
             // Explicitly commit the transaction
             tx.commit()?;
+        } else {
+            return Err(anyhow::anyhow!("Failed to acquire lock on database"));
         }
 
         // If we reach this point, the entire transaction was executed, thus we can update the last block with the
@@ -156,6 +160,29 @@ impl Storage for DuckDBStorage {
         self.update_last_block(last_block_number)?;
 
         Ok(())
+    }
+
+    fn list_indexed_events(&self) -> Result<Vec<Event>> {
+        if let Ok(conn) = self.conn.lock() {
+            let mut rows = conn.prepare("SELECT * FROM event_descriptor")?;
+            let events = rows
+                .query_map([], |row| {
+                    Ok(EventDescriptorDb {
+                        event_hash: row.get(0).unwrap(),
+                        event_signature: row.get(1).unwrap(),
+                        event_name: row.get(2).unwrap(),
+                    })
+                })?
+                .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+                .collect::<Result<Vec<EventDescriptorDb>>>()?
+                .iter()
+                .map(|e| Event::parse(&e.event_signature).unwrap())
+                .collect::<Vec<Event>>();
+
+            Ok(events)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
     }
 
     #[inline]
@@ -184,14 +211,13 @@ impl Storage for DuckDBStorage {
         }
     }
 
-    fn include_events(&self, events: &[String], extra_events: Option<Vec<String>>) -> Result<()> {
-        for event in events {
-            let hash = keccak256(event.as_bytes());
-            let event_hash = B256::from(hash).to_string();
-            // Fix this clone!
-            DuckDBStorage::create_event_schema(&self.conn, &event_hash, extra_events.clone())?;
-        }
-        Ok(())
+    fn include_events(&self, events: &[Event]) -> Result<()> {
+        let registered_events = self.list_indexed_events()?;
+        let not_registered_events: Vec<&Event> = events
+            .iter()
+            .filter(|e| !registered_events.contains(e))
+            .collect();
+        DuckDBStorage::create_event_schema(&self.conn, &not_registered_events)
     }
 }
 
@@ -272,10 +298,10 @@ impl DuckDBStorage {
                 PRIMARY KEY (block_number)
             );
             CREATE TABLE IF NOT EXISTS event_descriptor(
-                event_signature VARCHAR(66) NOT NULL,
-                event_name VARCHAR NOT NULL,
-                event_type VARCHAR NOT NULL,
-                PRIMARY KEY (event_signature)
+                event_hash VARCHAR(66) NOT NULL,
+                event_signature VARCHAR(256) NOT NULL,
+                event_name VARCHAR(40) NOT NULL,
+                PRIMARY KEY (event_hash)
             );
             COMMIT;"
         );
@@ -296,51 +322,44 @@ impl DuckDBStorage {
             )?;
         }
 
-        {
-            let conn = conn.lock().unwrap();
-            conn.execute(
-                "INSERT INTO event_descriptor (event_signature, event_name, event_type)
-                VALUES (?, ?, ?);",
-                [
-                    B256::from(keccak256(b"Transfer")).to_string(),
-                    "Transfer".to_owned(),
-                    "ERC20".to_owned(),
-                ],
-            )?;
-        }
-
         Ok(())
     }
 
-    fn create_event_schema(
-        conn: &Mutex<Connection>,
-        event_hash: &str,
-        not_indexed_params: Option<Vec<String>>,
-    ) -> Result<()> {
-        let mut statement = format!(
-            "
-                CREATE TABLE IF NOT EXISTS event_{event_hash}(
-                    block_number UBIGINT NOT NULL,
-                    transaction_hash VARCHAR(42) NOT NULL,
-                    log_index USMALLINT NOT NULL,
-                    contract_address VARCHAR(42) NOT NULL,
-                    topic0 VARCHAR(66),
-                    topic1 VARCHAR(66),
-                    topic2 VARCHAR(66),
-                    topic3 VARCHAR(66),
-            ",
-        );
+    fn create_event_schema(conn: &Mutex<Connection>, events: &[&Event]) -> Result<()> {
+        for event in events {
+            // These will be the name used to create the new table: event_<hash>.
+            let table_name = B256::from(event.selector()).to_string();
+            let not_indexed_params_length = event.inputs.iter().filter(|p| !p.indexed).count();
 
-        if let Some(not_indexed_params) = not_indexed_params {
-            for param in not_indexed_params {
-                statement.push_str(&format!("{} VARCHAR(66),", param));
+            // Now build the table definition
+            let mut statement = format!(
+                "
+                    CREATE TABLE IF NOT EXISTS event_{table_name}(
+                        block_number UBIGINT NOT NULL,
+                        transaction_hash VARCHAR(42) NOT NULL,
+                        log_index USMALLINT NOT NULL,
+                        contract_address VARCHAR(42) NOT NULL,
+                        topic0 VARCHAR(66),
+                        topic1 VARCHAR(66),
+                        topic2 VARCHAR(66),
+                        topic3 VARCHAR(66),
+                ",
+            );
+
+            (0..not_indexed_params_length)
+                .for_each(|i| statement.push_str(&format!("input_{i} VARCHAR(66),")));
+            statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
+
+            // Now, create an entry for such event in the event_descriptor table.
+            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name) VALUES ('{}', '{}', '{}');", event.selector(), event.full_signature(), event.name));
+
+            // Not a big deal to batch this SQL statement as it is executed once during the apps's lifetime.
+            if let Ok(conn) = conn.lock() {
+                conn.execute(&statement, [])?;
+            } else {
+                return Err(anyhow::anyhow!("Failed to acquire lock on database"));
             }
         }
-
-        statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
-
-        let conn = conn.lock().unwrap();
-        conn.execute(&statement, [])?;
 
         Ok(())
     }
@@ -435,7 +454,7 @@ impl StorageQuery for DuckDBStorage {
                     Ok(EventDescriptorDb {
                         event_signature: row.get(0).unwrap(),
                         event_name: row.get(1).unwrap(),
-                        event_type: row.get(2).unwrap(),
+                        event_hash: row.get(2).unwrap(),
                     })
                 })?
                 .map(|r| r.map_err(|e| anyhow::anyhow!(e)))

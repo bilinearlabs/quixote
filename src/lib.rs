@@ -42,26 +42,6 @@ pub struct RpcHost {
     pub password: Option<SecretString>,
 }
 
-#[derive(Debug, Clone)]
-pub enum Event {
-    Erc20Event(Erc20Event),
-    Erc721Event(Erc721Event),
-}
-
-#[derive(Debug, Clone)]
-pub enum Erc20Event {
-    Transfer(Address, Address, U256),
-    Approval(Address, Address, U256),
-    ApprovalForAll(Address, Address, bool),
-}
-
-#[derive(Debug, Clone)]
-pub enum Erc721Event {
-    Transfer(Address, Address, U256),
-    Approval(Address, Address, U256),
-    ApprovalForAll(Address, Address, bool),
-}
-
 pub struct LogChunk {
     pub start_block: u64,
     pub end_block: u64,

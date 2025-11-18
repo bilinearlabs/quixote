@@ -1,6 +1,6 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use crate::{CancellationToken, Erc20Event, Event, StorageQuery};
+use crate::{CancellationToken, StorageQuery};
 use alloy::primitives::Address;
 use anyhow::Result;
 use axum::{Router, extract::State, http::StatusCode, response::Json, routing::post};
@@ -132,11 +132,10 @@ async fn get_events_handler(
 
     // Create a dummy Event since it's not used in the implementation
     // Using a placeholder ERC20 Transfer event
-    let dummy_event = Event::Erc20Event(Erc20Event::Transfer(
-        Address::ZERO,
-        Address::ZERO,
-        alloy::primitives::U256::ZERO,
-    ));
+    let dummy_event = alloy::json_abi::Event::parse(
+        "Transfer(address indexed from, address indexed to, uint256 amount)",
+    )
+    .unwrap();
 
     match storage.get_events(dummy_event, contract, start_time, end_time) {
         Ok(events) => Ok(Json(GetEventsResponse { events })),
