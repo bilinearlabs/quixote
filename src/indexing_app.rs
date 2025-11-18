@@ -85,47 +85,47 @@ impl IndexingApp {
         self.storage.include_events(&self.events)?;
 
         // Buffer for the event collector and processor.
-        // let (producer_buffer, consumer_buffer) = mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
+        let (producer_buffer, consumer_buffer) = mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
 
-        // let event_collector_runner = EventCollectorRunner::new(
-        //     &self.host_list,
-        //     self.contract_address,
-        //     self.events.clone(),
-        //     self.start_block,
-        //     producer_buffer,
-        // )?;
+        let event_collector_runner = EventCollectorRunner::new(
+            &self.host_list,
+            self.contract_address,
+            self.events.clone(),
+            self.start_block,
+            producer_buffer,
+        )?;
 
-        // let mut event_processor = EventProcessor::new(
-        //     self.storage.clone(),
-        //     self.start_block.as_number().unwrap(),
-        //     consumer_buffer,
-        //     self.cancellation_token.clone(),
-        // );
+        let mut event_processor = EventProcessor::new(
+            self.storage.clone(),
+            self.start_block.as_number().unwrap(),
+            consumer_buffer,
+            self.cancellation_token.clone(),
+        );
 
-        // // Start the REST API server
-        // start_api_server(
-        //     self.api_server_address.as_str(),
-        //     self.storage_for_api.clone(),
-        //     self.cancellation_token.clone(),
-        // )
-        // .with_context(|| "Failure in the REST API server")?;
+        // Start the REST API server
+        start_api_server(
+            self.api_server_address.as_str(),
+            self.storage_for_api.clone(),
+            self.cancellation_token.clone(),
+        )
+        .with_context(|| "Failure in the REST API server")?;
 
-        // let _ = tokio::spawn(async move { event_collector_runner.run().await });
+        let _ = tokio::spawn(async move { event_collector_runner.run().await });
 
-        // let processor_handle = tokio::spawn(async move { event_processor.run().await });
+        let processor_handle = tokio::spawn(async move { event_processor.run().await });
 
-        // let cancellation_token = self.cancellation_token.clone();
+        let cancellation_token = self.cancellation_token.clone();
 
-        // // Spawn a task that handles Ctrl+C and aborts the collector
-        // let ctrl_c_task = tokio::spawn(async move {
-        //     ctrl_c().await.ok();
-        //     println!("\nReceived Ctrl+C, shutting down gracefully...");
-        //     // Signal cancellation to processor
-        //     cancellation_token.graceful_shutdown();
-        // });
+        // Spawn a task that handles Ctrl+C and aborts the collector
+        let ctrl_c_task = tokio::spawn(async move {
+            ctrl_c().await.ok();
+            println!("\nReceived Ctrl+C, shutting down gracefully...");
+            // Signal cancellation to processor
+            cancellation_token.graceful_shutdown();
+        });
 
-        // // Collector tasks can be safely killed without the token, so these will be dropped automatically.
-        // let _ = join!(ctrl_c_task, processor_handle);
+        // Collector tasks can be safely killed without the token, so these will be dropped automatically.
+        let _ = join!(ctrl_c_task, processor_handle);
 
         println!("Shutdown complete");
 
