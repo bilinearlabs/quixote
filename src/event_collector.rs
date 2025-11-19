@@ -2,28 +2,20 @@
 
 //! Module for the event collector.
 
-use crate::{LogChunk, TxLogChunk};
-use alloy::eips::BlockNumberOrTag;
-use alloy::primitives::B256;
-use alloy::primitives::{Address, keccak256};
-use alloy::providers::Provider;
-use alloy::rpc::types::{Filter, FilterSet};
+use crate::{LogChunk, TxLogChunk, constants::*};
+use alloy::{
+    eips::BlockNumberOrTag, json_abi::Event, primitives::Address, providers::Provider,
+    rpc::types::Filter,
+};
 use anyhow::Result;
 use futures::stream::{self, TryStreamExt};
-use std::error::Error;
-use std::sync::Arc;
+use std::{error::Error, sync::Arc};
 use tokio::time::{Duration, sleep};
-
-const DEFAULT_POLL_INTERVAL: u64 = 1;
-
-const DEFAULT_BLOCK_RANGE: usize = 100;
-
-const MAX_CONCURRENT_REQUESTS: usize = 4;
 
 #[derive(Clone)]
 pub struct EventCollector {
     contract_address: Address,
-    events: Vec<String>,
+    event: Option<Event>,
     start_block: u64,
     provider: Arc<dyn Provider + Send + Sync>,
     sync_mode: BlockNumberOrTag,
@@ -34,7 +26,7 @@ pub struct EventCollector {
 impl EventCollector {
     pub fn new(
         contract_address: Address,
-        events: Vec<String>,
+        event: Option<Event>,
         start_block: u64,
         provider: Arc<dyn Provider + Send + Sync>,
         sync_mode: BlockNumberOrTag,
@@ -42,7 +34,7 @@ impl EventCollector {
     ) -> Self {
         Self {
             contract_address,
-            events,
+            event,
             start_block,
             provider,
             sync_mode,
@@ -53,15 +45,6 @@ impl EventCollector {
 
     pub async fn collect(&self) -> Result<()> {
         let mut processed_to = self.start_block.saturating_sub(1);
-        let mut filter_events = FilterSet::default();
-
-        // Hash each event signature and add to the filter
-        for event_signature in &self.events {
-            let hash = keccak256(event_signature.as_bytes());
-            // keccak256 returns [u8; 32], which B256 can be created from
-            let event_hash = B256::from(hash);
-            filter_events.insert(event_hash);
-        }
 
         println!(
             "Collecting events from blocks [{:?}-{:?}]",
@@ -87,7 +70,6 @@ impl EventCollector {
                 .step_by(DEFAULT_BLOCK_RANGE)
                 .collect();
 
-            let filter_events_clone = filter_events.clone();
             let contract_address = self.contract_address;
             let producer_buffer = self.producer_buffer.clone();
             let provider_clone = self.provider.clone();
@@ -96,10 +78,9 @@ impl EventCollector {
                     .into_iter()
                     .map(Ok::<u64, Box<dyn Error + Send + Sync>>),
             )
-            .try_for_each_concurrent(MAX_CONCURRENT_REQUESTS, |chunk_start| {
+            .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |chunk_start| {
                 let tx = producer_buffer.clone();
                 let provider = provider_clone.clone();
-                let filter_events = filter_events_clone.clone();
                 let contract_address = contract_address;
                 async move {
                     let chunk_end = std::cmp::min(
@@ -111,15 +92,20 @@ impl EventCollector {
                         "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
                         chunk_start, chunk_end, contract_address
                     );
-                    let events = provider
-                        .get_logs(
-                            &Filter::new()
-                                .from_block(chunk_start)
-                                .to_block(chunk_end)
-                                .address(contract_address)
-                                .event_signature(filter_events),
-                        )
-                        .await?;
+
+                    // Build the filter for the get_Logs call.
+                    let mut filter = Filter::new()
+                        .from_block(chunk_start)
+                        .to_block(chunk_end)
+                        .address(contract_address);
+
+                    // If we are indexing a single event, we can ask for a filtered response,
+                    // otherwise we will get all events.
+                    if let Some(event) = self.event {
+                        filter = filter.event_signature(event.selector());
+                    }
+
+                    let events = provider.get_logs(&filter).await?;
 
                     tx.send(LogChunk {
                         start_block: chunk_start,
