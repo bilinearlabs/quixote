@@ -12,17 +12,12 @@ pub mod event_processor;
 pub use event_processor::*;
 pub mod storage_query;
 pub use storage_query::*;
-pub mod abi_parser;
 pub mod api_rest;
-pub use abi_parser::*;
 pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
 
-use alloy::{
-    primitives::{Address, U256},
-    transports::http::reqwest::Url,
-};
+use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
 use secrecy::{ExposeSecret, SecretString};
 

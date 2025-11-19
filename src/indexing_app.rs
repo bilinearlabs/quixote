@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    AbiParser, CancellationToken, DuckDBStorage, EventCollectorRunner, EventProcessor, RpcHost,
+    CancellationToken, DuckDBStorage, EventCollectorRunner, EventProcessor, RpcHost,
     Storage, StorageQuery, api_rest::start_api_server, cli::IndexingArgs, constants,
 };
 use alloy::{
