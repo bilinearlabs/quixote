@@ -82,6 +82,7 @@ impl EventCollector {
                 let tx = producer_buffer.clone();
                 let provider = provider_clone.clone();
                 let contract_address = contract_address;
+                let event = self.event.clone();
                 async move {
                     let chunk_end = std::cmp::min(
                         chunk_start + DEFAULT_BLOCK_RANGE as u64 - 1,
@@ -101,7 +102,7 @@ impl EventCollector {
 
                     // If we are indexing a single event, we can ask for a filtered response,
                     // otherwise we will get all events.
-                    if let Some(event) = self.event {
+                    if let Some(event) = event {
                         filter = filter.event_signature(event.selector());
                     }
 
