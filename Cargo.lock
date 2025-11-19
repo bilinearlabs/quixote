@@ -1862,7 +1862,6 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
- "dashmap",
  "duckdb",
  "futures",
  "regex",

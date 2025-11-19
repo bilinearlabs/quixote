@@ -14,7 +14,6 @@ anyhow = "1.0.100"
 axum = "0.7"
 chrono = "0.4.42"
 clap = { version = "4.5.51", features = ["derive"] }
-dashmap = "6.1.0"
 duckdb = { version = "1.4.2", features = ["bundled"] }
 futures = "0.3.31"
 regex = "1.12.2"
