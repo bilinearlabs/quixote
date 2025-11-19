@@ -31,6 +31,21 @@ pub mod constants {
     pub const DEFAULT_INDEXING_BUFFER: usize = 10;
     /// Base address for the API server that runs locally.
     pub const DEFAULT_API_SERVER_ADDRESS: &str = "127.0.0.1:9720";
+    /// Default poll interval in seconds when indexing the latest block.
+    pub const DEFAULT_POLL_INTERVAL: u64 = 1;
+
+    /// Default block range for the event collector. This range is used in the get_Logs call.
+    pub const DEFAULT_BLOCK_RANGE: usize = 100;
+    /// Maximum number of collector tasks to spawn.
+    pub const MAX_CONCURRENT_COLLECTOR_TASKS: usize = 1;
+    /// Maximum concurrent requests sent to the RPC server.
+    pub const MAX_CONCURRENT_RPC_REQUESTS: usize = 4;
+    /// Maximum number of retries for the event collector.
+    pub const DEFAULT_BACKOFF_LAYER_MAX_RETRIES: u32 = 100;
+    /// Backoff time in milliseconds for the event collector.
+    pub const DEFAULT_BACKOFF_LAYER_BACKOFF_TIME: u64 = 2000;
+    /// Cup size for the event collector.
+    pub const DEFAULT_BACKOFF_LAYER_CUP_SIZE: u64 = 100;
 }
 
 #[derive(Debug, Clone)]
