@@ -1,8 +1,8 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, DuckDBStorage, EventCollectorRunner, EventProcessor, RpcHost, Storage,
-    StorageQuery, api_rest::start_api_server, cli::IndexingArgs, constants,
+    CancellationToken, DuckDBStorage, DuckDBStorageFactory, EventCollectorRunner, EventProcessor,
+    RpcHost, Storage, api_rest::start_api_server, cli::IndexingArgs, constants,
 };
 use alloy::{
     eips::BlockNumberOrTag,
@@ -18,7 +18,7 @@ pub struct IndexingApp {
     pub storage: Arc<dyn Storage + Send + Sync>,
     pub host_list: Vec<RpcHost>,
     pub api_server_address: String,
-    pub storage_for_api: Arc<dyn StorageQuery + Send + Sync>,
+    pub storage_for_api: Arc<DuckDBStorageFactory>,
     pub cancellation_token: CancellationToken,
     pub events: Vec<Event>,
     pub start_block: BlockNumberOrTag,
@@ -60,7 +60,13 @@ impl IndexingApp {
         let target_block = IndexingApp::choose_target_block(&storage, start_block)?;
         let contract_address = args.contract.parse::<Address>()?;
 
-        let storage_for_api = Arc::new(storage.clone());
+        // Create a factory that can create new storage instances per request
+        let db_path = if let Some(db_path) = &args.database {
+            db_path.clone()
+        } else {
+            constants::DUCKDB_FILE_PATH.to_string()
+        };
+        let storage_for_api = Arc::new(DuckDBStorageFactory::new(db_path));
 
         let api_server_address = args
             .api_server

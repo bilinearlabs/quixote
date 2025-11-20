@@ -1,6 +1,6 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use crate::{CancellationToken, StorageQuery};
+use crate::{CancellationToken, DuckDBStorageFactory, StorageQuery};
 use alloy::primitives::Address;
 use anyhow::Result;
 use axum::{Router, extract::State, http::StatusCode, response::Json, routing::post};
@@ -57,8 +57,17 @@ pub struct RawQueryResponse {
 
 // POST handler for list_events
 async fn list_events_handler(
-    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
+    State(factory): State<Arc<DuckDBStorageFactory>>,
 ) -> Result<Json<ListEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Create a new storage instance with a new connection for this request
+    let storage = factory.create().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to create database connection: {}", e),
+            }),
+        )
+    })?;
     match storage.list_events() {
         Ok(events) => Ok(Json(ListEventsResponse { events })),
         Err(e) => Err((
@@ -72,8 +81,17 @@ async fn list_events_handler(
 
 // POST handler for list_contracts
 async fn list_contracts_handler(
-    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
+    State(factory): State<Arc<DuckDBStorageFactory>>,
 ) -> Result<Json<ListContractsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Create a new storage instance with a new connection for this request
+    let storage = factory.create().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to create database connection: {}", e),
+            }),
+        )
+    })?;
     match storage.list_contracts() {
         Ok(contracts) => Ok(Json(ListContractsResponse { contracts })),
         Err(e) => Err((
@@ -87,9 +105,18 @@ async fn list_contracts_handler(
 
 // POST handler for get_events
 async fn get_events_handler(
-    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
+    State(factory): State<Arc<DuckDBStorageFactory>>,
     Json(payload): Json<GetEventsRequest>,
 ) -> Result<Json<GetEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Create a new storage instance with a new connection for this request
+    let storage = factory.create().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to create database connection: {}", e),
+            }),
+        )
+    })?;
     // Parse contract address
     let contract = payload.contract.parse::<Address>().map_err(|e| {
         (
@@ -150,9 +177,18 @@ async fn get_events_handler(
 
 // POST handler for raw_query
 async fn raw_query_handler(
-    State(storage): State<Arc<dyn StorageQuery + Send + Sync>>,
+    State(factory): State<Arc<DuckDBStorageFactory>>,
     Json(payload): Json<RawQueryRequest>,
 ) -> Result<Json<RawQueryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Create a new storage instance with a new connection for this request
+    let storage = factory.create().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to create database connection: {}", e),
+            }),
+        )
+    })?;
     match storage.send_raw_query(&payload.query) {
         Ok(result) => Ok(Json(RawQueryResponse {
             query_result: result,
@@ -167,19 +203,19 @@ async fn raw_query_handler(
 }
 
 /// Creates and returns the REST API router
-pub fn create_router(storage: Arc<dyn StorageQuery + Send + Sync>) -> Router {
+pub fn create_router(factory: Arc<DuckDBStorageFactory>) -> Router {
     Router::new()
         .route("/list_events", post(list_events_handler))
         .route("/list_contracts", post(list_contracts_handler))
         .route("/get_events", post(get_events_handler))
         .route("/raw_query", post(raw_query_handler))
-        .with_state(storage)
+        .with_state(factory)
 }
 
 /// Starts the REST API server in a separate thread
 pub fn start_api_server(
     server_address: &str,
-    storage_backend: Arc<dyn StorageQuery + Send + Sync>,
+    storage_backend: Arc<DuckDBStorageFactory>,
     cancellation_token: CancellationToken,
 ) -> Result<()> {
     let server_address = server_address.to_string();
