@@ -11,7 +11,7 @@ use anyhow::Result;
 use futures::stream::{self, TryStreamExt};
 use std::{error::Error, sync::Arc};
 use tokio::time::{Duration, sleep};
-use tracing::debug;
+use tracing::{debug, error};
 
 #[derive(Clone)]
 pub struct EventCollector {
@@ -49,12 +49,14 @@ impl EventCollector {
 
         loop {
             let provider = self.provider.clone();
-            let finalized_block = provider
-                .get_block_by_number(self.sync_mode)
-                .await?
-                .ok_or(anyhow::anyhow!("Finalized block is None"))?
-                .header
-                .number;
+            let finalized_block = match provider.get_block_by_number(self.sync_mode).await {
+                Ok(Some(block)) => block.header.number,
+                Ok(None) => return Err(anyhow::anyhow!("Finalized block is None")),
+                Err(e) => {
+                    error!("Failed to get finalized block from RPC provider: {}", e);
+                    return Err(anyhow::anyhow!("RPC connection error: {}", e));
+                }
+            };
 
             let remaining = finalized_block.saturating_sub(processed_to);
             if remaining == 0 {

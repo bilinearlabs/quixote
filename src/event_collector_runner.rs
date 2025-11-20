@@ -12,6 +12,7 @@ use alloy::{
     rpc::client::RpcClient,
     transports::{
         TransportError,
+        http::reqwest::Url,
         layers::{RetryBackoffLayer, RetryPolicy},
     },
 };
@@ -69,14 +70,18 @@ impl EventCollectorRunner {
         );
 
         let mut provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>> = Vec::new();
-        for host in host_list {
-            let provider = ProviderBuilder::new().connect_client(
-                RpcClient::builder()
-                    .layer(retry_policy.clone())
-                    .http(host.try_into().map_err(|e| {
-                        anyhow::anyhow!("Failed to convert RPC host to URL: {}", e)
-                    })?),
+        for (idx, host) in host_list.iter().enumerate() {
+            let url: Url = host
+                .try_into()
+                .map_err(|e| anyhow::anyhow!("Failed to convert RPC host to URL: {}", e))?;
+
+            info!(
+                "Creating provider {} for RPC URL: {} (chain_id: {})",
+                idx, url, host.chain_id
             );
+
+            let provider = ProviderBuilder::new()
+                .connect_client(RpcClient::builder().layer(retry_policy.clone()).http(url));
             provider_list.push(Arc::new(provider));
         }
 

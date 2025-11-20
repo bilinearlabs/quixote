@@ -150,7 +150,10 @@ impl std::str::FromStr for RpcHost {
     ///
     /// # Description
     ///
-    /// The format of the RPC host URL is: <chain_id>[:<username>:<password>@]<host>:<port>.
+    /// The format of the RPC host URL is: <chain_id>[:<username>:<password>@]<url>
+    /// where <url> can be either:
+    /// - A full URL: http://host:port/path or https://host:port/path
+    /// - A simple host:port format: host:port
     fn from_str(url: &str) -> Result<Self, Self::Err> {
         // Let's break down the input string in 2 parts: the initial data and the URL.
         let parts = url.split('@').collect::<Vec<&str>>();
@@ -159,20 +162,41 @@ impl std::str::FromStr for RpcHost {
             return Err(anyhow::anyhow!("Invalid RPC host URL: {}", url));
         }
 
-        // Time to process the URL part.
-        let raw_url = parts[1].split(':').collect::<Vec<&str>>();
+        let url_part = parts[1];
 
-        let port = if raw_url.len() != 3 {
-            if raw_url[0].contains("https") {
-                443
-            } else {
-                80
-            }
+        // Check if the URL part is already a full URL (starts with http:// or https://)
+        let (url, port) = if url_part.starts_with("http://") || url_part.starts_with("https://") {
+            // Parse the full URL to extract port for the struct
+            let parsed_url = Url::parse(url_part)
+                .map_err(|e| anyhow::anyhow!("Failed to parse URL '{}': {}", url_part, e))?;
+
+            let port = parsed_url.port().unwrap_or_else(|| {
+                if parsed_url.scheme() == "https" {
+                    443
+                } else {
+                    80
+                }
+            });
+
+            // Store the full URL as-is (including path if present)
+            (url_part.to_string(), port)
         } else {
-            raw_url[2].parse::<u16>()?
-        };
+            // Handle simple host:port format
+            let raw_url = url_part.split(':').collect::<Vec<&str>>();
 
-        let url = format!("{}:{}", raw_url[0], raw_url[1]);
+            let port = if raw_url.len() != 2 {
+                return Err(anyhow::anyhow!(
+                    "Invalid URL format. Expected host:port or full URL, got: {}",
+                    url_part
+                ));
+            } else {
+                raw_url[1].parse::<u16>().map_err(|e| {
+                    anyhow::anyhow!("Invalid port number in URL '{}': {}", url_part, e)
+                })?
+            };
+
+            (raw_url[0].to_string(), port)
+        };
 
         // Time to process the initial data part.
         let init_part = parts[0].split(':').collect::<Vec<&str>>();
@@ -200,8 +224,17 @@ impl std::str::FromStr for RpcHost {
 impl TryInto<Url> for &RpcHost {
     type Error = anyhow::Error;
     fn try_into(self) -> Result<Url> {
-        let mut url = Url::parse(&format!("{}:{}", self.url, self.port))
-            .map_err(|e| anyhow::anyhow!("Failed to create URL: {e}"))?;
+        // Check if the URL already contains a scheme (http:// or https://)
+        let url_str = if self.url.starts_with("http://") || self.url.starts_with("https://") {
+            // It's already a full URL, use it as-is
+            self.url.clone()
+        } else {
+            // It's a simple host, construct the URL with the port
+            format!("http://{}:{}", self.url, self.port)
+        };
+
+        let mut url = Url::parse(&url_str)
+            .map_err(|e| anyhow::anyhow!("Failed to create URL from '{}': {}", url_str, e))?;
 
         if let Some(username) = &self.username {
             url.set_username(username.expose_secret())
