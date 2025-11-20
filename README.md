@@ -1,1 +1,92 @@
-# Rust-based indexing tool that indexes EVM events
+# Rust-based Indexing Tool That Indexes EVM Events
+
+Simple command line tool that allows indexing events of a blockchain.
+
+## Supported Features
+
+- Storage of the indexed data in a data base.
+- Support for DuckDB as main storage.
+- Support for indexing ERC20 Transfer events.
+
+
+## How To Use The Tool
+
+The tool expects a set of arguments that identify the RPC host from which the data is going to be pulled, along the target event for the indexing and the contract address.
+
+```raw
+Etherduck
+
+Usage: etherduck [OPTIONS] --rpc-host <RPC_HOST> --contract <CONTRACT>
+
+Options:
+  -r, --rpc-host <RPC_HOST>        RPC host to index.
+                                               
+                                   Format: <chain_id>[:<username>:<password>]@<host>:<port>
+                                               
+                                   Example for an RPC with basic auth => 1:user:pass@http://localhost:9822
+                                               
+                                   Example for an authless RPC => 1@http://localhost:9822
+  -c, --contract <CONTRACT>        Contract to index.
+                                   Example: 0x1234567890123456789012345678901234567890
+  -e, --event <EVENT>              Event to index as defined by the contract's ABI.
+                                   Example: Transfer(address indexed from, address indexed to, uint256 amount)
+  -s, --start-block <START_BLOCK>  Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.
+                                   Example => 28837711
+                                   Default: latest
+  -d, --database <DATABASE>        Path to the database file. Default: etherduck_indexer.duckdb
+  -a, --abi-spec <ABI_SPEC>        Path for the ABI JSON spec of the indexed contract. When give, the entire set of events defined in the ABI will be indexed.
+  -j, --api-server <API_SERVER>    Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720
+  -h, --help                       Print help (see more with '--help')
+  -V, --version                    Print version
+```
+
+This way, an example of usage would be:
+
+```bash
+$ etherduck -r 1@https://eth.llamarpc.com \
+    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
+    -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
+    -s 23744000
+```
+
+The previous call would launch an instance of the tool for indexing ERC20 Transfer events in the Ethereum Mainnet blockchain for the Tether USD smartcontract, starting from the block $23.744.000$. It will use an RPC from [chainlist](https://chainlist.org). Though using an RPC from the **chainlist** is not advised for long-term indexing.
+
+The event needs to be fully defined to properly index the events for the chosen smartcontract. **Take the definition from the contract's ABI.**.
+
+## Data Base Schema
+
+The data base includes this schema:
+
+### Table *blocks*
+
+This table is a record of the indexed blocks. The first and latest indexed blocks can be easily retrieved from a metadata table, though:
+
+```sql
+SELECT first_block, last_block FROM etherduck_info;
+```
+
+The table *blocks* includes these fields:
+- *block_number* (String) (PK)
+- *block_hash* (Unsigned)
+- *block_timestamp* (Unsigned)
+
+### Table *event_descriptor*
+
+This table is a record of the indexed events by type. This table shall be used to properly parse the content from each event entry from the *event_X* tables. Includes these fields:
+
+- *event_hash* (String) (PK)
+- *event_signature* (String)
+- *event_name* (String)
+
+### Tables *event_<hash>*
+
+Each indexed event makes use of a table in the DB named using the event's hash of its full signature. For instance, for the event `Transfer(address indexed from, address indexed to, uint256 amount)` the table in the DB would be named *event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef*. 
+
+These tables are dynamic, which means there's no fix schema, and it is rather based on the event's content. Usually, a table of this type includes:
+
+- *block_number* (String) (PK)
+- *transaction_hash* (String) (PK)
+- *log_index* (Unsiged) (PK)
+- *contract_address* (String)
+
+Aside from that, an event might include up to 3 indexed topics (fields *topic_{0,1,2}*) and several non-indexed topics.
