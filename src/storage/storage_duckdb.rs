@@ -542,16 +542,14 @@ impl StorageQuery for DuckDBStorage {
     }
     fn get_events(
         &self,
-        _event: Event,
+        event: Event,
         contract: Address,
         start_time: DateTime<Utc>,
         end_time: Option<DateTime<Utc>>,
     ) -> Result<Vec<EventDb>> {
-        // For StorageQuery methods, we clone to get a new connection (no Mutex needed)
         let storage = self.clone();
-        // TODO
-        //let event_hash = keccak256(event.to_string().as_bytes()).to_string();
-        let event_hash = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+
+        let event_hash = event.selector().to_string();
 
         // Convert timestamps to Unix timestamps (seconds since epoch)
         let start_timestamp = start_time.timestamp() as u64;
@@ -561,16 +559,6 @@ impl StorageQuery for DuckDBStorage {
 
         // Normalize contract address to lowercase for case-insensitive comparison
         let contract_str = contract.to_string().to_lowercase();
-
-        println!("Querying events for contract: {}", contract_str);
-        println!("start_timestamp: {} ({})", start_timestamp, start_time);
-        println!(
-            "end_timestamp: {} ({})",
-            end_timestamp,
-            end_time
-                .map(|dt| dt.to_string())
-                .unwrap_or_else(|| "now".to_string())
-        );
 
         let conn = storage
             .conn
@@ -618,7 +606,6 @@ impl StorageQuery for DuckDBStorage {
     }
 
     fn send_raw_query(&self, query: &str) -> Result<Value> {
-        // For StorageQuery methods, we clone to get a new connection (no Mutex needed)
         let storage = self.clone();
         if query.find("SELECT").is_none() {
             return Ok(json!({ "error": "Query must be a SELECT statement" }));
