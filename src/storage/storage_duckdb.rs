@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use duckdb::{Connection, params};
 use serde_json::{Map, Number, Value, json};
 use std::{collections::HashMap, string::ToString, sync::Mutex};
-use tracing::{error, warn};
+use tracing::{debug, error, info, warn};
 
 /// Implementation of the Storage trait for the DuckDB database.
 pub struct DuckDBStorage {
@@ -59,7 +59,7 @@ impl Storage for DuckDBStorage {
     fn add_events(&self, events: &[Log]) -> Result<()> {
         // Quick check to avoid unnecessary operations.
         if events.is_empty() {
-            warn!("No events to add");
+            info!("No events for the given block range");
             return Ok(());
         }
 
@@ -256,6 +256,7 @@ impl Storage for DuckDBStorage {
     }
 
     fn include_events(&self, events: &[Event]) -> Result<()> {
+        debug!("Including events: {events:?} in the database");
         let registered_events = self.list_indexed_events()?;
         let not_registered_events: Vec<&Event> = events
             .iter()
@@ -382,6 +383,7 @@ impl DuckDBStorage {
             // These will be the name used to create the new table: event_<hash>.
             let table_name = B256::from(event.selector()).to_string();
             let not_indexed_params_length = event.inputs.iter().filter(|p| !p.indexed).count();
+            let indexed_params_length = event.inputs.iter().filter(|p| p.indexed).count();
 
             // Now build the table definition
             let mut statement = format!(
@@ -391,12 +393,19 @@ impl DuckDBStorage {
                         transaction_hash VARCHAR(42) NOT NULL,
                         log_index USMALLINT NOT NULL,
                         contract_address VARCHAR(42) NOT NULL,
+                ",
+            );
+
+            // There are events with no parameters at all.
+            if indexed_params_length > 0 {
+                statement.push_str(
+                    "                        
                         topic0 VARCHAR(66),
                         topic1 VARCHAR(66),
                         topic2 VARCHAR(66),
-                        topic3 VARCHAR(66),
-                ",
-            );
+                        topic3 VARCHAR(66),",
+                );
+            }
 
             (0..not_indexed_params_length)
                 .for_each(|i| statement.push_str(&format!("input_{i} VARCHAR(66),")));

@@ -2,7 +2,10 @@
 
 //! Module for the event processor.
 
-use crate::{CancellationToken, RxLogChunk, storage::Storage};
+use crate::{
+    CancellationToken, RxLogChunk,
+    storage::{DuckDBStorage, Storage},
+};
 use alloy::rpc::types::Log;
 use anyhow::Result;
 use std::{collections::BTreeMap, sync::Arc};
@@ -40,6 +43,21 @@ impl EventProcessor {
             select! {
                 _ = cancellation_receiver.recv() => {
                     debug!("Producer::Cancellation requested, shutting down gracefully...");
+                    // Sometimes, if no events are detected, the first block gest registered but the last block remains
+                    // as 0. This is an invalid state.
+                    let start_block = self.storage.first_block()?;
+                    let last_block = self.storage.last_block()?;
+                    if last_block < start_block {
+                        // Downcast to DuckDBStorage to access set_first_block method. Risky if we end adding more
+                        // storage implementations.
+                        if let Ok(duckdb_storage) = Arc::downcast::<DuckDBStorage>(
+                            self.storage.clone() as Arc<dyn std::any::Any + Send + Sync>
+                        ) {
+                            duckdb_storage.set_first_block(last_block)?;
+                        } else {
+                            error!("Failed to downcast storage to DuckDBStorage");
+                        }
+                    }
                     return Ok(());
                 }
                 events = self.producer_buffer.recv() => {

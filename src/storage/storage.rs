@@ -2,9 +2,10 @@
 
 use alloy::{json_abi::Event, rpc::types::Log};
 use anyhow::Result;
+use std::any::Any;
 
 /// Trait that defines the API between the producer task and the storage.
-pub trait Storage: Send + Sync + 'static {
+pub trait Storage: Send + Sync + 'static + Any {
     /// Adds a list of events to the storage.
     fn add_events(&self, events: &[Log]) -> Result<()>;
     /// Lists the event types that are registered in the storage.
