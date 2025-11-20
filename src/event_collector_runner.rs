@@ -145,9 +145,7 @@ impl EventCollectorRunner {
 
                 let collector_handle = tokio::spawn(async move {
                     // Collect events - this runs forever, polling for new blocks
-                    if let Err(e) = collector.collect().await {
-                        eprintln!("Error in collector for RPC host {}: {}", host_index, e);
-                    }
+                    let _ = collector.collect().await;
                 });
 
                 if let Err(e) = collector_handle.await {
