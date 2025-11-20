@@ -50,7 +50,6 @@ impl IndexingApp {
 
         let cancellation_token = CancellationToken::new();
 
-        // TODO: Fix the extra_events logic
         let storage = if let Some(db_path) = &args.database {
             DuckDBStorage::with_db(&db_path)?
         } else {
