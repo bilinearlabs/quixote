@@ -3,15 +3,10 @@
 //! Library of the Etherduck crate.
 
 pub mod event_collector_runner;
-pub use event_collector_runner::*;
+pub use event_collector_runner::EventCollectorRunner;
 pub mod event_collector;
-pub use event_collector::*;
-pub mod storage_duckdb;
-pub use storage_duckdb::*;
 pub mod event_processor;
-pub use event_processor::*;
-pub mod storage_query;
-pub use storage_query::*;
+pub use event_processor::EventProcessor;
 pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
@@ -21,6 +16,7 @@ use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
 use secrecy::{ExposeSecret, SecretString};
 
+/// Module with constants used throughout the application.
 pub mod constants {
     /// Enables back pressure for the indexing buffer, as producers might overwhelm the buffer when the RPC server is powerful.
     pub const DEFAULT_INDEXING_BUFFER: usize = 10;
@@ -49,15 +45,66 @@ pub mod constants {
     pub const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
 }
 
-#[derive(Debug, Clone)]
-pub struct RpcHost {
-    pub chain_id: u64,
-    pub url: String,
-    pub port: u16,
-    pub username: Option<SecretString>,
-    pub password: Option<SecretString>,
+/// Module with definitions related to the storage of the indexed data.
+pub mod storage {
+    pub mod storage;
+    pub use storage::Storage;
+    pub mod storage_duckdb;
+    pub mod storage_query;
+    pub use storage_duckdb::{DuckDBStorage, DuckDBStorageFactory};
+    pub use storage_query::StorageQuery;
+
+    use alloy::primitives::Address;
+    pub use chrono::{DateTime, Utc};
+    use serde::{Serialize, Serializer};
+
+    // Objects for the REST API.
+
+    /// Data object that represents an event descriptor in the database.
+    #[derive(Debug, Clone, Serialize)]
+    pub struct EventDescriptorDb {
+        pub event_hash: String,
+        pub event_signature: String,
+        pub event_name: String,
+    }
+
+    /// Data object that represents an event in the database.
+    ///
+    /// TODO: Update the fields to include the non-indexed parameters.
+    #[derive(Debug, Clone, Serialize)]
+    pub struct EventDb {
+        pub block_number: u64,
+        pub transaction_hash: String,
+        pub log_index: u64,
+        pub contract_address: Address,
+        pub topic0: String,
+        pub topic1: Option<String>,
+        pub topic2: Option<String>,
+        pub topic3: Option<String>,
+        #[serde(serialize_with = "serialize_timestamp")]
+        pub block_timestamp: u64,
+    }
+
+    /// Serializes a timestamp to an ISO 8601 string.
+    fn serialize_timestamp<S>(timestamp: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize as ISO 8601 string
+        let dt = DateTime::<Utc>::from_timestamp(*timestamp as i64, 0)
+            .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+        serializer.serialize_str(&dt.to_rfc3339())
+    }
+
+    /// Data object that represents a contract descriptor in the database.
+    #[derive(Debug, Clone, Serialize)]
+    pub struct ContractDescriptorDb {
+        pub contract_address: String,
+        pub contract_name: Option<String>,
+    }
 }
 
+/// Object that represents a chunk of logs coming from the eth_getLogs call.
 pub struct LogChunk {
     pub start_block: u64,
     pub end_block: u64,
@@ -68,6 +115,7 @@ pub type TxLogChunk = tokio::sync::mpsc::Sender<LogChunk>;
 pub type RxLogChunk = tokio::sync::mpsc::Receiver<LogChunk>;
 pub type RxCancellationToken = tokio::sync::broadcast::Receiver<()>;
 
+/// Cancellation token for a graceful shutdown of the components of the indexer app.
 #[derive(Clone)]
 pub struct CancellationToken(tokio::sync::broadcast::Sender<()>);
 
@@ -83,6 +131,16 @@ impl CancellationToken {
     pub fn graceful_shutdown(&self) {
         self.0.send(()).unwrap();
     }
+}
+
+/// Object that represents an RPC host.
+#[derive(Debug, Clone)]
+pub struct RpcHost {
+    pub chain_id: u64,
+    pub url: String,
+    pub port: u16,
+    pub username: Option<SecretString>,
+    pub password: Option<SecretString>,
 }
 
 impl std::str::FromStr for RpcHost {

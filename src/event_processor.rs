@@ -2,7 +2,7 @@
 
 //! Module for the event processor.
 
-use crate::{CancellationToken, RxLogChunk, Storage};
+use crate::{CancellationToken, RxLogChunk, storage::Storage};
 use alloy::rpc::types::Log;
 use anyhow::Result;
 use std::{collections::BTreeMap, sync::Arc};
@@ -49,7 +49,6 @@ impl EventProcessor {
                             // Try to process as many contiguous chunks as possible.  The next
                             // expected chunk must start exactly at `last_processed + 1`.
                             while let Some((end, ev)) = buffer.remove(&(last_processed + 1)) {
-                                // TODO: Maybe add the start and end block chunks.
                                 if let Err(e) = self.storage.add_events(&ev.as_slice()) {
                                     eprintln!("Error adding events: {}", e);
                                     return Err(e);

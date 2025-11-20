@@ -2,7 +2,7 @@
 
 //! Runner module for the event collector.
 
-use crate::{EventCollector, RpcHost, TxLogChunk, constants::*};
+use crate::{RpcHost, TxLogChunk, constants::*, event_collector::EventCollector};
 use alloy::{
     eips::BlockNumberOrTag,
     json_abi::Event,

@@ -1,6 +1,11 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use crate::{CancellationToken, DuckDBStorageFactory, StorageQuery};
+use crate::{
+    CancellationToken,
+    storage::{
+        ContractDescriptorDb, DuckDBStorageFactory, EventDb, EventDescriptorDb, StorageQuery,
+    },
+};
 use alloy::primitives::Address;
 use anyhow::Result;
 use axum::{Router, extract::State, http::StatusCode, response::Json, routing::post};
@@ -17,13 +22,13 @@ pub struct ErrorResponse {
 // Request/Response types for list_events endpoint
 #[derive(Serialize)]
 pub struct ListEventsResponse {
-    pub events: Vec<crate::EventDescriptorDb>,
+    pub events: Vec<EventDescriptorDb>,
 }
 
 // Request/Response types for list_contracts endpoint
 #[derive(Serialize)]
 pub struct ListContractsResponse {
-    pub contracts: Vec<crate::ContractDescriptorDb>,
+    pub contracts: Vec<ContractDescriptorDb>,
 }
 
 // Request type for get_events endpoint
@@ -40,7 +45,7 @@ pub struct GetEventsRequest {
 // Response type for get_events endpoint
 #[derive(Serialize)]
 pub struct GetEventsResponse {
-    pub events: Vec<crate::EventDb>,
+    pub events: Vec<EventDb>,
 }
 
 // Request type for raw_query endpoint

@@ -2,7 +2,10 @@
 
 //! Module that handles the connection to the DuckDB database.
 
-use crate::{ContractDescriptorDb, EventDb, EventDescriptorDb, StorageQuery, constants::*};
+use crate::{
+    constants::*,
+    storage::{ContractDescriptorDb, EventDb, EventDescriptorDb, Storage, StorageQuery},
+};
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
     json_abi::Event,
@@ -15,31 +18,23 @@ use duckdb::{Connection, params};
 use serde_json::{Map, Number, Value, json};
 use std::{collections::HashMap, string::ToString, sync::Mutex};
 
-pub trait Storage: Send + Sync + 'static {
-    fn add_events(&self, events: &[Log]) -> Result<()>;
-    fn list_indexed_events(&self) -> Result<Vec<Event>>;
-
-    fn include_events(&self, events: &[Event]) -> Result<()>;
-    fn get_event_signature(&self, event_hash: &str) -> Result<String>;
-    fn last_block(&self) -> Result<u64>;
-    fn first_block(&self) -> Result<u64>;
-}
-
+/// Implementation of the Storage trait for the DuckDB database.
 pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     table_regex: regex::Regex,
     db_path: String,
 }
 
+/// Simple factory pattern to allow opening a new connection to the same database from a task.
+///
+/// # Description
+///
+/// The main purpose of this object is to allow opening concurrent connections for reading from the database.
+/// The main use case is the REST API, which needs to open a new connection for each request. Using this entry
+/// point, we avoid lock contention.
 #[derive(Clone)]
 pub struct DuckDBStorageFactory {
     db_path: String,
-}
-
-impl Clone for DuckDBStorage {
-    fn clone(&self) -> Self {
-        DuckDBStorage::with_db(&self.db_path).unwrap()
-    }
 }
 
 impl DuckDBStorageFactory {
@@ -49,6 +44,13 @@ impl DuckDBStorageFactory {
 
     pub fn create(&self) -> Result<DuckDBStorage> {
         DuckDBStorage::with_db(&self.db_path)
+    }
+}
+
+impl Clone for DuckDBStorage {
+    /// Cloning a DuckDBStorage object will open a new concurrent connection to the same database.
+    fn clone(&self) -> Self {
+        DuckDBStorage::with_db(&self.db_path).unwrap()
     }
 }
 
@@ -414,6 +416,7 @@ impl DuckDBStorage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     #[inline]
     fn update_last_block(&self, block_number: u64) -> Result<()> {
         let conn = self
@@ -486,7 +489,7 @@ impl DuckDBStorage {
                 let val: u16 = row.get(col_idx)?;
                 Ok(Value::Number(Number::from(val)))
             }
-            "VARCHAR(42)" | "VARCHAR" => {
+            "VARCHAR(66)" | "VARCHAR" => {
                 let val: String = row.get(col_idx)?;
                 Ok(Value::String(val))
             }

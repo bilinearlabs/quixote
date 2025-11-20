@@ -1,8 +1,11 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, DuckDBStorage, DuckDBStorageFactory, EventCollectorRunner, EventProcessor,
-    RpcHost, Storage, api_rest::start_api_server, cli::IndexingArgs, constants,
+    CancellationToken, EventCollectorRunner, EventProcessor, RpcHost,
+    api_rest::start_api_server,
+    cli::IndexingArgs,
+    constants,
+    storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
 };
 use alloy::{
     eips::BlockNumberOrTag,
