@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use duckdb::{Connection, params};
 use serde_json::{Map, Number, Value, json};
 use std::{collections::HashMap, string::ToString, sync::Mutex};
+use tracing::{error, warn};
 
 /// Implementation of the Storage trait for the DuckDB database.
 pub struct DuckDBStorage {
@@ -58,7 +59,7 @@ impl Storage for DuckDBStorage {
     fn add_events(&self, events: &[Log]) -> Result<()> {
         // Quick check to avoid unnecessary operations.
         if events.is_empty() {
-            println!("No events to add");
+            warn!("No events to add");
             return Ok(());
         }
 
@@ -172,7 +173,7 @@ impl Storage for DuckDBStorage {
                             DynSolValue::Uint(u, _) => u.to_string(),
                             DynSolValue::String(s) => s.to_string(),
                             _ => {
-                                println!("Unsupported value: {:?}", item);
+                                error!("Unsupported value: {:?}", item);
                                 continue;
                             }
                         };
@@ -278,7 +279,6 @@ impl Storage for DuckDBStorage {
 
 impl DuckDBStorage {
     pub fn new() -> Result<DuckDBStorage> {
-        println!("Using the default DB");
         Self::with_db(DUCKDB_FILE_PATH)
     }
 
@@ -301,7 +301,6 @@ impl DuckDBStorage {
         )?;
 
         let conn_mutex = if !table_exists {
-            println!("Initializing DB...");
             let conn_mutex = Mutex::new(conn);
             DuckDBStorage::create_db_base(&conn_mutex)?;
             conn_mutex
@@ -313,7 +312,7 @@ impl DuckDBStorage {
                 })?;
 
             if version != DUCKDB_SCHEMA_VERSION {
-                println!("Your database is out of date. Please run the database upgrade.");
+                warn!("Your database is out of date. Please run the database upgrade.");
             }
             Mutex::new(conn)
         };
@@ -601,7 +600,6 @@ impl StorageQuery for DuckDBStorage {
             .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
             .collect::<Result<Vec<EventDb>>>()?;
 
-        println!("Found {} events", events.len());
         Ok(events)
     }
 

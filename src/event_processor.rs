@@ -7,6 +7,7 @@ use alloy::rpc::types::Log;
 use anyhow::Result;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::select;
+use tracing::{debug, error, info};
 
 pub struct EventProcessor {
     storage: Arc<dyn Storage + Send + Sync>,
@@ -38,7 +39,7 @@ impl EventProcessor {
         loop {
             select! {
                 _ = cancellation_receiver.recv() => {
-                    println!("Producer::Cancellation requested, shutting down gracefully...");
+                    debug!("Producer::Cancellation requested, shutting down gracefully...");
                     return Ok(());
                 }
                 events = self.producer_buffer.recv() => {
@@ -50,20 +51,22 @@ impl EventProcessor {
                             // expected chunk must start exactly at `last_processed + 1`.
                             while let Some((end, ev)) = buffer.remove(&(last_processed + 1)) {
                                 if let Err(e) = self.storage.add_events(&ev.as_slice()) {
-                                    eprintln!("Error adding events: {}", e);
+                                    error!("Error adding events: {}", e);
                                     return Err(e);
+                                } else {
+                                    tracing::info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
                                 }
                                 // Update the cursor so that the next expected start is directly
                                 // after the `end` we just processed.
                                 last_processed = end;
 
 
-                            println!("Processed events from blocks [{}-{}]", last_processed + 1, end);
+                            debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
                             }
                         }
                         None => {
                             // Channel closed, producer is done
-                            println!("Event channel closed, all events processed");
+                            info!("Event channel closed, all events processed");
                             return Ok(());
                         }
                     }

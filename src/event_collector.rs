@@ -11,6 +11,7 @@ use anyhow::Result;
 use futures::stream::{self, TryStreamExt};
 use std::{error::Error, sync::Arc};
 use tokio::time::{Duration, sleep};
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct EventCollector {
@@ -45,11 +46,6 @@ impl EventCollector {
 
     pub async fn collect(&self) -> Result<()> {
         let mut processed_to = self.start_block.saturating_sub(1);
-
-        println!(
-            "Collecting events from blocks [{:?}-{:?}]",
-            processed_to, self.sync_mode
-        );
 
         loop {
             let provider = self.provider.clone();
@@ -89,7 +85,7 @@ impl EventCollector {
                         finalized_block,
                     );
 
-                    println!(
+                    debug!(
                         "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
                         chunk_start, chunk_end, contract_address
                     );

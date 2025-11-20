@@ -18,6 +18,7 @@ use alloy::{
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+use tracing::{error, info};
 
 #[derive(Debug, Copy, Clone, Default)]
 #[non_exhaustive]
@@ -89,7 +90,7 @@ impl EventCollectorRunner {
     }
 
     pub async fn run(&self) -> Result<()> {
-        println!("Starting the event collector runner");
+        info!("Starting the event collector runner");
 
         if self.provider_list.is_empty() {
             anyhow::bail!("No providers available");
@@ -98,8 +99,7 @@ impl EventCollectorRunner {
         // At this point, the start_block is always a number, as the upper layer selects the starting block based on
         // the current DB status and the user's input.
         let start_block_num = self.start_block.as_number().unwrap();
-        println!("Start block: {start_block_num}");
-        println!(
+        info!(
             "Spawning {} collector tasks (one per RPC host)",
             self.provider_list.len()
         );
@@ -129,7 +129,7 @@ impl EventCollectorRunner {
                 // Acquire permit (one per RPC host)
                 let _permit = semaphore.acquire().await.unwrap();
 
-                println!(
+                info!(
                     "Spawning collector for RPC host {} (starting from block {})",
                     host_index, start_block_num
                 );
@@ -149,7 +149,7 @@ impl EventCollectorRunner {
                 });
 
                 if let Err(e) = collector_handle.await {
-                    eprintln!("Collector task for RPC host {} panicked: {}", host_index, e);
+                    error!("Collector task for RPC host {} panicked: {}", host_index, e);
                 }
             });
 
@@ -161,7 +161,7 @@ impl EventCollectorRunner {
             handle.await?;
         }
 
-        println!("All collector tasks completed");
+        info!("All collector tasks completed");
         Ok(())
     }
 }

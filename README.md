@@ -49,6 +49,15 @@ $ etherduck -r 1@https://eth.llamarpc.com \
     -s 23744000
 ```
 
+To increase the verbosity level up to _debug_, the environment variable `RUST_LOG` shall be used:
+
+```bash
+$ RUST_LOG=etherduck=debug etherduck -r 1@https://eth.llamarpc.com \
+    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
+    -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
+    -s 23744000
+```
+
 The previous call would launch an instance of the tool for indexing ERC20 Transfer events in the Ethereum Mainnet blockchain for the Tether USD smartcontract, starting from the block $23.744.000$. It will use an RPC from [chainlist](https://chainlist.org). Though using an RPC from the **chainlist** is not advised for long-term indexing.
 
 The event needs to be fully defined to properly index the events for the chosen smartcontract. **Take the definition from the contract's ABI.**.

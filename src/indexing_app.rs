@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::sync::Arc;
 use tokio::{join, signal::ctrl_c, sync::mpsc};
+use tracing::{info, warn};
 
 pub struct IndexingApp {
     pub storage: Arc<dyn Storage + Send + Sync>,
@@ -60,6 +61,7 @@ impl IndexingApp {
         storage.include_events(events.as_slice())?;
 
         let target_block = IndexingApp::choose_target_block(&storage, start_block)?;
+
         let contract_address = args.contract.parse::<Address>()?;
 
         // Create a factory that can create new storage instances per request
@@ -73,6 +75,8 @@ impl IndexingApp {
         let api_server_address = args
             .api_server
             .unwrap_or(constants::DEFAULT_API_SERVER_ADDRESS.to_string());
+
+        info!("Indexing the contract {contract_address} from the block {target_block:?}");
 
         let host_list = vec![args.rpc_host.parse::<RpcHost>()?];
         Ok(Self {
@@ -118,6 +122,10 @@ impl IndexingApp {
         )
         .with_context(|| "Failure in the REST API server")?;
 
+        info!("REST API server listening on {}", self.api_server_address);
+
+        info!("Starting the indexing of events");
+
         // Launch teh event processor
         let processor_handle = tokio::spawn(async move { event_processor.run().await });
 
@@ -130,7 +138,7 @@ impl IndexingApp {
         // Collector tasks can be safely killed without the token, so these will be dropped automatically.
         let _ = join!(ctrl_c_task, processor_handle);
 
-        println!("Shutdown complete");
+        info!("Shutdown complete");
 
         Ok(())
     }
@@ -138,7 +146,7 @@ impl IndexingApp {
     fn spawn_ctrl_c_handler(cancellation_token: CancellationToken) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             ctrl_c().await.ok();
-            println!("\nReceived Ctrl+C, shutting down gracefully...");
+            warn!("Received Ctrl+C, shutting down gracefully...");
             // Signal cancellation to processor
             cancellation_token.graceful_shutdown();
         })
@@ -161,19 +169,15 @@ impl IndexingApp {
             BlockNumberOrTag::Number(n) => {
                 // Initial DB state, simply sync from the user's choice
                 if db_start_block == 0 && db_start_block == db_last_block {
-                    println!("Database is empty. Starting from the start block: {n}");
-                    //db_conn.set_first_block(n)?;
+                    info!("Your database was empty. Setting the first block to {n}");
+                    db_conn.set_first_block(n)?;
                     Ok(BlockNumberOrTag::Number(n))
                 } else {
-                    println!("Continuing from the latest block: {db_last_block}");
                     Ok(BlockNumberOrTag::Number(db_last_block + 1))
                 }
             }
             // Continue where the DB left off.
-            _ => {
-                println!("Continuing from the latest block: {db_last_block}");
-                Ok(BlockNumberOrTag::Number(db_last_block + 1))
-            }
+            _ => Ok(BlockNumberOrTag::Number(db_last_block + 1)),
         }
     }
 
@@ -181,7 +185,7 @@ impl IndexingApp {
     fn get_events(args: &IndexingArgs) -> Result<Vec<Event>> {
         if let Some(event) = &args.event {
             if args.abi_spec.is_some() {
-                println!("The given ABI will be ignored. The option -e takes precedence over -a.");
+                warn!("The given ABI will be ignored. The option -e takes precedence over -a.");
             }
 
             let event = Event::parse(event).map_err(|_| {

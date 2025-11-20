@@ -228,7 +228,6 @@ pub fn start_api_server(
         let app = create_router(storage_backend);
         let port = server_address.split(":").nth(1).unwrap().to_string();
 
-        println!("REST API server listening on {server_address}");
         let listener = tokio::net::TcpListener::bind(server_address)
             .await
             .expect(&format!("Failed to bind to port {port}"));
@@ -243,5 +242,5 @@ pub fn start_api_server(
 
 async fn sthutdown_signal(cancellation_token: CancellationToken) {
     let _ = cancellation_token.subscribe().recv().await;
-    println!("API server shutdown signal received");
+    tracing::warn!("API server shutdown signal received");
 }
