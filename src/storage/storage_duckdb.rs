@@ -404,7 +404,7 @@ impl DuckDBStorage {
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
 
             // Now, create an entry for such event in the event_descriptor table.
-            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name) VALUES ('{}', '{}', '{}');", event.selector(), event.full_signature(), event.name));
+            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name) VALUES ('{}', '{}', '{}') ON CONFLICT (event_hash) DO NOTHING;", event.selector(), event.full_signature(), event.name));
 
             // Not a big deal to batch this SQL statement as it is executed once during the apps's lifetime.
             let conn = conn
