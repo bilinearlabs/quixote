@@ -2,29 +2,25 @@
 
 //! Module that handles the connection to the DuckDB database.
 
-use crate::{ContractDescriptorDb, EventDb, EventDescriptorDb, StorageQuery};
+use crate::{ContractDescriptorDb, EventDb, EventDescriptorDb, StorageQuery, constants::*};
 use alloy::{
-    dyn_abi::{DecodedEvent, EventExt},
-    json_abi::Event as JsonEvent,
-    primitives::{Address, B256, keccak256},
+    dyn_abi::{DecodedEvent, DynSolValue, EventExt},
+    json_abi::Event,
+    primitives::{Address, B256},
     rpc::types::Log,
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, params};
 use serde_json::{Map, Number, Value, json};
-use std::string::ToString;
-use std::sync::Mutex;
-
-const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
-const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
-const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
+use std::{collections::HashMap, string::ToString, sync::Mutex};
 
 pub trait Storage: Send + Sync + 'static {
     fn add_events(&self, events: &[Log]) -> Result<()>;
     fn list_indexed_events(&self) -> Result<Vec<Event>>;
 
     fn include_events(&self, events: &[Event]) -> Result<()>;
+    fn get_event_signature(&self, event_hash: &str) -> Result<String>;
     fn last_block(&self) -> Result<u64>;
     fn first_block(&self) -> Result<u64>;
 }
@@ -32,34 +28,41 @@ pub trait Storage: Send + Sync + 'static {
 pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     table_regex: regex::Regex,
-    has_extra_events: bool,
     db_path: String,
 }
 
 impl Clone for DuckDBStorage {
     fn clone(&self) -> Self {
-        DuckDBStorage::with_db(&self.db_path, self.has_extra_events).unwrap()
+        DuckDBStorage::with_db(&self.db_path).unwrap()
     }
 }
 
 impl Storage for DuckDBStorage {
     fn add_events(&self, events: &[Log]) -> Result<()> {
+        // Quick check to avoid unnecessary operations.
+        if events.is_empty() {
+            println!("No events to add");
+            return Ok(());
+        }
+
         if let Ok(mut conn) = self.conn.lock() {
             let tx = conn.transaction()?;
 
-            // Populate the blocks table so the event_X table can reference the block_number from this table.
+            // First stage: insert the new blocks into the blocks table.
             {
                 // Ensure unique blocks are added to the blocks table.
                 let mut blocks_appender = tx.appender("blocks")?;
                 let mut last_block_number = 0;
                 for event in events {
-                    if event.block_number.unwrap() != last_block_number {
+                    if let Some(block_number) = event.block_number
+                        && block_number != last_block_number
+                    {
                         blocks_appender.append_row(params![
-                            event.block_number.unwrap().to_string(),
+                            block_number.to_string(),
                             event.block_hash.unwrap().to_string(),
                             event.block_timestamp.unwrap().to_string()
                         ])?;
-                        last_block_number = event.block_number.unwrap();
+                        last_block_number = block_number;
                     } else {
                         continue;
                     }
@@ -68,128 +71,144 @@ impl Storage for DuckDBStorage {
                 blocks_appender.flush()?;
             }
 
-            let event_hash = events.first().unwrap().topic0().unwrap().to_string();
+            // Second stage: insert the new events into the event_X table.
 
-            {
-                let table_name = format!("event_{}", event_hash);
+            // Cache parsed events by event_hash to avoid repeated DB queries and parsing
+            let mut event_cache: HashMap<String, Event> = HashMap::new();
 
-                for log in events {
-                    let topics = log.topics();
-                    let parsed_event = JsonEvent::parse(
-                        "event Transfer(address indexed from_, address indexed to_, uint256 amount)",
-                    )?;
-                    //parsed_event.inputs
-                    let decoded = parsed_event.decode_log(&log.data())?;
-                    println!("Decoded: {:?}", decoded);
-                    let topic0 = topics
-                        .first()
-                        .ok_or_else(|| anyhow::anyhow!("Log missing topic0 (event signature)"))?;
+            // Group events by table name for bulk insertion using appenders
+            let mut events_by_table: HashMap<String, Vec<&Log>> = HashMap::new();
 
-                    // Extract log data
-                    let block_number = log
-                        .block_number
-                        .ok_or_else(|| anyhow::anyhow!("Log missing block_number"))?
-                        as u64;
+            // First pass: filter and group events by table
+            for log in events {
+                if log.block_number.is_none()
+                    || log.topic0().is_none()
+                    || log.transaction_hash.is_none()
+                {
+                    continue;
+                }
+                let event_hash = log.topic0().unwrap().to_string();
+                let table_name = format!("event_{event_hash}");
+                events_by_table
+                    .entry(table_name)
+                    .or_insert_with(Vec::new)
+                    .push(log);
+            }
 
-                    let transaction_hash = log
-                        .transaction_hash
-                        .ok_or_else(|| anyhow::anyhow!("Log missing transaction_hash"))?
-                        .to_string();
-
-                    let log_index = log
-                        .log_index
-                        .ok_or_else(|| anyhow::anyhow!("Log missing log_index"))?
-                        as u16;
-
-                    let contract_address = log.address().to_string();
-
-                    // Extract topics (up to 4 topics)
-                    let topic0_str = topic0.to_string();
-                    let topic1_str = topics.get(1).map(|t| t.to_string());
-                    let topic2_str = topics.get(2).map(|t| t.to_string());
-                    let topic3_str = topics.get(3).map(|t| t.to_string());
-
-                    let topic1_val = topic1_str.as_deref().unwrap_or("");
-                    let topic2_val = topic2_str.as_deref().unwrap_or("");
-                    let topic3_val = topic3_str.as_deref().unwrap_or("");
-
-                    // Extract only the first 32 bytes (256 bits) of the data field if needed
-                    let data_hex = if self.has_extra_events {
-                        let data_bytes = log.data().data.as_ref();
-                        let first_256_bits = &data_bytes[..data_bytes.len().min(32)];
-                        Some(format!("0x{}", alloy::hex::encode(first_256_bits)))
-                    } else {
-                        None
-                    };
-
-                    // ---------------- Build the dynamic row -----------------
-                    let mut row_vals: Vec<String> = vec![
-                        block_number.to_string(),
-                        transaction_hash,
-                        log_index.to_string(),
-                        contract_address,
-                        topic0_str,
-                        topic1_val.to_string(),
-                        topic2_val.to_string(),
-                        topic3_val.to_string(),
-                    ];
-
-                    // Append decoded parameters in declaration order
-                    let DecodedEvent { indexed, body, .. } = parsed_event
-                        .decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())?;
-                    let mut i_idx = 0usize;
-                    let mut i_body = 0usize;
-                    use alloy::dyn_abi::DynSolValue;
-
-                    for input in &parsed_event.inputs {
-                        let sval = if input.indexed {
-                            match &indexed[i_idx] {
-                                DynSolValue::Address(a) => a.to_string(),
-                                DynSolValue::Bool(b) => b.to_string(),
-                                other => format!("{:?}", other),
-                            }
-                        } else {
-                            match &body[i_body] {
-                                DynSolValue::Address(a) => a.to_string(),
-                                DynSolValue::Bool(b) => b.to_string(),
-                                other => format!("{:?}", other),
-                            }
-                        };
-
-                        if input.indexed {
-                            i_idx += 1;
-                        } else {
-                            i_body += 1;
-                        }
-                        row_vals.push(sval);
-                    }
-
-                    // Optional extra data column (has_extra_events)
-                    if let Some(hex) = data_hex {
-                        row_vals.push(hex);
-                    }
-
-                    // Build placeholders and execute insert.
-                    let placeholders = vec!["?"; row_vals.len()].join(",");
-                    tx.execute(
-                        &format!("INSERT INTO {} VALUES ({})", table_name, placeholders),
-                        duckdb::params_from_iter(row_vals.iter()),
-                    )?;
+            // Second pass: process each table's events in bulk
+            for (table_name, table_events) in events_by_table {
+                if table_events.is_empty() {
+                    continue;
                 }
 
-                // Transaction will be committed later
+                // Get event_hash from table name (remove "event_" prefix)
+                let event_hash = table_name.strip_prefix("event_").unwrap().to_string();
+
+                // Get or cache the parsed event
+                let parsed_event = event_cache.entry(event_hash.clone()).or_insert_with(|| {
+                    let event_signature: String = tx
+                        .query_row(
+                            "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
+                            [event_hash.as_str()],
+                            |row| row.get(0),
+                        )
+                        .expect("Event signature not found in database");
+                    Event::parse(&event_signature).expect("Failed to parse event signature")
+                });
+
+                let mut appender = tx.appender(&table_name)?;
+
+                for log in table_events {
+                    // Build row values
+                    let mut row_vals: Vec<String> = vec![
+                        log.block_number.unwrap().to_string(),
+                        log.transaction_hash.unwrap().to_string(),
+                        log.log_index.unwrap().to_string(),
+                        log.address().to_string(),
+                        event_hash.clone(),
+                        log.topics()
+                            .get(1)
+                            .map(|t| t.to_string())
+                            .unwrap_or_default(),
+                        log.topics()
+                            .get(2)
+                            .map(|t| t.to_string())
+                            .unwrap_or_default(),
+                        log.topics()
+                            .get(3)
+                            .map(|t| t.to_string())
+                            .unwrap_or_default(),
+                    ];
+
+                    // Decode and append event parameters
+                    if let Ok(DecodedEvent { body, .. }) = parsed_event
+                        .decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())
+                    {
+                        for item in body {
+                            let value = match item {
+                                DynSolValue::Address(a) => a.to_string(),
+                                DynSolValue::Bool(b) => b.to_string(),
+                                DynSolValue::Int(i, _) => i.to_string(),
+                                DynSolValue::Uint(u, _) => u.to_string(),
+                                DynSolValue::String(s) => s.to_string(),
+                                _ => {
+                                    println!("Unsupported value: {:?}", item);
+                                    continue;
+                                }
+                            };
+                            row_vals.push(value);
+                        }
+                    }
+
+                    appender.append_row(duckdb::appender_params_from_iter(
+                        row_vals.iter().map(|s| s.as_str()),
+                    ))?;
+                }
+
+                // Flush the appender for this table
+                appender.flush()?;
             }
 
             // Explicitly commit the transaction
             tx.commit()?;
+        } else {
+            return Err(anyhow::anyhow!("Failed to acquire lock on database"));
         }
 
         // If we reach this point, the entire transaction was executed, thus we can update the last block with the
         // value from the last of the list.
-        let last_block_number = events.last().unwrap().block_number.unwrap();
-        self.update_last_block(last_block_number)?;
+        if let Some(last_event) = events.last() {
+            if let Some(last_block_number) = last_event.block_number {
+                self.update_last_block(last_block_number)?;
+            }
+        } else {
+            println!("No events to update last block");
+        }
 
         Ok(())
+    }
+
+    fn list_indexed_events(&self) -> Result<Vec<Event>> {
+        if let Ok(conn) = self.conn.lock() {
+            let mut rows = conn.prepare("SELECT * FROM event_descriptor")?;
+            let events = rows
+                .query_map([], |row| {
+                    Ok(EventDescriptorDb {
+                        event_hash: row.get(0).unwrap(),
+                        event_signature: row.get(1).unwrap(),
+                        event_name: row.get(2).unwrap(),
+                    })
+                })?
+                .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
+                .collect::<Result<Vec<EventDescriptorDb>>>()?
+                .iter()
+                .map(|e| Event::parse(&e.event_signature).unwrap())
+                .collect::<Vec<Event>>();
+
+            Ok(events)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
     }
 
     #[inline]
@@ -217,16 +236,37 @@ impl Storage for DuckDBStorage {
             Err(anyhow::anyhow!("Failed to acquire lock on database"))
         }
     }
+
+    fn include_events(&self, events: &[Event]) -> Result<()> {
+        let registered_events = self.list_indexed_events()?;
+        let not_registered_events: Vec<&Event> = events
+            .iter()
+            .filter(|e| !registered_events.contains(e))
+            .collect();
+        DuckDBStorage::create_event_schema(&self.conn, &not_registered_events)
+    }
+
+    fn get_event_signature(&self, event_hash: &str) -> Result<String> {
+        if let Ok(conn) = self.conn.lock() {
+            Ok(conn.query_row(
+                &format!("SELECT event_signature FROM event_descriptor WHERE event_hash = ?"),
+                [event_hash],
+                |row| row.get(0),
+            )?)
+        } else {
+            Err(anyhow::anyhow!("Failed to acquire lock on database"))
+        }
+    }
 }
 
 impl DuckDBStorage {
-    pub fn new(extra_events: bool) -> Result<DuckDBStorage> {
+    pub fn new() -> Result<DuckDBStorage> {
         println!("Using the default DB");
-        Self::with_db(DUCKDB_FILE_PATH, extra_events)
+        Self::with_db(DUCKDB_FILE_PATH)
     }
 
     /// Creates a new DuckDBStorage with the given database path.
-    pub fn with_db(db_path: &str, extra_events: bool) -> Result<DuckDBStorage> {
+    pub fn with_db(db_path: &str) -> Result<DuckDBStorage> {
         let conn = Connection::open(db_path).expect("failed to open duckdb database");
         let conn_lock = Mutex::new(conn);
 
@@ -274,22 +314,8 @@ impl DuckDBStorage {
         Ok(DuckDBStorage {
             conn: conn_lock,
             table_regex,
-            has_extra_events: extra_events,
+            db_path: db_path.to_string(),
         })
-    }
-
-    pub fn include_events(
-        &self,
-        events: &[String],
-        extra_events: Option<Vec<String>>,
-    ) -> Result<()> {
-        for event in events {
-            let hash = keccak256(event.as_bytes());
-            let event_hash = B256::from(hash).to_string();
-            // Fix this clone!
-            DuckDBStorage::create_event_schema(&self.conn, &event_hash, extra_events.clone())?;
-        }
-        Ok(())
     }
 
     fn create_db_base(conn: &Mutex<Connection>) -> Result<()> {
@@ -309,10 +335,10 @@ impl DuckDBStorage {
                 PRIMARY KEY (block_number)
             );
             CREATE TABLE IF NOT EXISTS event_descriptor(
-                event_signature VARCHAR(66) NOT NULL,
-                event_name VARCHAR NOT NULL,
-                event_type VARCHAR NOT NULL,
-                PRIMARY KEY (event_signature)
+                event_hash VARCHAR(66) NOT NULL,
+                event_signature VARCHAR(256) NOT NULL,
+                event_name VARCHAR(40) NOT NULL,
+                PRIMARY KEY (event_hash)
             );
             COMMIT;"
         );
@@ -333,63 +359,44 @@ impl DuckDBStorage {
             )?;
         }
 
-        {
-            let conn = conn.lock().unwrap();
-            conn.execute(
-                "INSERT INTO event_descriptor (event_signature, event_name, event_type)
-                VALUES (?, ?, ?);",
-                [
-                    B256::from(keccak256(b"Transfer")).to_string(),
-                    "Transfer".to_owned(),
-                    "ERC20".to_owned(),
-                ],
-            )?;
-        }
-
         Ok(())
     }
 
-    fn create_event_schema(
-        conn: &Mutex<Connection>,
-        event_hash: &str,
-        not_indexed_params: Option<Vec<String>>,
-    ) -> Result<()> {
-        let mut statement = format!(
-            "
-                CREATE TABLE IF NOT EXISTS event_{event_hash}(
-                    block_number UBIGINT NOT NULL,
-                    transaction_hash VARCHAR(42) NOT NULL,
-                    log_index USMALLINT NOT NULL,
-                    contract_address VARCHAR(42) NOT NULL,
-                    topic0 VARCHAR(66),
-                    topic1 VARCHAR(66),
-                    topic2 VARCHAR(66),
-                    topic3 VARCHAR(66),
-            ",
-        );
+    fn create_event_schema(conn: &Mutex<Connection>, events: &[&Event]) -> Result<()> {
+        for event in events {
+            // These will be the name used to create the new table: event_<hash>.
+            let table_name = B256::from(event.selector()).to_string();
+            let not_indexed_params_length = event.inputs.iter().filter(|p| !p.indexed).count();
 
-        if let Some(not_indexed_params) = not_indexed_params {
-            for param in not_indexed_params {
-                // unsure what this is for
-                statement.push_str(&format!("{} VARCHAR(66),", param));
+            // Now build the table definition
+            let mut statement = format!(
+                "
+                    CREATE TABLE IF NOT EXISTS event_{table_name}(
+                        block_number UBIGINT NOT NULL,
+                        transaction_hash VARCHAR(42) NOT NULL,
+                        log_index USMALLINT NOT NULL,
+                        contract_address VARCHAR(42) NOT NULL,
+                        topic0 VARCHAR(66),
+                        topic1 VARCHAR(66),
+                        topic2 VARCHAR(66),
+                        topic3 VARCHAR(66),
+                ",
+            );
+
+            (0..not_indexed_params_length)
+                .for_each(|i| statement.push_str(&format!("input_{i} VARCHAR(66),")));
+            statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
+
+            // Now, create an entry for such event in the event_descriptor table.
+            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name) VALUES ('{}', '{}', '{}');", event.selector(), event.full_signature(), event.name));
+
+            // Not a big deal to batch this SQL statement as it is executed once during the apps's lifetime.
+            if let Ok(conn) = conn.lock() {
+                conn.execute(&statement, [])?;
+            } else {
+                return Err(anyhow::anyhow!("Failed to acquire lock on database"));
             }
         }
-
-        // TODO: heads up, cant use the keyword "from" as its reserved.
-        // i think there is a way without changing the name,
-        let parsed_event = JsonEvent::parse(
-            "event Transfer(address indexed from_, address indexed to_, uint256 amount)",
-        )?;
-        for input in parsed_event.inputs {
-            statement.push_str(&format!("{} VARCHAR(66),", input.name));
-            println!("-------> {}", input.name);
-        }
-
-        statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
-
-        println!("Statement: {}", statement);
-        let conn = conn.lock().unwrap();
-        conn.execute(&statement, [])?;
 
         Ok(())
     }
@@ -484,7 +491,7 @@ impl StorageQuery for DuckDBStorage {
                     Ok(EventDescriptorDb {
                         event_signature: row.get(0).unwrap(),
                         event_name: row.get(1).unwrap(),
-                        event_type: row.get(2).unwrap(),
+                        event_hash: row.get(2).unwrap(),
                     })
                 })?
                 .map(|r| r.map_err(|e| anyhow::anyhow!(e)))

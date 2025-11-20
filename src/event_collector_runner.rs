@@ -36,12 +36,12 @@ impl RetryPolicy for AlwaysRetryPolicy {
 }
 
 /// Runner for the event collector.
-/// 
+///
 /// # Description
-/// 
+///
 /// This runner is responsible for spawning the event collector tasks for each RPC host. Each RPC host can serve
 /// data from a different blockchain. This way, we can monitor some event across multiple chains. However, this is
-/// not fully supported yet. 
+/// not fully supported yet.
 pub struct EventCollectorRunner {
     provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>>,
     contract_address: Address,

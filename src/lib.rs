@@ -30,7 +30,7 @@ pub mod constants {
     pub const DEFAULT_POLL_INTERVAL: u64 = 1;
 
     /// Default block range for the event collector. This range is used in the get_Logs call.
-    pub const DEFAULT_BLOCK_RANGE: usize = 100;
+    pub const DEFAULT_BLOCK_RANGE: usize = 10;
     /// Maximum number of collector tasks to spawn.
     pub const MAX_CONCURRENT_COLLECTOR_TASKS: usize = 1;
     /// Maximum concurrent requests sent to the RPC server.
@@ -41,6 +41,12 @@ pub mod constants {
     pub const DEFAULT_BACKOFF_LAYER_BACKOFF_TIME: u64 = 2000;
     /// Cup size for the event collector.
     pub const DEFAULT_BACKOFF_LAYER_CUP_SIZE: u64 = 100;
+    /// Path to the DuckDB database file.
+    pub const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
+    /// Schema version for the DuckDB database.
+    pub const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
+    /// Base table name for the DuckDB database.
+    pub const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
 }
 
 #[derive(Debug, Clone)]

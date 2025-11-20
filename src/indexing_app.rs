@@ -1,8 +1,8 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, DuckDBStorage, EventCollectorRunner, EventProcessor, RpcHost,
-    Storage, StorageQuery, api_rest::start_api_server, cli::IndexingArgs, constants,
+    CancellationToken, DuckDBStorage, EventCollectorRunner, EventProcessor, RpcHost, Storage,
+    StorageQuery, api_rest::start_api_server, cli::IndexingArgs, constants,
 };
 use alloy::{
     eips::BlockNumberOrTag,
@@ -49,9 +49,9 @@ impl IndexingApp {
 
         // TODO: Fix the extra_events logic
         let storage = if let Some(db_path) = &args.database {
-            DuckDBStorage::with_db(&db_path, false)?
+            DuckDBStorage::with_db(&db_path)?
         } else {
-            DuckDBStorage::new(false)?
+            DuckDBStorage::new()?
         };
 
         // Register the indexed events in the database if not already registered.
@@ -110,19 +110,14 @@ impl IndexingApp {
         )
         .with_context(|| "Failure in the REST API server")?;
 
-        let _ = tokio::spawn(async move { event_collector_runner.run().await });
-
+        // Launch teh event processor
         let processor_handle = tokio::spawn(async move { event_processor.run().await });
 
-        let cancellation_token = self.cancellation_token.clone();
+        // Launch the event collector runner
+        let _ = tokio::spawn(async move { event_collector_runner.run().await });
 
         // Spawn a task that handles Ctrl+C and aborts the collector
-        let ctrl_c_task = tokio::spawn(async move {
-            ctrl_c().await.ok();
-            println!("\nReceived Ctrl+C, shutting down gracefully...");
-            // Signal cancellation to processor
-            cancellation_token.graceful_shutdown();
-        });
+        let ctrl_c_task = IndexingApp::spawn_ctrl_c_handler(self.cancellation_token.clone());
 
         // Collector tasks can be safely killed without the token, so these will be dropped automatically.
         let _ = join!(ctrl_c_task, processor_handle);
@@ -130,6 +125,15 @@ impl IndexingApp {
         println!("Shutdown complete");
 
         Ok(())
+    }
+
+    fn spawn_ctrl_c_handler(cancellation_token: CancellationToken) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            ctrl_c().await.ok();
+            println!("\nReceived Ctrl+C, shutting down gracefully...");
+            // Signal cancellation to processor
+            cancellation_token.graceful_shutdown();
+        })
     }
 
     /// Chooses the starting block based on the input and the current DB status.
