@@ -121,11 +121,13 @@ pub type RxCancellationToken = tokio::sync::broadcast::Receiver<()>;
 #[derive(Clone)]
 pub struct CancellationToken(tokio::sync::broadcast::Sender<()>);
 
-impl CancellationToken {
-    pub fn new() -> Self {
+impl Default for CancellationToken {
+    fn default() -> Self {
         Self(tokio::sync::broadcast::Sender::new(1))
     }
+}
 
+impl CancellationToken {
     pub fn subscribe(&self) -> RxCancellationToken {
         self.0.subscribe()
     }
