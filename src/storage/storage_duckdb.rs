@@ -191,13 +191,13 @@ impl Storage for DuckDBStorage {
         }
 
         // Update the last block within the same transaction
-        if let Some(last_event) = events.last() {
-            if let Some(last_block_number) = last_event.block_number {
-                tx.execute(
-                    &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET last_block = ?"),
-                    [last_block_number.to_string()],
-                )?;
-            }
+        if let Some(last_event) = events.last()
+            && let Some(last_block_number) = last_event.block_number
+        {
+            tx.execute(
+                &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET last_block = ?"),
+                [last_block_number.to_string()],
+            )?;
         }
 
         // Explicitly commit the transaction
@@ -271,7 +271,7 @@ impl Storage for DuckDBStorage {
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         Ok(conn.query_row(
-            &format!("SELECT event_signature FROM event_descriptor WHERE event_hash = ?"),
+            "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
             [event_hash],
             |row| row.get(0),
         )?)
@@ -481,7 +481,7 @@ impl DuckDBStorage {
     fn parse_table_names_from_query(&self, query: &str) -> Vec<String> {
         self.table_regex
             .find_iter(query)
-            .map(|m| m.as_str().split(' ').last().unwrap().to_owned())
+            .map(|m| m.as_str().split(' ').next_back().unwrap().to_owned())
             .collect::<Vec<String>>()
     }
 
@@ -614,7 +614,7 @@ impl StorageQuery for DuckDBStorage {
 
     fn send_raw_query(&self, query: &str) -> Result<Value> {
         let storage = self.clone();
-        if query.find("SELECT").is_none() {
+        if !query.contains("SELECT") {
             return Ok(json!({ "error": "Query must be a SELECT statement" }));
         }
 
@@ -639,7 +639,7 @@ impl StorageQuery for DuckDBStorage {
         while let Some(row) = rows.next()? {
             let mut result_obj = Map::new();
             for (i, (col_name, col_type)) in table_schema.iter().enumerate() {
-                let value = DuckDBStorage::get_value_by_type(&row, i, col_type)?;
+                let value = DuckDBStorage::get_value_by_type(row, i, col_type)?;
                 result_obj.insert(col_name.clone(), value);
             }
             results.push(Value::Object(result_obj));
