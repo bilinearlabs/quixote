@@ -79,7 +79,6 @@ impl EventCollector {
             .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |chunk_start| {
                 let tx = producer_buffer.clone();
                 let provider = provider_clone.clone();
-                let contract_address = contract_address;
                 let event = self.event.clone();
                 async move {
                     let chunk_end = std::cmp::min(

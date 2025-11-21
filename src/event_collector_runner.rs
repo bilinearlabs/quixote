@@ -125,7 +125,6 @@ impl EventCollectorRunner {
             let semaphore = semaphore.clone();
             let contract_address = self.contract_address;
             let producer_buffer = self.producer_buffer.clone();
-            let start_block_num = start_block_num;
             let running_mode = self.running_mode;
             let events = self.events.clone();
 
