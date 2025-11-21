@@ -50,10 +50,10 @@ impl IndexingApp {
             BlockNumberOrTag::Latest
         };
 
-        let cancellation_token = CancellationToken::new();
+        let cancellation_token = CancellationToken::default();
 
         let storage = if let Some(db_path) = &args.database {
-            DuckDBStorage::with_db(&db_path)?
+            DuckDBStorage::with_db(db_path)?
         } else {
             DuckDBStorage::new()?
         };
@@ -123,6 +123,7 @@ impl IndexingApp {
             self.storage_for_api.clone(),
             self.cancellation_token.clone(),
         )
+        .await
         .with_context(|| "Failure in the REST API server")?;
 
         info!("REST API server listening on {}", self.api_server_address);
@@ -133,7 +134,7 @@ impl IndexingApp {
         let processor_handle = tokio::spawn(async move { event_processor.run().await });
 
         // Launch the event collector runner
-        let _ = tokio::spawn(async move { event_collector_runner.run().await });
+        let _ = tokio::spawn(async move { event_collector_runner.run().await }).await?;
 
         // Spawn a task that handles Ctrl+C and aborts the collector
         let ctrl_c_task = IndexingApp::spawn_ctrl_c_handler(self.cancellation_token.clone());
@@ -204,11 +205,7 @@ impl IndexingApp {
         } else if let Some(abi_spec) = &args.abi_spec {
             let json = std::fs::read_to_string(abi_spec)?;
             let abi: JsonAbi = serde_json::from_str(&json)?;
-            let events = abi
-                .events()
-                .into_iter()
-                .map(|e| e.clone())
-                .collect::<Vec<Event>>();
+            let events = abi.events().cloned().collect::<Vec<Event>>();
             Ok((CollectorRunningMode::EventWithoutFiltering, events))
         } else {
             Err(anyhow::anyhow!(

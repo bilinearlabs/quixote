@@ -218,24 +218,26 @@ pub fn create_router(factory: Arc<DuckDBStorageFactory>) -> Router {
 }
 
 /// Starts the REST API server in a separate thread
-pub fn start_api_server(
+pub async fn start_api_server(
     server_address: &str,
     storage_backend: Arc<DuckDBStorageFactory>,
     cancellation_token: CancellationToken,
 ) -> Result<()> {
     let server_address = server_address.to_string();
-    let _ = tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let app = create_router(storage_backend);
         let port = server_address.split(":").nth(1).unwrap().to_string();
 
         let listener = tokio::net::TcpListener::bind(server_address)
             .await
-            .expect(&format!("Failed to bind to port {port}"));
+            .unwrap_or_else(|_| panic!("Failed to bind to port {port}"));
         axum::serve(listener, app)
             .with_graceful_shutdown(sthutdown_signal(cancellation_token))
             .await
             .expect("API server error");
     });
+
+    handle.await?;
 
     Ok(())
 }
