@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, EventCollectorRunner, EventProcessor, RpcHost,
+    CancellationToken, CollectorRunningMode, EventCollectorRunner, EventProcessor, RpcHost,
     api_rest::start_api_server,
     cli::IndexingArgs,
     constants,
@@ -27,6 +27,7 @@ pub struct IndexingApp {
     pub events: Vec<Event>,
     pub start_block: BlockNumberOrTag,
     pub contract_address: Address,
+    pub running_mode: CollectorRunningMode,
 }
 
 impl IndexingApp {
@@ -36,7 +37,7 @@ impl IndexingApp {
         let args = IndexingArgs::parse();
 
         // Build a list of events from the command line arguments.
-        let events = Self::get_events(&args)?;
+        let (running_mode, events) = Self::get_events(&args)?;
 
         // Select the target block based on the input and the current DB status.
         let start_block = if let Some(block) = &args.start_block {
@@ -88,6 +89,7 @@ impl IndexingApp {
             events,
             start_block: target_block,
             contract_address,
+            running_mode,
         })
     }
 
@@ -105,6 +107,7 @@ impl IndexingApp {
             self.events.clone(),
             self.start_block,
             producer_buffer,
+            self.running_mode,
         )?;
 
         let mut event_processor = EventProcessor::new(
@@ -182,17 +185,22 @@ impl IndexingApp {
     }
 
     /// Builds a list of events from the command line arguments.
-    fn get_events(args: &IndexingArgs) -> Result<Vec<Event>> {
-        if let Some(event) = &args.event {
+    fn get_events(args: &IndexingArgs) -> Result<(CollectorRunningMode, Vec<Event>)> {
+        if let Some(events) = &args.event {
             if args.abi_spec.is_some() {
                 warn!("The given ABI will be ignored. The option -e takes precedence over -a.");
             }
 
-            let event = Event::parse(event).map_err(|_| {
-                anyhow::anyhow!("Failed to parse the given event. Use --help for more information.")
-            })?;
+            let mut parsed_events = Vec::new();
+            for event in events {
+                parsed_events.push(Event::parse(event).map_err(|_| {
+                    anyhow::anyhow!(
+                        "Failed to parse the given event. Use --help for more information."
+                    )
+                })?);
+            }
 
-            Ok(vec![event])
+            Ok((CollectorRunningMode::EventWithFiltering, parsed_events))
         } else if let Some(abi_spec) = &args.abi_spec {
             let json = std::fs::read_to_string(abi_spec)?;
             let abi: JsonAbi = serde_json::from_str(&json)?;
@@ -201,7 +209,7 @@ impl IndexingApp {
                 .into_iter()
                 .map(|e| e.clone())
                 .collect::<Vec<Event>>();
-            Ok(events)
+            Ok((CollectorRunningMode::EventWithoutFiltering, events))
         } else {
             Err(anyhow::anyhow!(
                 "Missing event or ABI spec to index. Use --help for more information."

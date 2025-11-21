@@ -2,7 +2,9 @@
 
 //! Runner module for the event collector.
 
-use crate::{RpcHost, TxLogChunk, constants::*, event_collector::EventCollector};
+use crate::{
+    CollectorRunningMode, RpcHost, TxLogChunk, constants::*, event_collector::EventCollector,
+};
 use alloy::{
     eips::BlockNumberOrTag,
     json_abi::Event,
@@ -50,6 +52,7 @@ pub struct EventCollectorRunner {
     events: Vec<Event>,
     start_block: BlockNumberOrTag,
     producer_buffer: TxLogChunk,
+    running_mode: CollectorRunningMode,
 }
 
 impl EventCollectorRunner {
@@ -59,6 +62,7 @@ impl EventCollectorRunner {
         events: Vec<Event>,
         start_block: BlockNumberOrTag,
         producer_buffer: TxLogChunk,
+        running_mode: CollectorRunningMode,
     ) -> Result<Self> {
         let always_retry_policy = AlwaysRetryPolicy::default();
 
@@ -91,6 +95,7 @@ impl EventCollectorRunner {
             events,
             start_block,
             producer_buffer,
+            running_mode,
         })
     }
 
@@ -121,14 +126,8 @@ impl EventCollectorRunner {
             let contract_address = self.contract_address;
             let producer_buffer = self.producer_buffer.clone();
             let start_block_num = start_block_num;
-
-            // When we've got multiple events, we are expecting to index the entire ABI,
-            // so we pass None and no filtering is applied. Otherwise, filter by the single event.
-            let event = if self.events.len() == 1 {
-                Some(self.events[0].clone())
-            } else {
-                None
-            };
+            let running_mode = self.running_mode;
+            let events = self.events.clone();
 
             let handle = tokio::spawn(async move {
                 // Acquire permit (one per RPC host)
@@ -139,22 +138,43 @@ impl EventCollectorRunner {
                     host_index, start_block_num
                 );
 
-                let collector = EventCollector::new(
-                    contract_address,
-                    event,
-                    start_block_num,
-                    provider,
-                    BlockNumberOrTag::Finalized,
-                    producer_buffer,
-                );
+                if running_mode == CollectorRunningMode::EventWithFiltering {
+                    for event in events {
+                        let collector = EventCollector::new(
+                            contract_address,
+                            Some(event),
+                            start_block_num,
+                            provider.clone(),
+                            BlockNumberOrTag::Finalized,
+                            producer_buffer.clone(),
+                        );
 
-                let collector_handle = tokio::spawn(async move {
-                    // Collect events - this runs forever, polling for new blocks
-                    let _ = collector.collect().await;
-                });
+                        let collector_handle = tokio::spawn(async move {
+                            let _ = collector.collect().await;
+                        });
 
-                if let Err(e) = collector_handle.await {
-                    error!("Collector task for RPC host {} panicked: {}", host_index, e);
+                        if let Err(e) = collector_handle.await {
+                            error!("Collector task for RPC host {} panicked: {}", host_index, e);
+                        }
+                    }
+                } else {
+                    let collector = EventCollector::new(
+                        contract_address,
+                        None,
+                        start_block_num,
+                        provider,
+                        BlockNumberOrTag::Finalized,
+                        producer_buffer,
+                    );
+
+                    let collector_handle = tokio::spawn(async move {
+                        // Collect events - this runs forever, polling for new blocks
+                        let _ = collector.collect().await;
+                    });
+
+                    if let Err(e) = collector_handle.await {
+                        error!("Collector task for RPC host {} panicked: {}", host_index, e);
+                    }
                 }
             });
 

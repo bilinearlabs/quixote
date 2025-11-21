@@ -15,6 +15,8 @@ pub use indexing_app::IndexingApp;
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
 use secrecy::{ExposeSecret, SecretString};
+use std::string::ToString;
+use strum_macros::Display;
 
 /// Module with constants used throughout the application.
 pub mod constants {
@@ -247,4 +249,20 @@ impl TryInto<Url> for &RpcHost {
 
         Ok(url)
     }
+}
+
+/// Collector running mode
+///
+/// # Description
+///
+/// The collector runner can run in two modes:
+/// - Multiple event with filtering: Several events are provided using the -e flag.
+/// - Multiple event without filtering: The events are provided using the -a flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display)]
+pub enum CollectorRunningMode {
+    #[default]
+    #[strum(to_string = "Multiple events with filtering")]
+    EventWithFiltering,
+    #[strum(to_string = "Multiple events without filtering")]
+    EventWithoutFiltering,
 }

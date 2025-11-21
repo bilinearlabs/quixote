@@ -30,7 +30,7 @@ pub(crate) struct IndexingArgs {
         long,
         help = "Event to index as defined by the contract's ABI.\nExample: Transfer(address indexed from, address indexed to, uint256 amount)"
     )]
-    pub event: Option<String>,
+    pub event: Option<Vec<String>>,
     #[arg(
         short,
         long,
