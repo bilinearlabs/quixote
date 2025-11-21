@@ -49,8 +49,8 @@ pub mod constants {
 
 /// Module with definitions related to the storage of the indexed data.
 pub mod storage {
-    pub mod storage;
-    pub use storage::Storage;
+    pub mod storage_api;
+    pub use storage_api::Storage;
     pub mod storage_duckdb;
     pub mod storage_query;
     pub use storage_duckdb::{DuckDBStorage, DuckDBStorageFactory};
