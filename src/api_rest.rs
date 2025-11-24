@@ -217,14 +217,14 @@ pub fn create_router(factory: Arc<DuckDBStorageFactory>) -> Router {
         .with_state(factory)
 }
 
-/// Starts the REST API server in a separate thread
+/// Starts the REST API server in a separate task
 pub async fn start_api_server(
     server_address: &str,
     storage_backend: Arc<DuckDBStorageFactory>,
     cancellation_token: CancellationToken,
 ) -> Result<()> {
     let server_address = server_address.to_string();
-    let handle = tokio::spawn(async move {
+    tokio::spawn(async move {
         let app = create_router(storage_backend);
         let port = server_address.split(":").nth(1).unwrap().to_string();
 
@@ -236,8 +236,6 @@ pub async fn start_api_server(
             .await
             .expect("API server error");
     });
-
-    handle.await?;
 
     Ok(())
 }
