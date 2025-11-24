@@ -81,7 +81,7 @@ impl Storage for DuckDBStorage {
                     blocks_appender.append_row(params![
                         block_number.to_string(),
                         event.block_hash.unwrap().to_string(),
-                        event.block_timestamp.unwrap_or_else(|| 0).to_string()
+                        event.block_timestamp.unwrap_or_default().to_string()
                     ])?;
                     last_block_number = block_number;
                 } else {

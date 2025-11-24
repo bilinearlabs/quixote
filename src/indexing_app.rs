@@ -130,7 +130,8 @@ impl IndexingApp {
         let processor_handle = tokio::spawn(async move { event_processor.run().await });
 
         // Launch the event collector runner
-        let _ = tokio::spawn(async move { event_collector_runner.run().await }).await?;
+        #[allow(clippy::let_underscore_future)]
+        let _ = tokio::spawn(async move { event_collector_runner.run().await });
 
         // Spawn a task that handles Ctrl+C and aborts the collector
         let ctrl_c_task = IndexingApp::spawn_ctrl_c_handler(self.cancellation_token.clone());
