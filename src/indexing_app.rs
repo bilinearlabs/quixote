@@ -13,7 +13,6 @@ use alloy::{
     primitives::Address,
 };
 use anyhow::{Context, Result};
-use clap::Parser;
 use std::sync::Arc;
 use tokio::{join, signal::ctrl_c, sync::mpsc};
 use tracing::{info, warn};
@@ -32,10 +31,7 @@ pub struct IndexingApp {
 
 impl IndexingApp {
     /// Builds a new instance fo the indexing app using the command line arguments.
-    pub fn build_app() -> Result<Self> {
-        // Parse the command line arguments.
-        let args = IndexingArgs::parse();
-
+    pub fn build_app(args: IndexingArgs) -> Result<Self> {
         // Build a list of events from the command line arguments.
         let (running_mode, events) = Self::get_events(&args)?;
 

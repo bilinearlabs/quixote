@@ -9,7 +9,7 @@ use clap::Parser;
 #[command(version = "0.1.0")]
 #[command(about = "Etherduck")]
 #[command(long_about = "Ethereum event indexing tool")]
-pub(crate) struct IndexingArgs {
+pub struct IndexingArgs {
     #[arg(
         short,
         long,
@@ -55,4 +55,11 @@ pub(crate) struct IndexingArgs {
         help = "Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720"
     )]
     pub api_server: Option<String>,
+    #[arg(
+        short,
+        long,
+        help = "Verbosity level. 0 = WARN, 1 = INFO (default), 2 = DEBUG, 3 = TRACE",
+        default_value_t = 1
+    )]
+    pub verbosity: u8,
 }
