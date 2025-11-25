@@ -4,7 +4,7 @@ This document provides curl examples for testing the Etherduck REST API endpoint
 
 ## Base URL
 
-The API runs on `http://localhost:9988` by default.
+The API runs on `http://localhost:9720` by default.
 
 ## Endpoints
 
@@ -20,12 +20,12 @@ Get a list of all event descriptors in the database.
 
 ```bash
 # With empty JSON body
-curl -X POST http://localhost:9988/list_events \
+curl -X POST http://localhost:9720/list_events \
   -H "Content-Type: application/json" \
   -d '{}'
 
 # Or simply (some frameworks accept empty POST)
-curl -X POST http://localhost:9988/list_events \
+curl -X POST http://localhost:9720/list_events \
   -H "Content-Type: application/json"
 ```
 
@@ -56,7 +56,7 @@ Get a list of all contracts in the database.
 **Example:**
 
 ```bash
-curl -X POST http://localhost:9988/list_contracts \
+curl -X POST http://localhost:9720/list_contracts \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -108,7 +108,7 @@ Retrieve events for a specific contract within a time range.
 START_TIME=$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")
 END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-curl -X POST http://localhost:9988/get_events \
+curl -X POST http://localhost:9720/get_events \
   -H "Content-Type: application/json" \
   -d "{
     \"contract\": \"0xdAC17F958D2ee523a2206206994597C13D831ec7\",
@@ -123,7 +123,7 @@ curl -X POST http://localhost:9988/get_events \
 START_TIME=$(date -u -d '7 days ago' +"%Y-%m-%dT%H:%M:%SZ")
 END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-curl -X POST http://localhost:9988/get_events \
+curl -X POST http://localhost:9720/get_events \
   -H "Content-Type: application/json" \
   -d "{
     \"contract\": \"0xdAC17F958D2ee523a2206206994597C13D831ec7\",
@@ -135,7 +135,7 @@ curl -X POST http://localhost:9988/get_events \
 #### Get events for a specific date range
 
 ```bash
-curl -X POST http://localhost:9988/get_events \
+curl -X POST http://localhost:9720/get_events \
   -H "Content-Type: application/json" \
   -d '{
     "contract": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
@@ -147,7 +147,7 @@ curl -X POST http://localhost:9988/get_events \
 #### Get events without end_time (uses current time)
 
 ```bash
-curl -X POST http://localhost:9988/get_events \
+curl -X POST http://localhost:9720/get_events \
   -H "Content-Type: application/json" \
   -d '{
     "contract": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
@@ -161,7 +161,7 @@ curl -X POST http://localhost:9988/get_events \
 START_TIME=$(date -u -d '5 minutes ago' +"%Y-%m-%dT%H:%M:%SZ")
 END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-curl -X POST http://localhost:9988/get_events \
+curl -X POST http://localhost:9720/get_events \
   -H "Content-Type: application/json" \
   -d "{
     \"contract\": \"0xdAC17F958D2ee523a2206206994597C13D831ec7\",
@@ -214,7 +214,7 @@ Execute a raw SQL query against the database.
 #### Simple SELECT query
 
 ```bash
-curl -X POST http://localhost:9988/raw_query \
+curl -X POST http://localhost:9720/raw_query \
   -H "Content-Type: application/json" \
   -d '{
     "query": "SELECT * FROM blocks LIMIT 10"
@@ -224,7 +224,7 @@ curl -X POST http://localhost:9988/raw_query \
 #### Query with WHERE clause
 
 ```bash
-curl -X POST http://localhost:9988/raw_query \
+curl -X POST http://localhost:9720/raw_query \
   -H "Content-Type: application/json" \
   -d '{
     "query": "SELECT block_number, block_timestamp FROM blocks WHERE block_number > 23780000 ORDER BY block_number DESC LIMIT 5"
@@ -234,7 +234,7 @@ curl -X POST http://localhost:9988/raw_query \
 #### Query event tables
 
 ```bash
-curl -X POST http://localhost:9988/raw_query \
+curl -X POST http://localhost:9720/raw_query \
   -H "Content-Type: application/json" \
   -d '{
     "query": "SELECT COUNT(*) as total_events FROM event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -290,7 +290,7 @@ All endpoints return errors in the following format:
 
 ```bash
 # Invalid contract address
-curl -X POST http://localhost:9988/get_events \
+curl -X POST http://localhost:9720/get_events \
   -H "Content-Type: application/json" \
   -d '{
     "contract": "invalid_address",
@@ -312,7 +312,7 @@ Response:
 To make the responses more readable, pipe through `jq`:
 
 ```bash
-curl -X POST http://localhost:9988/list_events \
+curl -X POST http://localhost:9720/list_events \
   -H "Content-Type: application/json" \
   -d '{}' | jq '.'
 ```
@@ -320,7 +320,7 @@ curl -X POST http://localhost:9988/list_events \
 Or use Python:
 
 ```bash
-curl -X POST http://localhost:9988/list_events \
+curl -X POST http://localhost:9720/list_events \
   -H "Content-Type: application/json" \
   -d '{}' | python3 -m json.tool
 ```
@@ -334,7 +334,7 @@ Here's a simple bash script to test all endpoints:
 ```bash
 #!/bin/bash
 
-API_URL="http://localhost:9988"
+API_URL="http://localhost:9720"
 
 echo "=== Testing List Events ==="
 curl -X POST $API_URL/list_events \
@@ -376,4 +376,3 @@ Save this as `test_api.sh`, make it executable (`chmod +x test_api.sh`), and run
 - Contract addresses must be valid hex strings with `0x` prefix
 - The API server must be running before making requests
 - All endpoints use POST method and expect JSON content type
-
