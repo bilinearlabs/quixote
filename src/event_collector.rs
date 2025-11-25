@@ -4,12 +4,15 @@
 
 use crate::{LogChunk, TxLogChunk, constants::*};
 use alloy::{
-    eips::BlockNumberOrTag, json_abi::Event, primitives::Address, providers::Provider,
-    rpc::types::Filter,
+    eips::BlockNumberOrTag,
+    json_abi::Event,
+    primitives::Address,
+    providers::Provider,
+    rpc::types::{Filter, SyncStatus},
 };
 use anyhow::Result;
 use futures::stream::{self, TryStreamExt};
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error};
 
@@ -45,6 +48,13 @@ impl EventCollector {
     }
 
     pub async fn collect(&self) -> Result<()> {
+        if self.check_sync_status().await? {
+            error!(
+                "The RPC server is syncing, resume indexing when the syncing process is complete"
+            );
+            std::process::exit(1);
+        }
+
         let mut processed_to = self.start_block.saturating_sub(1);
 
         loop {
@@ -74,13 +84,21 @@ impl EventCollector {
             stream::iter(
                 chunk_starts
                     .into_iter()
-                    .map(Ok::<u64, Box<dyn Error + Send + Sync>>),
+                    .map(Ok::<u64, anyhow::Error>),
             )
             .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |chunk_start| {
                 let tx = producer_buffer.clone();
                 let provider = provider_clone.clone();
                 let event = self.event.clone();
                 async move {
+                    // Check tha the RPC server is not syncing. If syncing, a raw exit is issued as we prefer to stop
+                    // all the running logic just in case some RPC request returns inconsistent data that gets
+                    // stored in the database.
+                    if self.check_sync_status().await? {
+                        error!("The RPC server is syncing, resume indexing when the syncing process is complete");
+                        std::process::exit(1);
+                    }
+
                     let chunk_end = std::cmp::min(
                         chunk_start + DEFAULT_BLOCK_RANGE as u64 - 1,
                         finalized_block,
@@ -119,6 +137,15 @@ impl EventCollector {
 
             // All blocks up to `finalized_block` have been queued for processing.
             processed_to = finalized_block;
+        }
+    }
+
+    async fn check_sync_status(&self) -> Result<bool> {
+        let syncing = self.provider.syncing().await?;
+
+        match syncing {
+            SyncStatus::Info(_) => Ok(true),
+            SyncStatus::None => Ok(false),
         }
     }
 }
