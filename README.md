@@ -20,11 +20,11 @@ Usage: etherduck [OPTIONS] --rpc-host <RPC_HOST> --contract <CONTRACT>
 
 Options:
   -r, --rpc-host <RPC_HOST>        RPC host to index.
-                                               
+
                                    Format: <chain_id>[:<username>:<password>]@<host>:<port>
-                                               
+
                                    Example for an RPC with basic auth => 1:user:pass@http://localhost:9822
-                                               
+
                                    Example for an authless RPC => 1@http://localhost:9822
   -c, --contract <CONTRACT>        Contract to index.
                                    Example: 0x1234567890123456789012345678901234567890
@@ -52,7 +52,7 @@ $ etherduck -r 1@https://eth.llamarpc.com \
 To increase the verbosity level up to _debug_, the environment variable `RUST_LOG` shall be used:
 
 ```bash
-$ RUST_LOG=etherduck=debug etherduck -r 1@https://eth.llamarpc.com \
+$ etherduck -r 1@https://eth.llamarpc.com \
     -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
     -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
     -s 23744000
@@ -61,7 +61,7 @@ $ RUST_LOG=etherduck=debug etherduck -r 1@https://eth.llamarpc.com \
 Another example for indexing Transfer and Approval events:
 
 ```bash
-$ RUST_LOG=etherduck=debug etherduck -r 1@https://eth.llamarpc.com \
+$ etherduck -r 1@https://eth.llamarpc.com \
     -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
     -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
     -e "Approval(address indexed owner, address indexed spender, uint256 value)" \
@@ -99,7 +99,7 @@ This table is a record of the indexed events by type. This table shall be used t
 
 ### Tables *event_<hash>*
 
-Each indexed event makes use of a table in the DB named using the event's hash of its full signature. For instance, for the event `Transfer(address indexed from, address indexed to, uint256 amount)` the table in the DB would be named *event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef*. 
+Each indexed event makes use of a table in the DB named using the event's hash of its full signature. For instance, for the event `Transfer(address indexed from, address indexed to, uint256 amount)` the table in the DB would be named *event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef*.
 
 These tables are dynamic, which means there's no fix schema, and it is rather based on the event's content. Usually, a table of this type includes:
 
