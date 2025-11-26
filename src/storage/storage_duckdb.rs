@@ -4,6 +4,7 @@
 
 use crate::{
     constants::*,
+    error_codes::ERROR_CODE_DATABASE_LOCKED,
     storage::{ContractDescriptorDb, EventDb, EventDescriptorDb, Storage, StorageQuery},
 };
 use alloy::{
@@ -285,7 +286,14 @@ impl DuckDBStorage {
 
     /// Creates a new DuckDBStorage with the given database path.
     pub fn with_db(db_path: &str) -> Result<DuckDBStorage> {
-        let conn = Connection::open(db_path).expect("failed to open duckdb database");
+        let conn = if let Ok(conn) = Connection::open(db_path) {
+            conn
+        } else {
+            error!(
+                "Failed to open database: {db_path}. Check that the DB file is not locked by another process."
+            );
+            std::process::exit(ERROR_CODE_DATABASE_LOCKED);
+        };
 
         let table_exists: bool = conn.query_row(
             r#"
