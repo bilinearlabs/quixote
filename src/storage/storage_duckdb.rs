@@ -109,8 +109,21 @@ impl Storage for DuckDBStorage {
             {
                 continue;
             }
+
+            // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
-            let table_name = format!("event_{event_hash}");
+            let event_signature: String = tx.query_row(
+                "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
+                [&event_hash],
+                |row| row.get(0),
+            )?;
+
+            let event_name = Event::parse(&event_signature)
+                .unwrap()
+                .name
+                .as_str()
+                .to_ascii_lowercase();
+            let table_name = format!("event_{event_name}_{event_hash}");
             events_by_table
                 .entry(table_name)
                 .or_insert_with(Vec::new)
@@ -124,7 +137,7 @@ impl Storage for DuckDBStorage {
             }
 
             // Get event_hash from table name (remove "event_" prefix)
-            let event_hash = table_name.strip_prefix("event_").unwrap().to_string();
+            let event_hash = table_name.split("_").nth(2).unwrap().to_string();
 
             // Get or cache the parsed event
             let parsed_event = event_cache.entry(event_hash.clone()).or_insert_with(|| {
@@ -141,28 +154,30 @@ impl Storage for DuckDBStorage {
             let mut appender = tx.appender(&table_name)?;
 
             for log in table_events {
-                // Build row values
+                // Insert the always present fields
                 let mut row_vals: Vec<String> = vec![
                     log.block_number.unwrap().to_string(),
                     log.transaction_hash.unwrap().to_string(),
                     log.log_index.unwrap().to_string(),
                     log.address().to_string(),
-                    event_hash.clone(),
-                    log.topics()
-                        .get(1)
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
-                    log.topics()
-                        .get(2)
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
-                    log.topics()
-                        .get(3)
-                        .map(|t| t.to_string())
-                        .unwrap_or_default(),
                 ];
 
-                // Decode and append event parameters
+                // Now we need to consider how many indexed topics our current event includes.
+                let indexed_params = parsed_event
+                    .inputs
+                    .iter()
+                    .filter(|input| input.indexed)
+                    .count();
+                for i in 1..=indexed_params {
+                    row_vals.push(
+                        log.topics()
+                            .get(i)
+                            .map(|t| t.to_string())
+                            .unwrap_or_default(),
+                    );
+                }
+
+                // Time to include the non-indexed parameters.
                 if let Ok(DecodedEvent { body, .. }) =
                     parsed_event.decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())
                 {
@@ -257,13 +272,7 @@ impl Storage for DuckDBStorage {
     }
 
     fn include_events(&self, events: &[Event]) -> Result<()> {
-        debug!("Including events: {events:?} in the database");
-        let registered_events = self.list_indexed_events()?;
-        let not_registered_events: Vec<&Event> = events
-            .iter()
-            .filter(|e| !registered_events.contains(e))
-            .collect();
-        DuckDBStorage::create_event_schema(&self.conn, &not_registered_events)
+        DuckDBStorage::create_event_schema(&self.conn, events)
     }
 
     fn get_event_signature(&self, event_hash: &str) -> Result<String> {
@@ -386,17 +395,18 @@ impl DuckDBStorage {
         Ok(())
     }
 
-    fn create_event_schema(conn: &Mutex<Connection>, events: &[&Event]) -> Result<()> {
+    fn create_event_schema(conn: &Mutex<Connection>, events: &[Event]) -> Result<()> {
         for event in events {
-            // These will be the name used to create the new table: event_<hash>.
+            // These will be the name used to create the new table: event_<name>_<hash>.
             let table_name = B256::from(event.selector()).to_string();
-            let not_indexed_params_length = event.inputs.iter().filter(|p| !p.indexed).count();
-            let indexed_params_length = event.inputs.iter().filter(|p| p.indexed).count();
+            let event_name = event.name.as_str().to_ascii_lowercase();
+
+            debug!("Creating event schema for: {}", event.full_signature());
 
             // Now build the table definition
             let mut statement = format!(
                 "
-                    CREATE TABLE IF NOT EXISTS event_{table_name}(
+                    CREATE TABLE IF NOT EXISTS event_{event_name}_{table_name}(
                         block_number UBIGINT NOT NULL,
                         transaction_hash VARCHAR(42) NOT NULL,
                         log_index USMALLINT NOT NULL,
@@ -404,19 +414,13 @@ impl DuckDBStorage {
                 ",
             );
 
-            // There are events with no parameters at all.
-            if indexed_params_length > 0 {
-                statement.push_str(
-                    "                        
-                        topic0 VARCHAR(66),
-                        topic1 VARCHAR(66),
-                        topic2 VARCHAR(66),
-                        topic3 VARCHAR(66),",
-                );
-            }
+            event.inputs.iter().for_each(|param| {
+                statement.push_str(&format!(
+                    "\"{}\" VARCHAR({DEFAULT_VARCHAR_LENGTH}),",
+                    param.name
+                ));
+            });
 
-            (0..not_indexed_params_length)
-                .for_each(|i| statement.push_str(&format!("input_{i} VARCHAR(66),")));
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
 
             // Now, create an entry for such event in the event_descriptor table.
@@ -582,12 +586,12 @@ impl StorageQuery for DuckDBStorage {
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         let mut stmt = conn.prepare(&format!(
             "
-            SELECT e.block_number, e.transaction_hash, e.log_index, e.contract_address, 
+            SELECT e.block_number, e.transaction_hash, e.log_index, e.contract_address,
                    e.topic0, e.topic1, e.topic2, e.topic3, b.block_timestamp
             FROM event_{event_hash} e
             NATURAL JOIN blocks b
-            WHERE LOWER(e.contract_address) = LOWER(?) 
-              AND b.block_timestamp >= ? 
+            WHERE LOWER(e.contract_address) = LOWER(?)
+              AND b.block_timestamp >= ?
               AND b.block_timestamp <= ?
             ORDER BY e.block_number
         "

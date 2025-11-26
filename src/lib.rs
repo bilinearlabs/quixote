@@ -45,6 +45,10 @@ pub mod constants {
     pub const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
     /// Base table name for the DuckDB database.
     pub const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
+    /// Default length for VARCHAR columns in the DuckDB database.
+    pub const DEFAULT_VARCHAR_LENGTH: usize = 66;
+}
+
 /// Error codes that are used when calling exit.
 pub mod error_codes {
     /// The DB file is in use by another process.
