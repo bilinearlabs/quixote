@@ -34,7 +34,7 @@ pub struct IndexingArgs {
     #[arg(
         short,
         long,
-        help = "Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.\nExample => 28837711\nDefault: latest"
+        help = "Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.\nExample => 28837711\nDefault: 0"
     )]
     pub start_block: Option<String>,
     #[arg(

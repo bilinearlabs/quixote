@@ -28,7 +28,7 @@ pub trait Storage: Send + Sync + 'static + Any {
     /// This signature is used to build a an event object.
     fn get_event_signature(&self, event_hash: &str) -> Result<String>;
     /// Gets the latest block number that has been indexed.
-    fn last_block(&self) -> Result<u64>;
+    fn last_block(&self, event: &Event) -> Result<u64>;
     /// Gets the first block number that has been indexed.
-    fn first_block(&self) -> Result<u64>;
+    fn first_block(&self, event: &Event) -> Result<u64>;
 }

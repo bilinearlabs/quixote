@@ -2,10 +2,9 @@
 
 //! Module for the event collector.
 
-use crate::{LogChunk, TxLogChunk, constants::*};
+use crate::{CollectorSeed, LogChunk, TxLogChunk, constants::*};
 use alloy::{
     eips::BlockNumberOrTag,
-    json_abi::Event,
     primitives::Address,
     providers::Provider,
     rpc::types::{Filter, SyncStatus},
@@ -19,7 +18,7 @@ use tracing::{debug, error};
 #[derive(Clone)]
 pub struct EventCollector {
     contract_address: Address,
-    event: Option<Event>,
+    filter: Option<Filter>,
     start_block: u64,
     provider: Arc<dyn Provider + Send + Sync>,
     sync_mode: BlockNumberOrTag,
@@ -29,19 +28,16 @@ pub struct EventCollector {
 
 impl EventCollector {
     pub fn new(
-        contract_address: Address,
-        event: Option<Event>,
-        start_block: u64,
         provider: Arc<dyn Provider + Send + Sync>,
-        sync_mode: BlockNumberOrTag,
         producer_buffer: TxLogChunk,
+        seed: &CollectorSeed,
     ) -> Self {
         Self {
-            contract_address,
-            event,
-            start_block,
+            contract_address: seed.contract_address,
+            filter: seed.filter.clone(),
+            start_block: seed.start_block,
             provider,
-            sync_mode,
+            sync_mode: seed.sync_mode,
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
         }
@@ -89,7 +85,7 @@ impl EventCollector {
             .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |chunk_start| {
                 let tx = producer_buffer.clone();
                 let provider = provider_clone.clone();
-                let event = self.event.clone();
+
                 async move {
                     // Check tha the RPC server is not syncing. If syncing, a raw exit is issued as we prefer to stop
                     // all the running logic just in case some RPC request returns inconsistent data that gets
@@ -104,22 +100,26 @@ impl EventCollector {
                         finalized_block,
                     );
 
-                    debug!(
+                    tracing::info!(
                         "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
                         chunk_start, chunk_end, contract_address
                     );
 
-                    // Build the filter for the get_Logs call.
+                    // Build the base filter for the get_Logs call. By default, all the events for a given smart
+                    // contract are fetched.
                     let mut filter = Filter::new()
                         .from_block(chunk_start)
                         .to_block(chunk_end)
                         .address(contract_address);
 
-                    // If we are indexing a single event, we can ask for a filtered response,
-                    // otherwise we will get all events.
-                    if let Some(event) = event {
-                        filter = filter.event_signature(event.selector());
+                    // Add custom filters (topics) if provided.
+                    if let Some(custom_filter) = self.filter.clone() {
+                        if !custom_filter.topics.is_empty() {
+                            filter.topics = custom_filter.topics;
+                        }
                     }
+
+                    debug!("Filter: {:?}", filter);
 
                     let events = provider.get_logs(&filter).await?;
 

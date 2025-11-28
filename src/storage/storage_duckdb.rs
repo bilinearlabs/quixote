@@ -13,7 +13,7 @@ use alloy::{
     primitives::{Address, B256},
     rpc::types::Log,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use duckdb::{Connection, params};
 use serde_json::{Map, Number, Value, json};
@@ -200,20 +200,15 @@ impl Storage for DuckDBStorage {
                 appender.append_row(duckdb::appender_params_from_iter(
                     row_vals.iter().map(|s| s.as_str()),
                 ))?;
+
+                tx.execute(
+                    "UPDATE event_descriptor SET last_block = ? WHERE event_hash = ?",
+                    [log.block_number.unwrap().to_string(), event_hash.clone()],
+                )?;
             }
 
             // Flush the appender for this table
             appender.flush()?;
-        }
-
-        // Update the last block within the same transaction
-        if let Some(last_event) = events.last()
-            && let Some(last_block_number) = last_event.block_number
-        {
-            tx.execute(
-                &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET last_block = ?"),
-                [last_block_number.to_string()],
-            )?;
         }
 
         // Explicitly commit the transaction
@@ -246,27 +241,27 @@ impl Storage for DuckDBStorage {
     }
 
     #[inline]
-    fn last_block(&self) -> Result<u64> {
+    fn last_block(&self, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         Ok(conn.query_row(
-            &format!("SELECT last_block FROM {}", DUCKDB_BASE_TABLE_NAME),
-            [],
+            "SELECT last_block FROM event_descriptor WHERE event_hash = ?",
+            [event.selector().to_string()],
             |row| row.get(0),
         )?)
     }
 
     #[inline]
-    fn first_block(&self) -> Result<u64> {
+    fn first_block(&self, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         Ok(conn.query_row(
-            &format!("SELECT first_block FROM {}", DUCKDB_BASE_TABLE_NAME),
-            [],
+            "SELECT first_block FROM event_descriptor WHERE event_hash = ?",
+            [event.selector().to_string()],
             |row| row.get(0),
         )?)
     }
@@ -324,9 +319,14 @@ impl DuckDBStorage {
             conn_mutex
         } else {
             // Try to retrieve version from etherduck_info table using a query
-            let version: String =
-                conn.query_row("SELECT version FROM etherduck_info LIMIT 1", [], |row| {
-                    row.get(0)
+            let version: String = conn
+                .query_row(
+                    format!("SELECT version FROM {DUCKDB_BASE_TABLE_NAME} LIMIT 1").as_str(),
+                    [],
+                    |row| row.get(0),
+                )
+                .with_context(|| {
+                    format!("Failed to retrieve version from {DUCKDB_BASE_TABLE_NAME} table")
                 })?;
 
             if version != DUCKDB_SCHEMA_VERSION {
@@ -334,6 +334,8 @@ impl DuckDBStorage {
             }
             Mutex::new(conn)
         };
+
+        debug!("Database ready for indexing");
 
         // This regex will match the table names after FROM and any JOINs (supports INNER, LEFT, RIGHT, FULL, CROSS).
         // It captures each table name in group 1, ignoring keywords.
@@ -353,8 +355,6 @@ impl DuckDBStorage {
             BEGIN;
             CREATE TABLE IF NOT EXISTS {DUCKDB_BASE_TABLE_NAME}(
                 version VARCHAR NOT NULL,
-                first_block UBIGINT,
-                last_block UBIGINT,
                 PRIMARY KEY (version)
             );
             CREATE TABLE IF NOT EXISTS blocks(
@@ -367,6 +367,8 @@ impl DuckDBStorage {
                 event_hash VARCHAR(66) NOT NULL,
                 event_signature VARCHAR(256) NOT NULL,
                 event_name VARCHAR(40) NOT NULL,
+                first_block UBIGINT,
+                last_block UBIGINT,
                 PRIMARY KEY (event_hash)
             );
             COMMIT;"
@@ -384,8 +386,8 @@ impl DuckDBStorage {
                 .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
             conn.execute(
                 &format!(
-                    "INSERT INTO {} (version, first_block, last_block)
-                VALUES (?, 0, 0);",
+                    "INSERT INTO {} (\"version\")
+                VALUES (?);",
                     DUCKDB_BASE_TABLE_NAME
                 ),
                 [DUCKDB_SCHEMA_VERSION],
@@ -424,7 +426,7 @@ impl DuckDBStorage {
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
 
             // Now, create an entry for such event in the event_descriptor table.
-            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name) VALUES ('{}', '{}', '{}') ON CONFLICT (event_hash) DO NOTHING;", event.selector(), event.full_signature(), event.name));
+            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name, first_block, last_block) VALUES ('{}', '{}', '{}', 0, 0) ON CONFLICT (event_hash) DO NOTHING;", event.selector(), event.full_signature(), event.name));
 
             // Not a big deal to batch this SQL statement as it is executed once during the apps's lifetime.
             let conn = conn
@@ -451,14 +453,14 @@ impl DuckDBStorage {
     }
 
     #[inline]
-    pub fn set_first_block(&self, block_number: u64) -> Result<()> {
+    pub fn set_first_block(&self, event: &Event, block_number: u64) -> Result<()> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         conn.execute(
-            &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET first_block = ?"),
-            [block_number.to_string()],
+            "UPDATE event_descriptor SET first_block = ? WHERE event_hash = ?",
+            [block_number.to_string(), event.selector().to_string()],
         )?;
         Ok(())
     }
