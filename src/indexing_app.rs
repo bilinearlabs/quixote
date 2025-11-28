@@ -167,6 +167,9 @@ impl IndexingApp {
             let abi: JsonAbi = serde_json::from_str(&json)?;
             let events = abi.events().cloned().collect::<Vec<Event>>();
 
+            // Register the event in the descriptor table if needed.
+            conn.include_events(events.as_slice())?;
+
             // Take one from the list to determine the start block.
             let parsed_event = events.first().unwrap();
             let start_block = Self::get_and_set_sync_state_for_event(
