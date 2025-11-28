@@ -1871,7 +1871,6 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "strum_macros 0.27.2",
  "tokio",
  "tracing",
  "tracing-subscriber",
