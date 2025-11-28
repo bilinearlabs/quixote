@@ -25,6 +25,7 @@ pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     table_regex: regex::Regex,
     db_path: String,
+    event_descriptors: Mutex<HashMap<String, String>>,
 }
 
 /// Simple factory pattern to allow opening a new connection to the same database from a task.
@@ -112,11 +113,19 @@ impl Storage for DuckDBStorage {
 
             // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
-            let event_signature: String = tx.query_row(
-                "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
-                [&event_hash],
-                |row| row.get(0),
-            )?;
+            // let event_signature: String = tx.query_row(
+            //     "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
+            //     [&event_hash],
+            //     |row| row.get(0),
+            // )?;
+
+            let event_signature = self
+                .event_descriptors
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?
+                .get(&event_hash)
+                .unwrap()
+                .clone();
 
             let event_name = Event::parse(&event_signature)
                 .unwrap()
@@ -267,7 +276,19 @@ impl Storage for DuckDBStorage {
     }
 
     fn include_events(&self, events: &[Event]) -> Result<()> {
-        DuckDBStorage::create_event_schema(&self.conn, events)
+        DuckDBStorage::create_event_schema(&self.conn, events)?;
+        let mut event_descriptors = self
+            .event_descriptors
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?;
+        for event in events {
+            event_descriptors.insert(
+                event.selector().to_string(),
+                event.full_signature().to_string(),
+            );
+        }
+
+        Ok(())
     }
 
     fn get_event_signature(&self, event_hash: &str) -> Result<String> {
@@ -346,6 +367,7 @@ impl DuckDBStorage {
             conn: conn_mutex,
             table_regex,
             db_path: db_path.to_string(),
+            event_descriptors: Mutex::new(HashMap::new()),
         })
     }
 
