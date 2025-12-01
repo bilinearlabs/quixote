@@ -8,7 +8,7 @@ use std::any::Any;
 /// Trait that defines the API between the producer task and the storage.
 pub trait Storage: Send + Sync + 'static + Any {
     /// Adds a list of events to the storage.
-    fn add_events(&self, events: &[Log]) -> Result<()>;
+    fn add_events(&self, events: &[Log]) -> Result<usize>;
     /// Lists the event types that are registered in the storage.
     fn list_indexed_events(&self) -> Result<Vec<Event>>;
     /// Get the status of an event in the database.
@@ -35,5 +35,5 @@ pub trait Storage: Send + Sync + 'static + Any {
     /// Gets the first block number that has been indexed.
     fn first_block(&self, event: &Event) -> Result<u64>;
     /// Sets the last block number for all the indexed events to the latest block number.
-    fn synchronize_events(&self) -> Result<()>;
+    fn synchronize_events(&self, last_processed: Option<u64>) -> Result<()>;
 }

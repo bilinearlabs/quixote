@@ -59,11 +59,11 @@ impl Clone for DuckDBStorage {
 }
 
 impl Storage for DuckDBStorage {
-    fn add_events(&self, events: &[Log]) -> Result<()> {
+    fn add_events(&self, events: &[Log]) -> Result<usize> {
         // Quick check to avoid unnecessary operations.
         if events.is_empty() {
             info!("No events for the given block range");
-            return Ok(());
+            return Ok(usize::default());
         }
 
         let mut conn = self
@@ -212,8 +212,8 @@ impl Storage for DuckDBStorage {
                 ))?;
 
                 tx.execute(
-                    "UPDATE event_descriptor SET last_block = ? WHERE event_hash = ?",
-                    [log.block_number.unwrap().to_string(), event_hash.clone()],
+                    "UPDATE event_descriptor SET last_block = ?",
+                    [log.block_number.unwrap().to_string()],
                 )?;
             }
 
@@ -224,7 +224,7 @@ impl Storage for DuckDBStorage {
         // Explicitly commit the transaction
         tx.commit()?;
 
-        Ok(())
+        Ok(events.len())
     }
 
     fn list_indexed_events(&self) -> Result<Vec<Event>> {
@@ -345,15 +345,23 @@ impl Storage for DuckDBStorage {
     }
 
     // TODO: what if we run multiple -e tasks?
-    fn synchronize_events(&self) -> Result<()> {
+    fn synchronize_events(&self, last_processed: Option<u64>) -> Result<()> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        conn.execute(
-            "UPDATE event_descriptor SET last_block = (SELECT MAX(block_number) FROM blocks)",
-            [],
-        )?;
+
+        if let Some(last_processed) = last_processed {
+            conn.execute(
+                "UPDATE event_descriptor SET last_block = ?",
+                [last_processed.to_string()],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE event_descriptor SET last_block = (SELECT MAX(block_number) FROM blocks)",
+                [],
+            )?;
+        }
 
         debug!("Events synchronized to the latest block");
 

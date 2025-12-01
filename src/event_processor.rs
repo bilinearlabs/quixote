@@ -5,7 +5,10 @@
 use crate::{CancellationToken, RxLogChunk, storage::Storage};
 use alloy::rpc::types::Log;
 use anyhow::Result;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 use tokio::select;
 use tracing::{debug, error, info};
 
@@ -35,6 +38,7 @@ impl EventProcessor {
         let mut cancellation_receiver = self.cancellation_token.subscribe();
         let mut last_processed = self.start_block.saturating_sub(1);
         let mut buffer: BTreeMap<u64, (u64, Vec<Log>)> = BTreeMap::new();
+        let last_processed_shared = Mutex::new(last_processed);
 
         loop {
             select! {
@@ -42,7 +46,7 @@ impl EventProcessor {
                     debug!("Producer::Cancellation requested, shutting down gracefully...");
                     // Sometimes, if no events are detected, the first block gest registered but the last block remains
                     // as 0. This is an invalid state.
-                    self.fix_inconsistent_database_state()?;
+                    self.storage.synchronize_events(Some(*last_processed_shared.lock().unwrap()))?;
                     return Ok(());
                 }
                 events = self.producer_buffer.recv() => {
@@ -53,18 +57,29 @@ impl EventProcessor {
                             // Try to process as many contiguous chunks as possible.  The next
                             // expected chunk must start exactly at `last_processed + 1`.
                             while let Some((end, ev)) = buffer.remove(&(last_processed + 1)) {
-                                if let Err(e) = self.storage.add_events(ev.as_slice()) {
-                                    error!("Error adding events: {}", e);
-                                    // Ensure the database is in a consistent state.
-                                    self.fix_inconsistent_database_state()?;
-                                    return Err(e);
-                                } else {
-                                    tracing::info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
+                                match self.storage.add_events(ev.as_slice()) {
+                                    Ok(count) => {
+                                        info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
+                                        // When no logs were received for the given block range, the database is in an
+                                        // inconsistent state as the logic to insert events wasn't triggered.
+                                        // Save the last processed block so we keep track of the indexing progress when
+                                        // very long ranges of blocks include no events.
+                                        if count == 0 {
+                                            self.storage.synchronize_events(Some(last_processed))?;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Error adding events: {}", e);
+                                        // Ensure the database is in a consistent state.
+                                        self.storage.synchronize_events(Some(last_processed))?;
+                                        return Err(e);
+                                    }
                                 }
+
                                 // Update the cursor so that the next expected start is directly
                                 // after the `end` we just processed.
                                 last_processed = end;
-
+                                *last_processed_shared.lock().unwrap() = last_processed;
 
                             debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
                             }
@@ -73,17 +88,12 @@ impl EventProcessor {
                             // Channel closed, producer is done
                             info!("Event channel closed, all events processed");
                             // Ensure the database is in a consistent state.
-                            self.fix_inconsistent_database_state()?;
+                            self.storage.synchronize_events(Some(*last_processed_shared.lock().unwrap()))?;
                             return Ok(());
                         }
                     }
                 }
             }
         }
-    }
-
-    fn fix_inconsistent_database_state(&self) -> Result<()> {
-        self.storage.synchronize_events()?;
-        Ok(())
     }
 }
