@@ -267,3 +267,12 @@ impl TryInto<Url> for &RpcHost {
         Ok(url)
     }
 }
+
+/// Data object that represents the status of an event in the database.
+#[derive(Debug, Clone)]
+pub struct EventStatus {
+    pub hash: String,
+    pub first_block: u64,
+    pub last_block: u64,
+    pub event_count: usize,
+}

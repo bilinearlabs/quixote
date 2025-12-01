@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, RpcHost,
+    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, EventStatus, RpcHost,
     api_rest::start_api_server,
     cli::IndexingArgs,
     constants, error_codes,
@@ -134,6 +134,17 @@ impl IndexingApp {
         })
     }
 
+    /// This static method builds a list of CollectorSeed ready to be taken by the EventCollectorRunner.
+    ///
+    /// # Description
+    ///
+    /// When running in ABI mode, the method will build several seeds, based on the amount of events defined in the ABI.
+    /// If the ABI includes more than `constants::DEFAULT_USE_FILTERS_THRESHOLD` events, multiple seeds will be created
+    /// to spread the load between several RPCs when possible. Otherwise, a single seed will be created for all the
+    /// events defined in the ABI.
+    ///
+    /// When the option `--event` is used, the method will build a single seed for each event specified in the
+    /// command line arguments.
     fn build_seeds(conn: &DuckDBStorage, args: &IndexingArgs) -> Result<Vec<CollectorSeed>> {
         // Firsts, check that the given address for the contract is valid.
         let contract_address = args.contract.parse::<Address>().unwrap_or_else(|_| {
@@ -261,8 +272,31 @@ impl IndexingApp {
         contract_address: Address,
         start_block_arg: Option<&str>,
     ) -> Result<CollectorSeed> {
-        // Register the event in the descriptor table if needed.
-        conn.include_events(&[event.clone()])?;
+        // Is the event already indexed?
+        let event_status = conn.event_index_status(event)?;
+
+        let start_block = if let Some(event_status) = event_status {
+            info!(
+                "The event {} contains {} entries in the DB, from the block {} to the block {}. Resuming indexing from the last synchronized block.",
+                event.name,
+                event_status.event_count,
+                event_status.first_block,
+                event_status.last_block
+            );
+            event_status.last_block.saturating_add(1)
+        } else {
+            let first_block = start_block_arg
+                .unwrap_or_default()
+                .parse::<u64>()
+                .unwrap_or_default();
+            info!(
+                "The event {} will be registered in the DB and indexed from the block {first_block}",
+                event.name
+            );
+            conn.include_events(&[event.clone()])?;
+            conn.set_first_block(event, first_block)?;
+            first_block
+        };
 
         // Let's build the filter that will be used by eth_getLogs to retrieve the data.
         let filter = Some(
@@ -270,8 +304,6 @@ impl IndexingApp {
                 .address(contract_address)
                 .event_signature(event.selector()),
         );
-
-        let start_block = Self::get_and_set_sync_state_for_event(conn, event, start_block_arg)?;
 
         Ok(CollectorSeed {
             contract_address,

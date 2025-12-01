@@ -1,12 +1,18 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use crate::{
-    error_codes::ERROR_CODE_BAD_DB_STATE,
-    storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
-};
+//! Module for the collector seed.
+//!
+//! # Description
+//!
+//! Seeds describe the minimal execution unit for an indexing task. Each seed is associated with a contract address
+//! and a set of events. All the events within the same seed must maintain a coherent indexing state in the database.
+//! This means the indexer won't be able to resume an indexing task from a previous run if the events are disjoint,
+//! i.e. they synchronized up to different blocks if the ABI mode is selected.
+
+use crate::storage::{DuckDBStorage, DuckDBStorageFactory, Storage};
 use alloy::{eips::BlockNumberOrTag, json_abi::Event, primitives::Address, rpc::types::Filter};
 use anyhow::Result;
-use tracing::{error, warn};
+use tracing::warn;
 
 /// Object that represents a seed for a collecting job.
 ///
@@ -74,10 +80,9 @@ impl CollectorSeed {
         let current_start_block = db_conn.first_block(events.iter().next().unwrap())?;
         for event in events {
             if current_start_block != db_conn.first_block(event)? {
-                error!(
+                return Err(anyhow::anyhow!(
                     "The given events are disjoint. This means that you need to run the indexer using -e for each one of the given events."
-                );
-                std::process::exit(ERROR_CODE_BAD_DB_STATE);
+                ));
             }
         }
 

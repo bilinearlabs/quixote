@@ -3,6 +3,7 @@
 //! Module that handles the connection to the DuckDB database.
 
 use crate::{
+    EventStatus,
     constants::*,
     error_codes::ERROR_CODE_DATABASE_LOCKED,
     storage::{ContractDescriptorDb, EventDb, EventDescriptorDb, Storage, StorageQuery},
@@ -15,7 +16,7 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use duckdb::{Connection, params};
+use duckdb::{Connection, OptionalExt, params};
 use serde_json::{Map, Number, Value, json};
 use std::{collections::HashMap, string::ToString, sync::Mutex};
 use tracing::{debug, error, info, warn};
@@ -301,6 +302,46 @@ impl Storage for DuckDBStorage {
             [event_hash],
             |row| row.get(0),
         )?)
+    }
+
+    fn event_index_status(&self, event: &Event) -> Result<Option<EventStatus>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        let Some((mut event_status, event_name)) = conn
+            .query_row(
+                "SELECT \"event_name\", \"first_block\", \"last_block\" FROM event_descriptor WHERE event_hash = ?",
+                [event.selector().to_string()],
+                |row| {
+                    Ok((EventStatus {
+                        hash: event.selector().to_string(),
+                        first_block: row.get(1)?,
+                        last_block: row.get(2)?,
+                        event_count: 0,
+                    }, row.get::<_, String>(0)?))
+                },
+            ).optional()? else {
+                return Ok(None);
+            };
+
+        if event_status.last_block != 0 {
+            // Get the event count
+            let event_count: usize = conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM event_{}_{}",
+                    event_name.to_ascii_lowercase(),
+                    event.selector().to_string()
+                ),
+                [],
+                |row| row.get(0),
+            )?;
+
+            event_status.event_count = event_count;
+        }
+
+        Ok(Some(event_status))
     }
 }
 
