@@ -332,7 +332,7 @@ impl Storage for DuckDBStorage {
                 &format!(
                     "SELECT COUNT(*) FROM event_{}_{}",
                     event_name.to_ascii_lowercase(),
-                    event.selector().to_string()
+                    event.selector()
                 ),
                 [],
                 |row| row.get(0),
@@ -342,6 +342,22 @@ impl Storage for DuckDBStorage {
         }
 
         Ok(Some(event_status))
+    }
+
+    // TODO: what if we run multiple -e tasks?
+    fn synchronize_events(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+        conn.execute(
+            "UPDATE event_descriptor SET last_block = (SELECT MAX(block_number) FROM blocks)",
+            [],
+        )?;
+
+        debug!("Events synchronized to the latest block");
+
+        Ok(())
     }
 }
 

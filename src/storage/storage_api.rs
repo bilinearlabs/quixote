@@ -34,4 +34,6 @@ pub trait Storage: Send + Sync + 'static + Any {
     fn last_block(&self, event: &Event) -> Result<u64>;
     /// Gets the first block number that has been indexed.
     fn first_block(&self, event: &Event) -> Result<u64>;
+    /// Sets the last block number for all the indexed events to the latest block number.
+    fn synchronize_events(&self) -> Result<()>;
 }

@@ -113,10 +113,8 @@ impl EventCollector {
                         .address(contract_address);
 
                     // Add custom filters (topics) if provided.
-                    if let Some(custom_filter) = self.filter.clone() {
-                        if !custom_filter.topics.is_empty() {
-                            filter.topics = custom_filter.topics;
-                        }
+                    if let Some(custom_filter) = self.filter.clone() && !custom_filter.topics.is_empty() {
+                        filter.topics = custom_filter.topics;
                     }
 
                     debug!("Filter: {:?}", filter);

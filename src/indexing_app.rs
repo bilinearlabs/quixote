@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, EventStatus, RpcHost,
+    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, RpcHost,
     api_rest::start_api_server,
     cli::IndexingArgs,
     constants, error_codes,
@@ -157,6 +157,7 @@ impl IndexingApp {
 
         let mut seeds = Vec::new();
 
+        // Single events: coming from the --event option.
         if let Some(events) = &args.event {
             for event in events {
                 let parsed_event = Event::parse(event).map_err(|_| {
@@ -173,24 +174,24 @@ impl IndexingApp {
                 )?;
                 seeds.push(seed);
             }
+        // Multiple events: coming from the --abi option.
         } else if let Some(abi_spec) = &args.abi_spec {
             let json = std::fs::read_to_string(abi_spec)?;
             let abi: JsonAbi = serde_json::from_str(&json)?;
             let events = abi.events().cloned().collect::<Vec<Event>>();
 
-            // Register the event in the descriptor table if needed.
+            // Attempt to register the events of the ABI, when existing the operation will be ignored.
             conn.include_events(events.as_slice())?;
 
-            // Take one from the list to determine the start block.
-            let parsed_event = events.first().unwrap();
-            let start_block = Self::get_and_set_sync_state_for_event(
+            let start_block = Self::set_start_block_for_events(
                 conn,
-                parsed_event,
+                events.as_slice(),
                 args.start_block.as_deref(),
             )?;
 
             // Group all the events into a single seed with no filters.
             if events.len() > constants::DEFAULT_USE_FILTERS_THRESHOLD {
+                let len = events.len();
                 seeds.push(CollectorSeed {
                     contract_address,
                     events,
@@ -198,6 +199,7 @@ impl IndexingApp {
                     sync_mode: BlockNumberOrTag::Finalized,
                     filter: None,
                 });
+                info!("Indexing {len} events of the ABI from the block {start_block}");
             // When the number of events is less than the threshold, use filters for each event.
             // As if the user would have used the --event option for each event.
             } else {
@@ -224,22 +226,34 @@ impl IndexingApp {
     /// This method checks if the event was already indexed. If the DB contains the event,
     /// it resumes from the last synchronized block. If not, it uses the start block from
     /// the command line arguments. It also ensures the first_block is set if the DB was empty.
-    fn get_and_set_sync_state_for_event(
+    fn set_start_block_for_events(
         conn: &DuckDBStorage,
-        event: &Event,
+        events: &[Event],
         start_block_arg: Option<&str>,
     ) -> Result<u64> {
         // Let's check if this event was already indexed.
         // IF the DB contains the event, resume from the last synchronized block.
         // If not, consider the start block from the command line arguments.
+        let event = events.first().unwrap();
+
         let start_block = if let Ok(last_block) = conn.last_block(event) {
             if last_block != 0 {
-                last_block
+                info!(
+                    "The DB contains events of the ABI up to the block {last_block}. Resuming indexing from the last synchronized block."
+                );
+                last_block.saturating_add(1)
             } else {
-                start_block_arg
+                info!("The DB is empty for the events included in the ABI.");
+                let start_block = start_block_arg
                     .unwrap_or_default()
                     .parse::<u64>()
-                    .context("Failed to parse start_block argument")?
+                    .context("Failed to parse start_block argument")?;
+
+                for event in events {
+                    conn.set_first_block(event, start_block)?;
+                }
+
+                start_block
             }
         } else {
             error!(
@@ -248,16 +262,6 @@ impl IndexingApp {
             );
             std::process::exit(error_codes::ERROR_CODE_BAD_DB_STATE);
         };
-
-        let first_block = conn.first_block(event).unwrap_or_else(|e| {
-            error!("Failed to access the sync state for the event: {e}. Check the integrity of the database.");
-            std::process::exit(error_codes::ERROR_CODE_BAD_DB_STATE);
-        });
-
-        // If the DB was empty, set the first block as the current start block.
-        if first_block == 0 {
-            conn.set_first_block(event, start_block)?;
-        }
 
         Ok(start_block)
     }
@@ -293,7 +297,7 @@ impl IndexingApp {
                 "The event {} will be registered in the DB and indexed from the block {first_block}",
                 event.name
             );
-            conn.include_events(&[event.clone()])?;
+            conn.include_events(std::slice::from_ref(event))?;
             conn.set_first_block(event, first_block)?;
             first_block
         };
