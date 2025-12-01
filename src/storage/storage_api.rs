@@ -1,5 +1,6 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
+use crate::EventStatus;
 use alloy::{json_abi::Event, rpc::types::Log};
 use anyhow::Result;
 use std::any::Any;
@@ -10,6 +11,8 @@ pub trait Storage: Send + Sync + 'static + Any {
     fn add_events(&self, events: &[Log]) -> Result<()>;
     /// Lists the event types that are registered in the storage.
     fn list_indexed_events(&self) -> Result<Vec<Event>>;
+    /// Get the status of an event in the database.
+    fn event_index_status(&self, event: &Event) -> Result<Option<EventStatus>>;
     /// Includes a list of events in the storage.
     ///
     /// # Description
@@ -28,7 +31,9 @@ pub trait Storage: Send + Sync + 'static + Any {
     /// This signature is used to build a an event object.
     fn get_event_signature(&self, event_hash: &str) -> Result<String>;
     /// Gets the latest block number that has been indexed.
-    fn last_block(&self) -> Result<u64>;
+    fn last_block(&self, event: &Event) -> Result<u64>;
     /// Gets the first block number that has been indexed.
-    fn first_block(&self) -> Result<u64>;
+    fn first_block(&self, event: &Event) -> Result<u64>;
+    /// Sets the last block number for all the indexed events to the latest block number.
+    fn synchronize_events(&self) -> Result<()>;
 }

@@ -2,10 +2,7 @@
 
 //! Module for the event processor.
 
-use crate::{
-    CancellationToken, RxLogChunk,
-    storage::{DuckDBStorage, Storage},
-};
+use crate::{CancellationToken, RxLogChunk, storage::Storage};
 use alloy::rpc::types::Log;
 use anyhow::Result;
 use std::{collections::BTreeMap, sync::Arc};
@@ -86,25 +83,7 @@ impl EventProcessor {
     }
 
     fn fix_inconsistent_database_state(&self) -> Result<()> {
-        let start_block = self.storage.first_block()?;
-        let last_block = self.storage.last_block()?;
-        if last_block < start_block {
-            tracing::warn!("Fixing inconsistent database state: last_block < start_block");
-            // Downcast to DuckDBStorage to access set_first_block method. Risky if we end adding more
-            // storage implementations.
-            if let Ok(duckdb_storage) = Arc::downcast::<DuckDBStorage>(
-                self.storage.clone() as Arc<dyn std::any::Any + Send + Sync>
-            ) {
-                duckdb_storage.set_first_block(last_block)?;
-                Ok(())
-            } else {
-                error!("Failed to downcast storage to DuckDBStorage");
-                Err(anyhow::anyhow!(
-                    "Failed to downcast storage to DuckDBStorage"
-                ))
-            }
-        } else {
-            Ok(())
-        }
+        self.storage.synchronize_events()?;
+        Ok(())
     }
 }

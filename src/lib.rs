@@ -7,6 +7,8 @@ pub use event_collector_runner::EventCollectorRunner;
 pub mod event_collector;
 pub mod event_processor;
 pub use event_processor::EventProcessor;
+pub mod collector_seed;
+pub use collector_seed::CollectorSeed;
 pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
@@ -16,7 +18,6 @@ use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
 use secrecy::{ExposeSecret, SecretString};
 use std::string::ToString;
-use strum_macros::Display;
 
 /// Module with constants used throughout the application.
 pub mod constants {
@@ -47,12 +48,18 @@ pub mod constants {
     pub const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
     /// Default length for VARCHAR columns in the DuckDB database.
     pub const DEFAULT_VARCHAR_LENGTH: usize = 66;
+    /// Value to choose between using filters or not on eth_getLogs.
+    pub const DEFAULT_USE_FILTERS_THRESHOLD: usize = 3;
 }
 
 /// Error codes that are used when calling exit.
 pub mod error_codes {
     /// The DB file is in use by another process.
     pub const ERROR_CODE_DATABASE_LOCKED: i32 = 2;
+    /// Bad DB state.
+    pub const ERROR_CODE_BAD_DB_STATE: i32 = 3;
+    /// Wrong input arguments.
+    pub const ERROR_CODE_WRONG_INPUT_ARGUMENTS: i32 = 4;
 }
 
 /// Module with definitions related to the storage of the indexed data.
@@ -261,18 +268,11 @@ impl TryInto<Url> for &RpcHost {
     }
 }
 
-/// Collector running mode
-///
-/// # Description
-///
-/// The collector runner can run in two modes:
-/// - Multiple event with filtering: Several events are provided using the -e flag.
-/// - Multiple event without filtering: The events are provided using the -a flag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display)]
-pub enum CollectorRunningMode {
-    #[default]
-    #[strum(to_string = "Multiple events with filtering")]
-    EventWithFiltering,
-    #[strum(to_string = "Multiple events without filtering")]
-    EventWithoutFiltering,
+/// Data object that represents the status of an event in the database.
+#[derive(Debug, Clone)]
+pub struct EventStatus {
+    pub hash: String,
+    pub first_block: u64,
+    pub last_block: u64,
+    pub event_count: usize,
 }

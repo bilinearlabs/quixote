@@ -1,21 +1,22 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, CollectorRunningMode, EventCollectorRunner, EventProcessor, RpcHost,
+    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, RpcHost,
     api_rest::start_api_server,
     cli::IndexingArgs,
-    constants,
+    constants, error_codes,
     storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
 };
 use alloy::{
     eips::BlockNumberOrTag,
     json_abi::{Event, JsonAbi},
     primitives::Address,
+    rpc::types::Filter,
 };
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::{join, signal::ctrl_c, sync::mpsc};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 pub struct IndexingApp {
     pub storage: Arc<dyn Storage + Send + Sync>,
@@ -23,57 +24,40 @@ pub struct IndexingApp {
     pub api_server_address: String,
     pub storage_for_api: Arc<DuckDBStorageFactory>,
     pub cancellation_token: CancellationToken,
-    pub events: Vec<Event>,
-    pub start_block: BlockNumberOrTag,
-    pub contract_address: Address,
-    pub running_mode: CollectorRunningMode,
+    pub seeds: Vec<CollectorSeed>,
 }
 
 impl IndexingApp {
     /// Builds a new instance fo the indexing app using the command line arguments.
     pub fn build_app(args: IndexingArgs) -> Result<Self> {
-        // Build a list of events from the command line arguments.
-        let (running_mode, events) = Self::get_events(&args)?;
-
-        // Select the target block based on the input and the current DB status.
-        let start_block = if let Some(block) = &args.start_block {
-            if let Ok(block_num) = block.parse::<u64>() {
-                BlockNumberOrTag::Number(block_num)
-            } else {
-                BlockNumberOrTag::Latest
-            }
-        } else {
-            BlockNumberOrTag::Latest
-        };
-
         let cancellation_token = CancellationToken::default();
 
-        let storage = if let Some(db_path) = &args.database {
-            DuckDBStorage::with_db(db_path)?
+        // Instantiate the DB handlers, for the consumer task and the API server.
+        let (storage, storage_for_api) = if let Some(db_path) = &args.database {
+            (
+                DuckDBStorage::with_db(db_path)?,
+                Arc::new(DuckDBStorageFactory::new(db_path.clone())),
+            )
         } else {
-            DuckDBStorage::new()?
+            (
+                DuckDBStorage::new()?,
+                Arc::new(DuckDBStorageFactory::new(
+                    constants::DUCKDB_FILE_PATH.to_string(),
+                )),
+            )
         };
 
-        // Register the indexed events in the database if not already registered.
-        storage.include_events(events.as_slice())?;
+        // Build a list of events from the command line arguments.
+        let seeds = Self::build_seeds(&storage, &args)?;
 
-        let target_block = IndexingApp::choose_target_block(&storage, start_block)?;
-
-        let contract_address = args.contract.parse::<Address>()?;
-
-        // Create a factory that can create new storage instances per request
-        let db_path = if let Some(db_path) = &args.database {
-            db_path.clone()
-        } else {
-            constants::DUCKDB_FILE_PATH.to_string()
-        };
-        let storage_for_api = Arc::new(DuckDBStorageFactory::new(db_path));
+        // Define the tables for the requested events.
+        for seed in seeds.iter() {
+            storage.include_events(seed.events.as_slice())?;
+        }
 
         let api_server_address = args
             .api_server
             .unwrap_or(constants::DEFAULT_API_SERVER_ADDRESS.to_string());
-
-        info!("Indexing the contract {contract_address} from the block {target_block:?}");
 
         let host_list = vec![args.rpc_host.parse::<RpcHost>()?];
         Ok(Self {
@@ -82,33 +66,30 @@ impl IndexingApp {
             api_server_address,
             storage_for_api,
             cancellation_token,
-            events,
-            start_block: target_block,
-            contract_address,
-            running_mode,
+            seeds,
         })
     }
 
     /// Runs the indexing app.
     pub async fn run(&self) -> Result<()> {
-        // Define the tables required for the requested events if needed.
-        self.storage.include_events(&self.events)?;
-
         // Buffer for the event collector and processor.
         let (producer_buffer, consumer_buffer) = mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
 
-        let event_collector_runner = EventCollectorRunner::new(
-            &self.host_list,
-            self.contract_address,
-            self.events.clone(),
-            self.start_block,
-            producer_buffer,
-            self.running_mode,
-        )?;
+        let start_block = self.seeds.first().unwrap().start_block;
+
+        self.seeds.iter().for_each(|seed| {
+            if seed.start_block != start_block {
+                error!("Your DB contains events that are synchronized up to different blocks. Resuming from such DB is not supported yet.");
+                std::process::exit(error_codes::ERROR_CODE_BAD_DB_STATE);
+            }
+        });
+
+        let event_collector_runner =
+            EventCollectorRunner::new(&self.host_list, self.seeds.clone(), producer_buffer)?;
 
         let mut event_processor = EventProcessor::new(
             self.storage.clone(),
-            self.start_block.as_number().unwrap(),
+            start_block,
             consumer_buffer,
             self.cancellation_token.clone(),
         );
@@ -153,61 +134,187 @@ impl IndexingApp {
         })
     }
 
-    /// Chooses the starting block based on the input and the current DB status.
-    fn choose_target_block(
-        db_conn: &DuckDBStorage,
-        start_block: BlockNumberOrTag,
-    ) -> Result<BlockNumberOrTag> {
-        // The DB's first and last synchronized blocks.
-        let db_start_block = db_conn.first_block()?;
-        let db_last_block = db_conn.last_block()?;
+    /// This static method builds a list of CollectorSeed ready to be taken by the EventCollectorRunner.
+    ///
+    /// # Description
+    ///
+    /// When running in ABI mode, the method will build several seeds, based on the amount of events defined in the ABI.
+    /// If the ABI includes more than `constants::DEFAULT_USE_FILTERS_THRESHOLD` events, multiple seeds will be created
+    /// to spread the load between several RPCs when possible. Otherwise, a single seed will be created for all the
+    /// events defined in the ABI.
+    ///
+    /// When the option `--event` is used, the method will build a single seed for each event specified in the
+    /// command line arguments.
+    fn build_seeds(conn: &DuckDBStorage, args: &IndexingArgs) -> Result<Vec<CollectorSeed>> {
+        // Firsts, check that the given address for the contract is valid.
+        let contract_address = args.contract.parse::<Address>().unwrap_or_else(|_| {
+            error!(
+                "Failed to parse the given contract address: {}",
+                args.contract
+            );
+            std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
+        });
 
-        // Starting block selection logic:
-        // 1. If the input is older than the DB's start block, backfill from there.
-        // 2. If the input is newer than the DB's last block, continue from the latest synchronized block in the DB.
-        // 3. Otherwise, continue from the latest block in the DB.
-        match start_block {
-            BlockNumberOrTag::Number(n) => {
-                // Initial DB state, simply sync from the user's choice
-                if db_start_block == 0 && db_start_block == db_last_block {
-                    info!("Your database was empty. Setting the first block to {n}");
-                    db_conn.set_first_block(n)?;
-                    Ok(BlockNumberOrTag::Number(n))
-                } else {
-                    Ok(BlockNumberOrTag::Number(db_last_block + 1))
-                }
-            }
-            // Continue where the DB left off.
-            _ => Ok(BlockNumberOrTag::Number(db_last_block + 1)),
-        }
-    }
+        let mut seeds = Vec::new();
 
-    /// Builds a list of events from the command line arguments.
-    fn get_events(args: &IndexingArgs) -> Result<(CollectorRunningMode, Vec<Event>)> {
+        // Single events: coming from the --event option.
         if let Some(events) = &args.event {
-            if args.abi_spec.is_some() {
-                warn!("The given ABI will be ignored. The option -e takes precedence over -a.");
-            }
-
-            let mut parsed_events = Vec::new();
             for event in events {
-                parsed_events.push(Event::parse(event).map_err(|_| {
+                let parsed_event = Event::parse(event).map_err(|_| {
                     anyhow::anyhow!(
-                        "Failed to parse the given event. Use --help for more information."
+                        "Failed to parse the string {event} as a valid event. Use the canonical format of the event as declared in the ABI.",
                     )
-                })?);
-            }
+                })?;
 
-            Ok((CollectorRunningMode::EventWithFiltering, parsed_events))
+                let seed = Self::build_single_event_seed(
+                    conn,
+                    &parsed_event,
+                    contract_address,
+                    args.start_block.as_deref(),
+                )?;
+                seeds.push(seed);
+            }
+        // Multiple events: coming from the --abi option.
         } else if let Some(abi_spec) = &args.abi_spec {
             let json = std::fs::read_to_string(abi_spec)?;
             let abi: JsonAbi = serde_json::from_str(&json)?;
             let events = abi.events().cloned().collect::<Vec<Event>>();
-            Ok((CollectorRunningMode::EventWithoutFiltering, events))
+
+            // Attempt to register the events of the ABI, when existing the operation will be ignored.
+            conn.include_events(events.as_slice())?;
+
+            let start_block = Self::set_start_block_for_events(
+                conn,
+                events.as_slice(),
+                args.start_block.as_deref(),
+            )?;
+
+            // Group all the events into a single seed with no filters.
+            if events.len() > constants::DEFAULT_USE_FILTERS_THRESHOLD {
+                let len = events.len();
+                seeds.push(CollectorSeed {
+                    contract_address,
+                    events,
+                    start_block,
+                    sync_mode: BlockNumberOrTag::Finalized,
+                    filter: None,
+                });
+                info!("Indexing {len} events of the ABI from the block {start_block}");
+            // When the number of events is less than the threshold, use filters for each event.
+            // As if the user would have used the --event option for each event.
+            } else {
+                for event in events {
+                    let seed = Self::build_single_event_seed(
+                        conn,
+                        &event,
+                        contract_address,
+                        args.start_block.as_deref(),
+                    )?;
+                    seeds.push(seed);
+                }
+            }
         } else {
-            Err(anyhow::anyhow!(
-                "Missing event or ABI spec to index. Use --help for more information."
-            ))
+            error!("Missing event or ABI spec to index. Use --help for more information.");
+            std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
         }
+
+        Ok(seeds)
+    }
+
+    /// Gets the start block for an event and ensures the first block is set if needed.
+    ///
+    /// This method checks if the event was already indexed. If the DB contains the event,
+    /// it resumes from the last synchronized block. If not, it uses the start block from
+    /// the command line arguments. It also ensures the first_block is set if the DB was empty.
+    fn set_start_block_for_events(
+        conn: &DuckDBStorage,
+        events: &[Event],
+        start_block_arg: Option<&str>,
+    ) -> Result<u64> {
+        // Let's check if this event was already indexed.
+        // IF the DB contains the event, resume from the last synchronized block.
+        // If not, consider the start block from the command line arguments.
+        let event = events.first().unwrap();
+
+        let start_block = if let Ok(last_block) = conn.last_block(event) {
+            if last_block != 0 {
+                info!(
+                    "The DB contains events of the ABI up to the block {last_block}. Resuming indexing from the last synchronized block."
+                );
+                last_block.saturating_add(1)
+            } else {
+                info!("The DB is empty for the events included in the ABI.");
+                let start_block = start_block_arg
+                    .unwrap_or_default()
+                    .parse::<u64>()
+                    .context("Failed to parse start_block argument")?;
+
+                for event in events {
+                    conn.set_first_block(event, start_block)?;
+                }
+
+                start_block
+            }
+        } else {
+            error!(
+                "Failed to access the sync state for the event {}. Check the integrity of the database.",
+                event.name
+            );
+            std::process::exit(error_codes::ERROR_CODE_BAD_DB_STATE);
+        };
+
+        Ok(start_block)
+    }
+
+    /// Builds a CollectorSeed for a single event with a filter.
+    ///
+    /// This method registers the event, gets/sets the sync state, and creates a seed
+    /// with a filter for efficient event retrieval.
+    fn build_single_event_seed(
+        conn: &DuckDBStorage,
+        event: &Event,
+        contract_address: Address,
+        start_block_arg: Option<&str>,
+    ) -> Result<CollectorSeed> {
+        // Is the event already indexed?
+        let event_status = conn.event_index_status(event)?;
+
+        let start_block = if let Some(event_status) = event_status {
+            info!(
+                "The event {} contains {} entries in the DB, from the block {} to the block {}. Resuming indexing from the last synchronized block.",
+                event.name,
+                event_status.event_count,
+                event_status.first_block,
+                event_status.last_block
+            );
+            event_status.last_block.saturating_add(1)
+        } else {
+            let first_block = start_block_arg
+                .unwrap_or_default()
+                .parse::<u64>()
+                .unwrap_or_default();
+            info!(
+                "The event {} will be registered in the DB and indexed from the block {first_block}",
+                event.name
+            );
+            conn.include_events(std::slice::from_ref(event))?;
+            conn.set_first_block(event, first_block)?;
+            first_block
+        };
+
+        // Let's build the filter that will be used by eth_getLogs to retrieve the data.
+        let filter = Some(
+            Filter::new()
+                .address(contract_address)
+                .event_signature(event.selector()),
+        );
+
+        Ok(CollectorSeed {
+            contract_address,
+            events: vec![event.clone()],
+            start_block,
+            sync_mode: BlockNumberOrTag::Finalized,
+            filter,
+        })
     }
 }

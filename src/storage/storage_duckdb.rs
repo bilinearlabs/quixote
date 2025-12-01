@@ -3,6 +3,7 @@
 //! Module that handles the connection to the DuckDB database.
 
 use crate::{
+    EventStatus,
     constants::*,
     error_codes::ERROR_CODE_DATABASE_LOCKED,
     storage::{ContractDescriptorDb, EventDb, EventDescriptorDb, Storage, StorageQuery},
@@ -13,9 +14,9 @@ use alloy::{
     primitives::{Address, B256},
     rpc::types::Log,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use duckdb::{Connection, params};
+use duckdb::{Connection, OptionalExt, params};
 use serde_json::{Map, Number, Value, json};
 use std::{collections::HashMap, string::ToString, sync::Mutex};
 use tracing::{debug, error, info, warn};
@@ -25,6 +26,7 @@ pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     table_regex: regex::Regex,
     db_path: String,
+    event_descriptors: Mutex<HashMap<String, String>>,
 }
 
 /// Simple factory pattern to allow opening a new connection to the same database from a task.
@@ -112,11 +114,19 @@ impl Storage for DuckDBStorage {
 
             // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
-            let event_signature: String = tx.query_row(
-                "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
-                [&event_hash],
-                |row| row.get(0),
-            )?;
+            // let event_signature: String = tx.query_row(
+            //     "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
+            //     [&event_hash],
+            //     |row| row.get(0),
+            // )?;
+
+            let event_signature = self
+                .event_descriptors
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?
+                .get(&event_hash)
+                .unwrap()
+                .clone();
 
             let event_name = Event::parse(&event_signature)
                 .unwrap()
@@ -200,20 +210,15 @@ impl Storage for DuckDBStorage {
                 appender.append_row(duckdb::appender_params_from_iter(
                     row_vals.iter().map(|s| s.as_str()),
                 ))?;
+
+                tx.execute(
+                    "UPDATE event_descriptor SET last_block = ? WHERE event_hash = ?",
+                    [log.block_number.unwrap().to_string(), event_hash.clone()],
+                )?;
             }
 
             // Flush the appender for this table
             appender.flush()?;
-        }
-
-        // Update the last block within the same transaction
-        if let Some(last_event) = events.last()
-            && let Some(last_block_number) = last_event.block_number
-        {
-            tx.execute(
-                &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET last_block = ?"),
-                [last_block_number.to_string()],
-            )?;
         }
 
         // Explicitly commit the transaction
@@ -246,33 +251,45 @@ impl Storage for DuckDBStorage {
     }
 
     #[inline]
-    fn last_block(&self) -> Result<u64> {
+    fn last_block(&self, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         Ok(conn.query_row(
-            &format!("SELECT last_block FROM {}", DUCKDB_BASE_TABLE_NAME),
-            [],
+            "SELECT last_block FROM event_descriptor WHERE event_hash = ?",
+            [event.selector().to_string()],
             |row| row.get(0),
         )?)
     }
 
     #[inline]
-    fn first_block(&self) -> Result<u64> {
+    fn first_block(&self, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         Ok(conn.query_row(
-            &format!("SELECT first_block FROM {}", DUCKDB_BASE_TABLE_NAME),
-            [],
+            "SELECT first_block FROM event_descriptor WHERE event_hash = ?",
+            [event.selector().to_string()],
             |row| row.get(0),
         )?)
     }
 
     fn include_events(&self, events: &[Event]) -> Result<()> {
-        DuckDBStorage::create_event_schema(&self.conn, events)
+        DuckDBStorage::create_event_schema(&self.conn, events)?;
+        let mut event_descriptors = self
+            .event_descriptors
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?;
+        for event in events {
+            event_descriptors.insert(
+                event.selector().to_string(),
+                event.full_signature().to_string(),
+            );
+        }
+
+        Ok(())
     }
 
     fn get_event_signature(&self, event_hash: &str) -> Result<String> {
@@ -285,6 +302,62 @@ impl Storage for DuckDBStorage {
             [event_hash],
             |row| row.get(0),
         )?)
+    }
+
+    fn event_index_status(&self, event: &Event) -> Result<Option<EventStatus>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        let Some((mut event_status, event_name)) = conn
+            .query_row(
+                "SELECT \"event_name\", \"first_block\", \"last_block\" FROM event_descriptor WHERE event_hash = ?",
+                [event.selector().to_string()],
+                |row| {
+                    Ok((EventStatus {
+                        hash: event.selector().to_string(),
+                        first_block: row.get(1)?,
+                        last_block: row.get(2)?,
+                        event_count: 0,
+                    }, row.get::<_, String>(0)?))
+                },
+            ).optional()? else {
+                return Ok(None);
+            };
+
+        if event_status.last_block != 0 {
+            // Get the event count
+            let event_count: usize = conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM event_{}_{}",
+                    event_name.to_ascii_lowercase(),
+                    event.selector()
+                ),
+                [],
+                |row| row.get(0),
+            )?;
+
+            event_status.event_count = event_count;
+        }
+
+        Ok(Some(event_status))
+    }
+
+    // TODO: what if we run multiple -e tasks?
+    fn synchronize_events(&self) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+        conn.execute(
+            "UPDATE event_descriptor SET last_block = (SELECT MAX(block_number) FROM blocks)",
+            [],
+        )?;
+
+        debug!("Events synchronized to the latest block");
+
+        Ok(())
     }
 }
 
@@ -324,9 +397,14 @@ impl DuckDBStorage {
             conn_mutex
         } else {
             // Try to retrieve version from etherduck_info table using a query
-            let version: String =
-                conn.query_row("SELECT version FROM etherduck_info LIMIT 1", [], |row| {
-                    row.get(0)
+            let version: String = conn
+                .query_row(
+                    format!("SELECT version FROM {DUCKDB_BASE_TABLE_NAME} LIMIT 1").as_str(),
+                    [],
+                    |row| row.get(0),
+                )
+                .with_context(|| {
+                    format!("Failed to retrieve version from {DUCKDB_BASE_TABLE_NAME} table")
                 })?;
 
             if version != DUCKDB_SCHEMA_VERSION {
@@ -334,6 +412,8 @@ impl DuckDBStorage {
             }
             Mutex::new(conn)
         };
+
+        debug!("Database ready for indexing");
 
         // This regex will match the table names after FROM and any JOINs (supports INNER, LEFT, RIGHT, FULL, CROSS).
         // It captures each table name in group 1, ignoring keywords.
@@ -344,6 +424,7 @@ impl DuckDBStorage {
             conn: conn_mutex,
             table_regex,
             db_path: db_path.to_string(),
+            event_descriptors: Mutex::new(HashMap::new()),
         })
     }
 
@@ -353,8 +434,6 @@ impl DuckDBStorage {
             BEGIN;
             CREATE TABLE IF NOT EXISTS {DUCKDB_BASE_TABLE_NAME}(
                 version VARCHAR NOT NULL,
-                first_block UBIGINT,
-                last_block UBIGINT,
                 PRIMARY KEY (version)
             );
             CREATE TABLE IF NOT EXISTS blocks(
@@ -367,6 +446,8 @@ impl DuckDBStorage {
                 event_hash VARCHAR(66) NOT NULL,
                 event_signature VARCHAR(256) NOT NULL,
                 event_name VARCHAR(40) NOT NULL,
+                first_block UBIGINT,
+                last_block UBIGINT,
                 PRIMARY KEY (event_hash)
             );
             COMMIT;"
@@ -384,8 +465,8 @@ impl DuckDBStorage {
                 .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
             conn.execute(
                 &format!(
-                    "INSERT INTO {} (version, first_block, last_block)
-                VALUES (?, 0, 0);",
+                    "INSERT INTO {} (\"version\")
+                VALUES (?);",
                     DUCKDB_BASE_TABLE_NAME
                 ),
                 [DUCKDB_SCHEMA_VERSION],
@@ -424,7 +505,7 @@ impl DuckDBStorage {
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
 
             // Now, create an entry for such event in the event_descriptor table.
-            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name) VALUES ('{}', '{}', '{}') ON CONFLICT (event_hash) DO NOTHING;", event.selector(), event.full_signature(), event.name));
+            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name, first_block, last_block) VALUES ('{}', '{}', '{}', 0, 0) ON CONFLICT (event_hash) DO NOTHING;", event.selector(), event.full_signature(), event.name));
 
             // Not a big deal to batch this SQL statement as it is executed once during the apps's lifetime.
             let conn = conn
@@ -451,14 +532,14 @@ impl DuckDBStorage {
     }
 
     #[inline]
-    pub fn set_first_block(&self, block_number: u64) -> Result<()> {
+    pub fn set_first_block(&self, event: &Event, block_number: u64) -> Result<()> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         conn.execute(
-            &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET first_block = ?"),
-            [block_number.to_string()],
+            "UPDATE event_descriptor SET first_block = ? WHERE event_hash = ?",
+            [block_number.to_string(), event.selector().to_string()],
         )?;
         Ok(())
     }

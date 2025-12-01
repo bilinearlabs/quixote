@@ -2,13 +2,8 @@
 
 //! Runner module for the event collector.
 
-use crate::{
-    CollectorRunningMode, RpcHost, TxLogChunk, constants::*, event_collector::EventCollector,
-};
+use crate::{CollectorSeed, RpcHost, TxLogChunk, constants::*, event_collector::EventCollector};
 use alloy::{
-    eips::BlockNumberOrTag,
-    json_abi::Event,
-    primitives::Address,
     providers::Provider,
     providers::ProviderBuilder,
     rpc::client::RpcClient,
@@ -20,7 +15,6 @@ use alloy::{
 };
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 use tracing::{error, info};
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -46,23 +40,23 @@ impl RetryPolicy for AlwaysRetryPolicy {
 /// This runner is responsible for spawning the event collector tasks for each RPC host. Each RPC host can serve
 /// data from a different blockchain. This way, we can monitor some event across multiple chains. However, this is
 /// not fully supported yet.
+///
+/// ## Resource assignment
+///
+/// The best case scenario would be to assign one seed per RPC host. However having multiple RPC hosts is not always
+/// possible. Each seed is assigned to a producer task, this way, all the events that belong to the same seed are
+/// ensured to be synchronized up to the same block.
 pub struct EventCollectorRunner {
     provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>>,
-    contract_address: Address,
-    events: Vec<Event>,
-    start_block: BlockNumberOrTag,
+    seeds: Vec<CollectorSeed>,
     producer_buffer: TxLogChunk,
-    running_mode: CollectorRunningMode,
 }
 
 impl EventCollectorRunner {
     pub fn new(
         host_list: &[RpcHost],
-        contract_address: Address,
-        events: Vec<Event>,
-        start_block: BlockNumberOrTag,
+        seeds: Vec<CollectorSeed>,
         producer_buffer: TxLogChunk,
-        running_mode: CollectorRunningMode,
     ) -> Result<Self> {
         let always_retry_policy = AlwaysRetryPolicy::default();
 
@@ -91,11 +85,8 @@ impl EventCollectorRunner {
 
         Ok(Self {
             provider_list,
-            contract_address,
-            events,
-            start_block,
+            seeds,
             producer_buffer,
-            running_mode,
         })
     }
 
@@ -103,77 +94,41 @@ impl EventCollectorRunner {
         info!("Starting the event collector runner");
 
         if self.provider_list.is_empty() {
-            anyhow::bail!("No providers available");
+            error!("No providers available");
+            anyhow::bail!("Exiting app as no providers are available");
         }
 
-        // At this point, the start_block is always a number, as the upper layer selects the starting block based on
-        // the current DB status and the user's input.
-        let start_block_num = self.start_block.as_number().unwrap();
         info!(
-            "Spawning {} collector tasks (one per RPC host)",
+            "Distributing {} seeds across {} RPC hosts",
+            self.seeds.len(),
             self.provider_list.len()
         );
 
-        // Semaphore sized to the number of RPC hosts - one collector per host
-        let semaphore = Arc::new(Semaphore::new(self.provider_list.len()));
         // Collect all task handles
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-        // Spawn one EventCollector per RPC host
-        for (host_index, provider) in self.provider_list.iter().enumerate() {
-            let provider = provider.clone();
-            let semaphore = semaphore.clone();
-            let contract_address = self.contract_address;
+        // Distribute seeds across RPC hosts using round-robin
+        // If there are more seeds than RPC hosts, multiple seeds will use the same RPC host
+        for (seed_index, seed) in self.seeds.iter().enumerate() {
+            // Assign seed to RPC host using round-robin
+            let host_index = seed_index % self.provider_list.len();
+            let provider = self.provider_list[host_index].clone();
             let producer_buffer = self.producer_buffer.clone();
-            let running_mode = self.running_mode;
-            let events = self.events.clone();
+            let seed = seed.clone();
+
+            info!(
+                "Spawning collector for seed {} (contract: {}, start_block: {}) on RPC host {}",
+                seed_index, seed.contract_address, seed.start_block, host_index
+            );
 
             let handle = tokio::spawn(async move {
-                // Acquire permit (one per RPC host)
-                let _permit = semaphore.acquire().await.unwrap();
+                let collector = EventCollector::new(provider, producer_buffer, &seed);
 
-                info!(
-                    "Spawning collector for RPC host {} (starting from block {})",
-                    host_index, start_block_num
-                );
-
-                if running_mode == CollectorRunningMode::EventWithFiltering {
-                    for event in events {
-                        let collector = EventCollector::new(
-                            contract_address,
-                            Some(event),
-                            start_block_num,
-                            provider.clone(),
-                            BlockNumberOrTag::Finalized,
-                            producer_buffer.clone(),
-                        );
-
-                        let collector_handle = tokio::spawn(async move {
-                            let _ = collector.collect().await;
-                        });
-
-                        if let Err(e) = collector_handle.await {
-                            error!("Collector task for RPC host {} panicked: {}", host_index, e);
-                        }
-                    }
-                } else {
-                    let collector = EventCollector::new(
-                        contract_address,
-                        None,
-                        start_block_num,
-                        provider,
-                        BlockNumberOrTag::Finalized,
-                        producer_buffer,
+                if let Err(e) = collector.collect().await {
+                    error!(
+                        "Collector for seed {} (contract: {}) failed: {}",
+                        seed_index, seed.contract_address, e
                     );
-
-                    let collector_handle = tokio::spawn(async move {
-                        // Collect events - this runs forever, polling for new blocks
-                        let _ = collector.collect().await;
-                    });
-
-                    if let Err(e) = collector_handle.await {
-                        error!("Collector task for RPC host {} panicked: {}", host_index, e);
-                    }
                 }
             });
 
