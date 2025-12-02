@@ -25,7 +25,7 @@ impl RetryPolicy for AlwaysRetryPolicy {
     fn should_retry(&self, _error: &TransportError) -> bool {
         // TODO: Be more granular with the retry policy.
         // we don't want to retry in some cases.
-        true
+        false
     }
 
     fn backoff_hint(&self, _error: &TransportError) -> Option<std::time::Duration> {
