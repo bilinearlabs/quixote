@@ -1,6 +1,6 @@
 # Build stage ---------------
 
-    FROM docker.io/rust:1.91.1 AS builder
+    FROM docker.io/rust:1.91.1-trixie AS builder
 
     WORKDIR /app
     COPY . .
@@ -8,7 +8,7 @@
 
     # Runtime stage -------------
 
-    FROM docker.io/rust:1.91.1-slim-bullseye AS runtime
+    FROM docker.io/debian:trixie-slim AS runtime
     WORKDIR /app
     COPY --from=builder /app/target/release/etherduck etherduck
     ENTRYPOINT [ "./etherduck" ]
