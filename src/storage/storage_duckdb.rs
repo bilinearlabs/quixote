@@ -358,7 +358,7 @@ impl Storage for DuckDBStorage {
             )?;
         } else {
             conn.execute(
-                "UPDATE event_descriptor SET last_block = (SELECT MAX(block_number) FROM blocks)",
+                "UPDATE event_descriptor SET last_block = (SELECT MAX(last_block) FROM event_descriptor)",
                 [],
             )?;
         }
