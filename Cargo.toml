@@ -16,7 +16,6 @@ chrono = "0.4.42"
 clap = { version = "4.5.51", features = ["derive"] }
 duckdb = { version = "1.4.2", features = ["bundled"] }
 futures = "0.3.31"
-regex = "1.12.2"
 secrecy = "0.10.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.145"

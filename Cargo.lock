@@ -1867,7 +1867,6 @@ dependencies = [
  "clap",
  "duckdb",
  "futures",
- "regex",
  "secrecy",
  "serde",
  "serde_json",

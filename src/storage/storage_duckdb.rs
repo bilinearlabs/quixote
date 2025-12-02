@@ -24,7 +24,6 @@ use tracing::{debug, error, info, warn};
 /// Implementation of the Storage trait for the DuckDB database.
 pub struct DuckDBStorage {
     conn: Mutex<Connection>,
-    table_regex: regex::Regex,
     db_path: String,
     event_descriptors: Mutex<HashMap<String, String>>,
 }
@@ -423,14 +422,8 @@ impl DuckDBStorage {
 
         debug!("Database ready for indexing");
 
-        // This regex will match the table names after FROM and any JOINs (supports INNER, LEFT, RIGHT, FULL, CROSS).
-        // It captures each table name in group 1, ignoring keywords.
-        let table_regex =
-            regex::Regex::new(r"(?i)(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
-
         Ok(DuckDBStorage {
             conn: conn_mutex,
-            table_regex,
             db_path: db_path.to_string(),
             event_descriptors: Mutex::new(HashMap::new()),
         })
@@ -565,49 +558,164 @@ impl DuckDBStorage {
         Ok(tables)
     }
 
-    // Returns pairs (Column Name, Column Type)
-    fn get_table_schema(&self, table_name: &str) -> Result<Vec<(String, String)>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        let mut rows = conn.prepare(&format!("DESCRIBE {}", table_name))?;
-        let schema = rows
-            .query_map([], |row| Ok((row.get(0).unwrap(), row.get(1).unwrap())))?
-            .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
-            .collect::<Result<Vec<(String, String)>>>()?;
-        Ok(schema)
+    /// Attempts to infer the JSON value type for a column in a row.
+    ///
+    /// # Description
+    ///
+    /// Tries conversions in order: Number (i64, u64, f64), Bool, String, Null.
+    fn infer_value_type(row: &duckdb::Row, col_idx: usize) -> Result<Value> {
+        // Try Option<String>
+        if let Ok(opt_str) = row.get::<_, Option<String>>(col_idx) {
+            return match opt_str {
+                Some(s) => Ok(Value::String(s)),
+                None => Ok(Value::Null),
+            };
+        }
+
+        // Try Option<i64>
+        if let Ok(opt_val) = row.get::<_, Option<i64>>(col_idx) {
+            return match opt_val {
+                Some(val) => Ok(Value::Number(Number::from(val))),
+                None => Ok(Value::Null),
+            };
+        }
+
+        // Try Option<u64>
+        if let Ok(opt_val) = row.get::<_, Option<u64>>(col_idx) {
+            return match opt_val {
+                Some(val) => {
+                    // serde_json::Number doesn't support u64 directly, so we need to convert
+                    if let Some(num) = Number::from_f64(val as f64) {
+                        Ok(Value::Number(num))
+                    } else {
+                        // If conversion fails, use string representation
+                        Ok(Value::String(val.to_string()))
+                    }
+                }
+                None => Ok(Value::Null),
+            };
+        }
+
+        // Try Option<f64>
+        if let Ok(opt_val) = row.get::<_, Option<f64>>(col_idx) {
+            return match opt_val {
+                Some(val) => {
+                    if let Some(num) = Number::from_f64(val) {
+                        Ok(Value::Number(num))
+                    } else {
+                        // NaN or Infinity - represent as string
+                        Ok(Value::String(val.to_string()))
+                    }
+                }
+                None => Ok(Value::Null),
+            };
+        }
+
+        // Try Option<bool>
+        if let Ok(opt_val) = row.get::<_, Option<bool>>(col_idx) {
+            return match opt_val {
+                Some(val) => Ok(Value::Bool(val)),
+                None => Ok(Value::Null),
+            };
+        }
+
+        // Try non-optional types
+        // Try i64 (signed integer)
+        if let Ok(val) = row.get::<_, i64>(col_idx) {
+            return Ok(Value::Number(Number::from(val)));
+        }
+
+        // Try u64 (unsigned integer)
+        if let Ok(val) = row.get::<_, u64>(col_idx) {
+            // serde_json::Number doesn't support u64 directly, so we need to convert
+            if let Some(num) = Number::from_f64(val as f64) {
+                return Ok(Value::Number(num));
+            }
+            // If conversion fails, fall through to string
+        }
+
+        // Try f64 (floating point)
+        if let Ok(val) = row.get::<_, f64>(col_idx)
+            && let Some(num) = Number::from_f64(val)
+        {
+            return Ok(Value::Number(num));
+            // If conversion fails (NaN, Infinity), fall through to string
+        }
+
+        // Try bool
+        if let Ok(val) = row.get::<_, bool>(col_idx) {
+            return Ok(Value::Bool(val));
+        }
+
+        // Try String (this should work for most remaining types)
+        if let Ok(val) = row.get::<_, String>(col_idx) {
+            return Ok(Value::String(val));
+        }
+
+        // If all else fails, return null
+        Ok(Value::Null)
     }
 
-    fn parse_table_names_from_query(&self, query: &str) -> Vec<String> {
-        self.table_regex
-            .find_iter(query)
-            .map(|m| m.as_str().split(' ').next_back().unwrap().to_owned())
-            .collect::<Vec<String>>()
-    }
+    /// Gets column names from a query by using DESCRIBE on a subquery.
+    fn get_column_names_from_query(conn: &Connection, query: &str) -> Result<Vec<String>> {
+        // Use DESCRIBE to get column information from the query result
+        // Wrap the query in a subquery to make DESCRIBE work
+        let describe_query = format!("DESCRIBE SELECT * FROM ({}) LIMIT 0", query);
 
-    // Helper function to convert a value from the row based on the type string
-    fn get_value_by_type(row: &duckdb::Row, col_idx: usize, db_type: &str) -> Result<Value> {
-        match db_type {
-            "UBIGINT" => {
-                let val: u64 = row.get(col_idx)?;
-                // Convert u64 to Number (may need to use i64 for very large numbers)
-                Ok(Value::Number(Number::from(val)))
+        match conn.prepare(&describe_query) {
+            Ok(mut stmt) => {
+                match stmt.query([]) {
+                    Ok(mut rows) => {
+                        let mut column_names = Vec::new();
+                        while let Some(row) = rows.next()? {
+                            // DESCRIBE returns: column_name, column_type, null, key, default, extra
+                            // We only need the first column (column_name)
+                            match row.get::<_, String>(0) {
+                                Ok(col_name) => column_names.push(col_name),
+                                Err(_) => {
+                                    // If we can't get the name, use a generic one
+                                    column_names.push(format!("column_{}", column_names.len()));
+                                }
+                            }
+                        }
+                        Ok(column_names)
+                    }
+                    Err(_) => {
+                        // If DESCRIBE fails, return empty vec - we'll infer from first row
+                        Ok(Vec::new())
+                    }
+                }
             }
-            "USMALLINT" => {
-                let val: u16 = row.get(col_idx)?;
-                Ok(Value::Number(Number::from(val)))
-            }
-            "VARCHAR(66)" | "VARCHAR" => {
-                let val: String = row.get(col_idx)?;
-                Ok(Value::String(val))
-            }
-            _ => {
-                // Try as string for unknown types
-                let val: String = row.get(col_idx)?;
-                Ok(Value::String(val))
+            Err(_) => {
+                // If DESCRIBE fails, return empty vec - we'll infer from first row
+                Ok(Vec::new())
             }
         }
+    }
+
+    /// Infers the column count and generates generic column names by attempting to access columns in the first row.
+    ///  This is a fallback when DESCRIBE fails.
+    fn infer_column_count_and_names(row: &duckdb::Row) -> Result<Vec<String>> {
+        let mut column_names = Vec::new();
+
+        // Try to determine column count by attempting to access columns
+        // We'll try up to a reasonable maximum (e.g., 100 columns)
+        for i in 0..100 {
+            // Try different types to see if the column exists
+            if row.get::<_, String>(i).is_ok()
+                || row.get::<_, i64>(i).is_ok()
+                || row.get::<_, u64>(i).is_ok()
+                || row.get::<_, f64>(i).is_ok()
+                || row.get::<_, bool>(i).is_ok()
+                || row.get::<_, Option<String>>(i).is_ok()
+            {
+                column_names.push(format!("column_{}", i));
+            } else {
+                break;
+            }
+        }
+
+        Ok(column_names)
     }
 }
 
@@ -715,32 +823,58 @@ impl StorageQuery for DuckDBStorage {
 
     fn send_raw_query(&self, query: &str) -> Result<Value> {
         let storage = self.clone();
-        if !query.contains("SELECT") {
+        if !query.trim_start().to_uppercase().starts_with("SELECT") {
             return Ok(json!({ "error": "Query must be a SELECT statement" }));
         }
 
-        // First retrieve the table schema to figure out what we shall expect from the query
-        let table_names = storage.parse_table_names_from_query(query);
-        let table_schema = table_names
-            .iter()
-            .map(|t| storage.get_table_schema(t))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<(String, String)>>();
-
-        let mut results = Vec::new();
         let conn = storage
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // First, try to get column names using DESCRIBE
+        let mut column_names = Self::get_column_names_from_query(&conn, query)?;
+
+        // Execute the actual query
         let mut stmt = conn.prepare(query)?;
         let mut rows = stmt.query([])?;
 
+        // If we couldn't get column names from DESCRIBE, infer from first row
+        if column_names.is_empty() {
+            if let Some(first_row) = rows.next()? {
+                column_names = Self::infer_column_count_and_names(first_row)?;
+
+                // Process the first row
+                let mut result_obj = Map::new();
+                for (i, col_name) in column_names.iter().enumerate() {
+                    let value = Self::infer_value_type(first_row, i)?;
+                    result_obj.insert(col_name.clone(), value);
+                }
+                let mut results = vec![Value::Object(result_obj)];
+
+                // Process remaining rows
+                while let Some(row) = rows.next()? {
+                    let mut result_obj = Map::new();
+                    for (i, col_name) in column_names.iter().enumerate() {
+                        let value = Self::infer_value_type(row, i)?;
+                        result_obj.insert(col_name.clone(), value);
+                    }
+                    results.push(Value::Object(result_obj));
+                }
+
+                return Ok(Value::Array(results));
+            } else {
+                // Empty result set
+                return Ok(Value::Array(vec![]));
+            }
+        }
+
+        // We have column names, process all rows
+        let mut results = Vec::new();
         while let Some(row) = rows.next()? {
             let mut result_obj = Map::new();
-            for (i, (col_name, col_type)) in table_schema.iter().enumerate() {
-                let value = DuckDBStorage::get_value_by_type(row, i, col_type)?;
+            for (i, col_name) in column_names.iter().enumerate() {
+                let value = Self::infer_value_type(row, i)?;
                 result_obj.insert(col_name.clone(), value);
             }
             results.push(Value::Object(result_obj));
