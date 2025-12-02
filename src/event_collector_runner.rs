@@ -15,22 +15,150 @@ use alloy::{
 };
 use anyhow::Result;
 use std::sync::Arc;
-use tracing::{error, info};
+use std::time::Duration;
+use tracing::{debug, error, info};
 
 #[derive(Debug, Copy, Clone, Default)]
 #[non_exhaustive]
 pub struct AlwaysRetryPolicy;
 
 impl RetryPolicy for AlwaysRetryPolicy {
-    fn should_retry(&self, _error: &TransportError) -> bool {
-        // TODO: Be more granular with the retry policy.
-        // we don't want to retry in some cases.
-        false
+    fn should_retry(&self, error: &TransportError) -> bool {
+        // Convert error to string to check for specific error codes
+        let error_msg = format!("{}", error);
+        let error_lower = error_msg.to_lowercase();
+
+        // Check if this is the "query exceeds max results" error (code -32602)
+        // This error should NOT be retried as it indicates the query range is too large
+        // Check for error code -32602 (case-insensitive) and the specific message
+        if (error_lower.contains("-32602") || error_lower.contains("error code -32602"))
+            && error_lower.contains("query exceeds max results")
+        {
+            debug!(
+                "Not retrying request due to query exceeds max results error: {}",
+                error_msg
+            );
+            return false;
+        }
+
+        // By default, retry all other errors
+        true
     }
 
-    fn backoff_hint(&self, _error: &TransportError) -> Option<std::time::Duration> {
+    fn backoff_hint(&self, error: &TransportError) -> Option<Duration> {
+        // Convert error to string to check for backoff hints
+        let error_msg = format!("{}", error);
+
+        // Check for common rate limit patterns in the error message
+        // Look for patterns like "retry after", "wait", "rate limit", etc.
+        let error_lower = error_msg.to_lowercase();
+
+        // Check for "retry after X seconds" or similar patterns
+        if let Some(seconds) = extract_retry_after_seconds(&error_lower) {
+            debug!(
+                "Extracted backoff hint from error: {} seconds (error: {})",
+                seconds, error_msg
+            );
+            return Some(Duration::from_secs(seconds));
+        }
+
+        // Check for "wait X seconds" pattern
+        if let Some(seconds) = extract_wait_seconds(&error_lower) {
+            debug!(
+                "Extracted wait hint from error: {} seconds (error: {})",
+                seconds, error_msg
+            );
+            return Some(Duration::from_secs(seconds));
+        }
+
+        // Check for rate limit indicators (common patterns)
+        if error_lower.contains("rate limit") || error_lower.contains("too many requests") {
+            debug!(
+                "Rate limit detected in error, using default backoff hint (error: {})",
+                error_msg
+            );
+            // Return a reasonable default backoff for rate limits (e.g., 1 second)
+            // The actual backoff will be handled by RetryBackoffLayer
+            return Some(Duration::from_secs(1));
+        }
+
         None
     }
+}
+
+/// Extract retry after seconds from error message
+/// Looks for patterns like "retry after 5 seconds", "retry after 5s", "retry-after: 5", etc.
+fn extract_retry_after_seconds(error_msg: &str) -> Option<u64> {
+    // Try to find "retry after" or "retry-after" pattern
+    let patterns = ["retry after", "retry-after"];
+    for pattern in patterns.iter() {
+        if let Some(pos) = error_msg.find(pattern) {
+            let after_pos = pos + pattern.len();
+            let remaining = &error_msg[after_pos..];
+
+            // Skip whitespace and common separators
+            let remaining = remaining.trim_start_matches(|c: char| c.is_whitespace() || c == ':');
+
+            // Find the first number in the remaining string
+            let num_start = remaining.find(|c: char| c.is_ascii_digit())?;
+            let num_part = &remaining[num_start..];
+
+            // Extract the number (stop at first non-digit)
+            let num_end = num_part
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(num_part.len());
+            let num_str = &num_part[..num_end];
+
+            if let Ok(num) = num_str.parse::<u64>() {
+                // Check if followed by time unit indicators (second, seconds, s, sec, etc.)
+                let after_num = &num_part[num_end..].trim_start();
+                if after_num.is_empty()
+                    || after_num.starts_with("second")
+                    || after_num.starts_with("s")
+                    || after_num.starts_with("sec")
+                {
+                    return Some(num);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract wait seconds from error message
+/// Looks for patterns like "wait 5 seconds", "wait 5s", etc.
+fn extract_wait_seconds(error_msg: &str) -> Option<u64> {
+    // Try to find "wait" pattern
+    if let Some(pos) = error_msg.find("wait") {
+        let after_pos = pos + "wait".len();
+        let remaining = &error_msg[after_pos..];
+
+        // Skip whitespace
+        let remaining = remaining.trim_start();
+
+        // Find the first number in the remaining string
+        let num_start = remaining.find(|c: char| c.is_ascii_digit())?;
+        let num_part = &remaining[num_start..];
+
+        // Extract the number (stop at first non-digit)
+        let num_end = num_part
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(num_part.len());
+        let num_str = &num_part[..num_end];
+
+        if let Ok(num) = num_str.parse::<u64>() {
+            // Check if followed by time unit indicators
+            let after_num = &num_part[num_end..].trim_start();
+            if after_num.is_empty()
+                || after_num.starts_with("second")
+                || after_num.starts_with("s")
+                || after_num.starts_with("sec")
+            {
+                return Some(num);
+            }
+        }
+    }
+    None
 }
 
 /// Runner for the event collector.
