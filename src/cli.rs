@@ -2,6 +2,7 @@
 
 //! Module that handles the command line interface.
 
+use crate::constants;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -55,6 +56,12 @@ pub struct IndexingArgs {
         help = "Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720"
     )]
     pub api_server: Option<String>,
+    #[arg(
+        long,
+        help = "Block range for the RPC requests.",
+        default_value_t = constants::DEFAULT_BLOCK_RANGE
+    )]
+    pub block_range: usize,
     #[arg(
         short,
         long,

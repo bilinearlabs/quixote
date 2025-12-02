@@ -29,7 +29,7 @@ pub mod constants {
     pub const DEFAULT_POLL_INTERVAL: u64 = 1;
 
     /// Default block range for the event collector. This range is used in the get_Logs call.
-    pub const DEFAULT_BLOCK_RANGE: usize = 10;
+    pub const DEFAULT_BLOCK_RANGE: usize = 10000;
     /// Maximum number of collector tasks to spawn.
     pub const MAX_CONCURRENT_COLLECTOR_TASKS: usize = 1;
     /// Maximum concurrent requests sent to the RPC server.

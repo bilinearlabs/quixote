@@ -25,6 +25,7 @@ pub struct IndexingApp {
     pub storage_for_api: Arc<DuckDBStorageFactory>,
     pub cancellation_token: CancellationToken,
     pub seeds: Vec<CollectorSeed>,
+    pub default_block_range: usize,
 }
 
 impl IndexingApp {
@@ -67,6 +68,7 @@ impl IndexingApp {
             storage_for_api,
             cancellation_token,
             seeds,
+            default_block_range: args.block_range,
         })
     }
 
@@ -84,8 +86,12 @@ impl IndexingApp {
             }
         });
 
-        let event_collector_runner =
-            EventCollectorRunner::new(&self.host_list, self.seeds.clone(), producer_buffer)?;
+        let event_collector_runner = EventCollectorRunner::new(
+            &self.host_list,
+            self.seeds.clone(),
+            producer_buffer,
+            self.default_block_range,
+        )?;
 
         let mut event_processor = EventProcessor::new(
             self.storage.clone(),

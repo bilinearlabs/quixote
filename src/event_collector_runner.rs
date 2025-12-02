@@ -50,6 +50,7 @@ pub struct EventCollectorRunner {
     provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>>,
     seeds: Vec<CollectorSeed>,
     producer_buffer: TxLogChunk,
+    default_block_range: usize,
 }
 
 impl EventCollectorRunner {
@@ -57,6 +58,7 @@ impl EventCollectorRunner {
         host_list: &[RpcHost],
         seeds: Vec<CollectorSeed>,
         producer_buffer: TxLogChunk,
+        default_block_range: usize,
     ) -> Result<Self> {
         let always_retry_policy = AlwaysRetryPolicy::default();
 
@@ -87,6 +89,7 @@ impl EventCollectorRunner {
             provider_list,
             seeds,
             producer_buffer,
+            default_block_range,
         })
     }
 
@@ -115,6 +118,7 @@ impl EventCollectorRunner {
             let provider = self.provider_list[host_index].clone();
             let producer_buffer = self.producer_buffer.clone();
             let seed = seed.clone();
+            let default_block_range = self.default_block_range;
 
             info!(
                 "Spawning collector for seed {} (contract: {}, start_block: {}) on RPC host {}",
@@ -122,7 +126,8 @@ impl EventCollectorRunner {
             );
 
             let handle = tokio::spawn(async move {
-                let collector = EventCollector::new(provider, producer_buffer, &seed);
+                let collector =
+                    EventCollector::new(provider, producer_buffer, &seed, default_block_range);
 
                 if let Err(e) = collector.collect().await {
                     error!(

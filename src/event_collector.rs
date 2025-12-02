@@ -24,6 +24,7 @@ pub struct EventCollector {
     sync_mode: BlockNumberOrTag,
     poll_interval: u64,
     producer_buffer: TxLogChunk,
+    default_block_range: usize,
 }
 
 impl EventCollector {
@@ -31,6 +32,7 @@ impl EventCollector {
         provider: Arc<dyn Provider + Send + Sync>,
         producer_buffer: TxLogChunk,
         seed: &CollectorSeed,
+        default_block_range: usize,
     ) -> Self {
         Self {
             contract_address: seed.contract_address,
@@ -40,6 +42,7 @@ impl EventCollector {
             sync_mode: seed.sync_mode,
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
+            default_block_range,
         }
     }
 
@@ -71,12 +74,13 @@ impl EventCollector {
             }
 
             let chunk_starts: Vec<u64> = ((processed_to + 1)..=finalized_block)
-                .step_by(DEFAULT_BLOCK_RANGE)
+                .step_by(self.default_block_range)
                 .collect();
 
             let contract_address = self.contract_address;
             let producer_buffer = self.producer_buffer.clone();
             let provider_clone = self.provider.clone();
+            let block_range = self.default_block_range;
             stream::iter(
                 chunk_starts
                     .into_iter()
@@ -96,7 +100,7 @@ impl EventCollector {
                     }
 
                     let chunk_end = std::cmp::min(
-                        chunk_start + DEFAULT_BLOCK_RANGE as u64 - 1,
+                        chunk_start + block_range as u64 - 1,
                         finalized_block,
                     );
 
