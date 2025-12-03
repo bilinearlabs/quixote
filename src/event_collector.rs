@@ -72,6 +72,9 @@ impl EventCollector {
         let block_range_increase_threshold =
             (self.default_block_range * DEFAULT_REDUCED_BLOCK_RANGE_THRESHOLD) as u64;
 
+        // Simple flag that indicates if we are backfilling the database or fetching the finalized block.
+        let mut backfill_mode = true;
+
         loop {
             if chunk_starts.is_none() {
                 let provider = self.provider.clone();
@@ -87,6 +90,13 @@ impl EventCollector {
 
                 let remaining = current_finalized_block.saturating_sub(processed_to);
                 if remaining == 0 {
+                    // First time, we completed the backfill of the DB, lett's inform the user.
+                    if backfill_mode {
+                        info!(
+                            "Backfill of the database completed, starting to fetch the finalized block."
+                        );
+                    }
+                    backfill_mode = false;
                     sleep(Duration::from_secs(self.poll_interval)).await;
                     continue;
                 }
@@ -133,9 +143,15 @@ impl EventCollector {
                         finalized_block,
                     );
 
-                    info!(
-                        "Fetching events for blocks [{chunk_start}-{chunk_end}] contract address: {contract_address}"
-                    );
+                    if backfill_mode {
+                        let completion_percentage = ((chunk_start as f64) / (finalized_block as f64)) * 100.0;
+                        info!(
+                            "Fetching events for blocks [{chunk_start}-{chunk_end}] ({completion_percentage:.2}%) contract address: {contract_address}"
+                        );
+                    } else {
+                        info!("Fetching events up to the finalized block {finalized_block}");
+                    }
+
 
                     // Build the base filter for the get_Logs call. By default, all the events for a given smart
                     // contract are fetched.
