@@ -50,6 +50,8 @@ pub mod constants {
     pub const DEFAULT_VARCHAR_LENGTH: usize = 66;
     /// Value to choose between using filters or not on eth_getLogs.
     pub const DEFAULT_USE_FILTERS_THRESHOLD: usize = 3;
+    /// Reduced block range threshold: multiply the default block range by this value to get the threshold.
+    pub const DEFAULT_REDUCED_BLOCK_RANGE_THRESHOLD: usize = 2;
 }
 
 /// Error codes that are used when calling exit.

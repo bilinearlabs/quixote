@@ -113,11 +113,6 @@ impl Storage for DuckDBStorage {
 
             // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
-            // let event_signature: String = tx.query_row(
-            //     "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
-            //     [&event_hash],
-            //     |row| row.get(0),
-            // )?;
 
             let event_signature = self
                 .event_descriptors
