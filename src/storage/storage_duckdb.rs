@@ -6,16 +6,15 @@ use crate::{
     EventStatus,
     constants::*,
     error_codes::ERROR_CODE_DATABASE_LOCKED,
-    storage::{ContractDescriptorDb, EventDb, EventDescriptorDb, Storage, StorageQuery},
+    storage::{ContractDescriptorDb, EventDescriptorDb, Storage},
 };
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
     json_abi::Event,
-    primitives::{Address, B256},
+    primitives::B256,
     rpc::types::Log,
 };
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use duckdb::{Connection, OptionalExt, params};
 use serde_json::{Map, Number, Value, json};
 use std::{collections::HashMap, string::ToString, sync::Mutex};
@@ -113,11 +112,6 @@ impl Storage for DuckDBStorage {
 
             // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
-            // let event_signature: String = tx.query_row(
-            //     "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
-            //     [&event_hash],
-            //     |row| row.get(0),
-            // )?;
 
             let event_signature = self
                 .event_descriptors
@@ -226,25 +220,42 @@ impl Storage for DuckDBStorage {
         Ok(events.len())
     }
 
-    fn list_indexed_events(&self) -> Result<Vec<Event>> {
+    fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        let mut rows = conn.prepare("SELECT * FROM event_descriptor")?;
-        let events = rows
+        let mut rows = conn.prepare(
+            "SELECT event_hash, event_name, first_block, last_block FROM event_descriptor",
+        )?;
+        let mut events = rows
             .query_map([], |row| {
                 Ok(EventDescriptorDb {
-                    event_hash: row.get(0).unwrap(),
-                    event_signature: row.get(1).unwrap(),
-                    event_name: row.get(2).unwrap(),
+                    event_hash: row.get(0).optional()?,
+                    event_signature: None,
+                    event_name: row.get(1).optional()?,
+                    first_block: row.get(2).optional()?,
+                    last_block: row.get(3).optional()?,
+                    event_count: None,
                 })
             })?
             .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
-            .collect::<Result<Vec<EventDescriptorDb>>>()?
-            .iter()
-            .map(|e| Event::parse(&e.event_signature).unwrap())
-            .collect::<Vec<Event>>();
+            .collect::<Result<Vec<EventDescriptorDb>>>()?;
+
+        // Now, let's populate the event count
+        for event in events.iter_mut() {
+            let table_name = format!(
+                "event_{}_{}",
+                event.event_name.as_ref().unwrap().to_ascii_lowercase(),
+                event.event_hash.as_ref().unwrap()
+            );
+
+            let event_count: usize =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}",), [], |row| {
+                    row.get(0)
+                })?;
+            event.event_count = Some(event_count);
+        }
 
         Ok(events)
     }
@@ -366,6 +377,72 @@ impl Storage for DuckDBStorage {
 
         Ok(())
     }
+
+    fn send_raw_query(&self, query: &str) -> Result<Value> {
+        let storage = self.clone();
+        if !query.trim_start().to_uppercase().starts_with("SELECT") {
+            return Ok(json!({ "error": "Query must be a SELECT statement" }));
+        }
+
+        let conn = storage
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // First, try to get column names using DESCRIBE
+        let mut column_names = Self::get_column_names_from_query(&conn, query)?;
+
+        // Execute the actual query
+        let mut stmt = conn.prepare(query)?;
+        let mut rows = stmt.query([])?;
+
+        // If we couldn't get column names from DESCRIBE, infer from first row
+        if column_names.is_empty() {
+            if let Some(first_row) = rows.next()? {
+                column_names = Self::infer_column_count_and_names(first_row)?;
+
+                // Process the first row
+                let mut result_obj = Map::new();
+                for (i, col_name) in column_names.iter().enumerate() {
+                    let value = Self::infer_value_type(first_row, i)?;
+                    result_obj.insert(col_name.clone(), value);
+                }
+                let mut results = vec![Value::Object(result_obj)];
+
+                // Process remaining rows
+                while let Some(row) = rows.next()? {
+                    let mut result_obj = Map::new();
+                    for (i, col_name) in column_names.iter().enumerate() {
+                        let value = Self::infer_value_type(row, i)?;
+                        result_obj.insert(col_name.clone(), value);
+                    }
+                    results.push(Value::Object(result_obj));
+                }
+
+                return Ok(Value::Array(results));
+            } else {
+                // Empty result set
+                return Ok(Value::Array(vec![]));
+            }
+        }
+
+        // We have column names, process all rows
+        let mut results = Vec::new();
+        while let Some(row) = rows.next()? {
+            let mut result_obj = Map::new();
+            for (i, col_name) in column_names.iter().enumerate() {
+                let value = Self::infer_value_type(row, i)?;
+                result_obj.insert(col_name.clone(), value);
+            }
+            results.push(Value::Object(result_obj));
+        }
+
+        Ok(Value::Array(results))
+    }
+
+    fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
+        todo!()
+    }
 }
 
 impl DuckDBStorage {
@@ -420,7 +497,7 @@ impl DuckDBStorage {
             Mutex::new(conn)
         };
 
-        debug!("Database ready for indexing");
+        debug!("Database connection successfully established");
 
         Ok(DuckDBStorage {
             conn: conn_mutex,
@@ -543,19 +620,6 @@ impl DuckDBStorage {
             [block_number.to_string(), event.selector().to_string()],
         )?;
         Ok(())
-    }
-
-    fn get_db_tables(&self) -> Result<Vec<String>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        let mut rows = conn.prepare("SHOW tables")?;
-        let tables = rows
-            .query_map([], |row| Ok(row.get(0).unwrap()))?
-            .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
-            .collect::<Result<Vec<String>>>()?;
-        Ok(tables)
     }
 
     /// Attempts to infer the JSON value type for a column in a row.
@@ -716,170 +780,5 @@ impl DuckDBStorage {
         }
 
         Ok(column_names)
-    }
-}
-
-impl StorageQuery for DuckDBStorage {
-    fn list_events(&self) -> Result<Vec<EventDescriptorDb>> {
-        // For StorageQuery methods, we clone to get a new connection (each request gets its own)
-        let storage = self.clone();
-        let conn = storage
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        let mut rows = conn.prepare("SELECT * FROM event_descriptor")?;
-        let events = rows
-            .query_map([], |row| {
-                Ok(EventDescriptorDb {
-                    event_signature: row.get(0).unwrap(),
-                    event_name: row.get(1).unwrap(),
-                    event_hash: row.get(2).unwrap(),
-                })
-            })?
-            .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
-            .collect::<Result<Vec<EventDescriptorDb>>>()?;
-
-        Ok(events)
-    }
-
-    fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
-        // For StorageQuery methods, we clone to get a new connection (no Mutex needed)
-        let storage = self.clone();
-        let tables = storage
-            .get_db_tables()?
-            .iter()
-            .filter(|table| table.starts_with("event_"))
-            .map(|t| ContractDescriptorDb {
-                contract_address: t.clone(),
-                contract_name: None,
-            })
-            .collect::<Vec<ContractDescriptorDb>>();
-
-        Ok(tables)
-    }
-    fn get_events(
-        &self,
-        event: Event,
-        contract: Address,
-        start_time: DateTime<Utc>,
-        end_time: Option<DateTime<Utc>>,
-    ) -> Result<Vec<EventDb>> {
-        let storage = self.clone();
-
-        let event_hash = event.selector().to_string();
-
-        // Convert timestamps to Unix timestamps (seconds since epoch)
-        let start_timestamp = start_time.timestamp() as u64;
-        let end_timestamp = end_time
-            .map(|dt| dt.timestamp() as u64)
-            .unwrap_or(Utc::now().timestamp() as u64);
-
-        // Normalize contract address to lowercase for case-insensitive comparison
-        let contract_str = contract.to_string().to_lowercase();
-
-        let conn = storage
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        let mut stmt = conn.prepare(&format!(
-            "
-            SELECT e.block_number, e.transaction_hash, e.log_index, e.contract_address,
-                   e.topic0, e.topic1, e.topic2, e.topic3, b.block_timestamp
-            FROM event_{event_hash} e
-            NATURAL JOIN blocks b
-            WHERE LOWER(e.contract_address) = LOWER(?)
-              AND b.block_timestamp >= ?
-              AND b.block_timestamp <= ?
-            ORDER BY e.block_number
-        "
-        ))?;
-
-        let events = stmt
-            .query_map(
-                params![
-                    contract_str,
-                    start_timestamp, // Pass as u64, not string
-                    end_timestamp    // Pass as u64, not string
-                ],
-                |row| {
-                    Ok(EventDb {
-                        block_number: row.get(0)?,
-                        transaction_hash: row.get(1)?,
-                        log_index: row.get::<_, u16>(2)? as u64,
-                        contract_address: row.get::<_, String>(3)?.parse().unwrap_or(contract),
-                        topic0: row.get(4)?,
-                        topic1: row.get::<_, Option<String>>(5)?,
-                        topic2: row.get::<_, Option<String>>(6)?,
-                        topic3: row.get::<_, Option<String>>(7)?,
-                        block_timestamp: row.get::<_, u64>(8)?, // Read as u64 directly
-                    })
-                },
-            )?
-            .map(|r| r.map_err(|e| anyhow::anyhow!(e)))
-            .collect::<Result<Vec<EventDb>>>()?;
-
-        Ok(events)
-    }
-
-    fn send_raw_query(&self, query: &str) -> Result<Value> {
-        let storage = self.clone();
-        if !query.trim_start().to_uppercase().starts_with("SELECT") {
-            return Ok(json!({ "error": "Query must be a SELECT statement" }));
-        }
-
-        let conn = storage
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-
-        // First, try to get column names using DESCRIBE
-        let mut column_names = Self::get_column_names_from_query(&conn, query)?;
-
-        // Execute the actual query
-        let mut stmt = conn.prepare(query)?;
-        let mut rows = stmt.query([])?;
-
-        // If we couldn't get column names from DESCRIBE, infer from first row
-        if column_names.is_empty() {
-            if let Some(first_row) = rows.next()? {
-                column_names = Self::infer_column_count_and_names(first_row)?;
-
-                // Process the first row
-                let mut result_obj = Map::new();
-                for (i, col_name) in column_names.iter().enumerate() {
-                    let value = Self::infer_value_type(first_row, i)?;
-                    result_obj.insert(col_name.clone(), value);
-                }
-                let mut results = vec![Value::Object(result_obj)];
-
-                // Process remaining rows
-                while let Some(row) = rows.next()? {
-                    let mut result_obj = Map::new();
-                    for (i, col_name) in column_names.iter().enumerate() {
-                        let value = Self::infer_value_type(row, i)?;
-                        result_obj.insert(col_name.clone(), value);
-                    }
-                    results.push(Value::Object(result_obj));
-                }
-
-                return Ok(Value::Array(results));
-            } else {
-                // Empty result set
-                return Ok(Value::Array(vec![]));
-            }
-        }
-
-        // We have column names, process all rows
-        let mut results = Vec::new();
-        while let Some(row) = rows.next()? {
-            let mut result_obj = Map::new();
-            for (i, col_name) in column_names.iter().enumerate() {
-                let value = Self::infer_value_type(row, i)?;
-                result_obj.insert(col_name.clone(), value);
-            }
-            results.push(Value::Object(result_obj));
-        }
-
-        Ok(Value::Array(results))
     }
 }
