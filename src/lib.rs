@@ -89,6 +89,7 @@ pub mod storage {
     #[derive(Debug, Clone, Serialize)]
     pub struct ContractDescriptorDb {
         pub contract_address: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub contract_name: Option<String>,
     }
 }

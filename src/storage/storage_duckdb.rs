@@ -17,7 +17,11 @@ use alloy::{
 use anyhow::{Context, Result};
 use duckdb::{Connection, OptionalExt, params};
 use serde_json::{Map, Number, Value, json};
-use std::{collections::HashMap, string::ToString, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    string::ToString,
+    sync::Mutex,
+};
 use tracing::{debug, error, info, warn};
 
 /// Implementation of the Storage trait for the DuckDB database.
@@ -379,12 +383,11 @@ impl Storage for DuckDBStorage {
     }
 
     fn send_raw_query(&self, query: &str) -> Result<Value> {
-        let storage = self.clone();
         if !query.trim_start().to_uppercase().starts_with("SELECT") {
             return Ok(json!({ "error": "Query must be a SELECT statement" }));
         }
 
-        let conn = storage
+        let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
@@ -441,7 +444,43 @@ impl Storage for DuckDBStorage {
     }
 
     fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
-        todo!()
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // First let's find out how many contracts are indexed.
+        // For each event table, a contract is listed.
+        let mut statement = conn.prepare("SELECT event_hash, event_name FROM event_descriptor")?;
+
+        let event_descriptors = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .map(|r| r.unwrap())
+            .collect::<Vec<(String, String)>>();
+
+        let mut contracts = HashSet::new();
+        for (event_hash, event_name) in event_descriptors {
+            let table_name = format!("event_{}_{}", event_name.to_ascii_lowercase(), event_hash);
+
+            let mut statement = conn.prepare(&format!(
+                "SELECT DISTINCT contract_address FROM {table_name}"
+            ))?;
+
+            let addresses = statement
+                .query_map([], |row| row.get(0))?
+                .map(|r| r.unwrap())
+                .collect::<Vec<String>>();
+
+            contracts.extend(addresses.into_iter());
+        }
+
+        Ok(contracts
+            .into_iter()
+            .map(|address| ContractDescriptorDb {
+                contract_address: address,
+                contract_name: None,
+            })
+            .collect::<Vec<ContractDescriptorDb>>())
     }
 }
 
