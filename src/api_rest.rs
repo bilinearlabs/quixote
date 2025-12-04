@@ -232,7 +232,7 @@ pub async fn start_api_server(
             .await
             .unwrap_or_else(|_| panic!("Failed to bind to port {port}"));
         axum::serve(listener, app)
-            .with_graceful_shutdown(sthutdown_signal(cancellation_token))
+            .with_graceful_shutdown(shutdown_signal(cancellation_token))
             .await
             .expect("API server error");
     });
@@ -240,7 +240,7 @@ pub async fn start_api_server(
     Ok(())
 }
 
-async fn sthutdown_signal(cancellation_token: CancellationToken) {
+async fn shutdown_signal(cancellation_token: CancellationToken) {
     let _ = cancellation_token.subscribe().recv().await;
     tracing::warn!("API server shutdown signal received");
 }
