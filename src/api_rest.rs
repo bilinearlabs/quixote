@@ -22,36 +22,25 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
-// Data type that represents the JSON response for the /list_events endpoint.
+/// Data type that represents the JSON response for the /list_events endpoint.
 #[derive(Serialize)]
 pub struct ListEventsResponse {
     pub events: Vec<EventDescriptorDb>,
 }
 
-// Request/Response types for list_contracts endpoint
+/// Request/Response types for list_contracts endpoint
 #[derive(Serialize)]
 pub struct ListContractsResponse {
     pub contracts: Vec<ContractDescriptorDb>,
 }
 
-// Request type for get_events endpoint
-#[derive(Deserialize)]
-pub struct GetEventsRequest {
-    #[serde(default)]
-    #[allow(dead_code)] // Not used in implementation, but kept for API compatibility
-    pub event: Option<String>, // Not used in implementation, but required by trait
-    pub contract: String,
-    pub start_time: String,       // ISO 8601 format (RFC3339)
-    pub end_time: Option<String>, // ISO 8601 format (RFC3339)
-}
-
-// Request type for raw_query endpoint
+/// Request type for raw_query endpoint
 #[derive(Deserialize)]
 pub struct RawQueryRequest {
     pub query: String,
 }
 
-// Response type for raw_query endpoint
+/// Response type for raw_query endpoint
 #[derive(Serialize)]
 pub struct RawQueryResponse {
     pub query_result: Value,
@@ -94,27 +83,40 @@ async fn list_events_handler(
     }
 }
 
-// POST handler for list_contracts
+/// GET handler for /list_contracts
+///
+/// # Description
+///
+/// This handler is used to list all the contracts indexed in the database.
+#[instrument(skip(factory))]
 async fn list_contracts_handler(
     State(factory): State<Arc<DuckDBStorageFactory>>,
 ) -> Result<Json<ListContractsResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Create a new storage instance with a new connection for this request
     let storage = factory.create().map_err(|e| {
+        error!("Failed to create database connection: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
-                error: format!("Failed to create database connection: {}", e),
+                error: "An internal error occurred, try again later.".to_owned(),
             }),
         )
     })?;
     match storage.list_contracts() {
-        Ok(contracts) => Ok(Json(ListContractsResponse { contracts })),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )),
+        Ok(contracts) => {
+            debug!("Contracts listed successfully");
+            trace!("Contracts: {:?}", contracts);
+            Ok(Json(ListContractsResponse { contracts }))
+        }
+        Err(e) => {
+            error!("Failed to list contracts: {e}");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "An internal error occurred, try again later.".to_owned(),
+                }),
+            ))
+        }
     }
 }
 
