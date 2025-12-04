@@ -226,16 +226,16 @@ impl Storage for DuckDBStorage {
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         let mut rows = conn.prepare(
-            "SELECT event_hash, event_name, first_block, last_block FROM event_descriptor",
+            "SELECT event_hash, event_signature, event_name, first_block, last_block FROM event_descriptor",
         )?;
         let mut events = rows
             .query_map([], |row| {
                 Ok(EventDescriptorDb {
                     event_hash: row.get(0).optional()?,
-                    event_signature: None,
-                    event_name: row.get(1).optional()?,
-                    first_block: row.get(2).optional()?,
-                    last_block: row.get(3).optional()?,
+                    event_signature: row.get(1).optional()?,
+                    event_name: row.get(2).optional()?,
+                    first_block: row.get(3).optional()?,
+                    last_block: row.get(4).optional()?,
                     event_count: None,
                 })
             })?
