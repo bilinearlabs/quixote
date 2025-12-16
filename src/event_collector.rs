@@ -10,10 +10,10 @@ use alloy::{
     rpc::types::{Filter, SyncStatus},
 };
 use anyhow::Result;
-use futures::stream::{self, TryStreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 #[derive(Clone)]
 pub struct EventCollector {
@@ -25,6 +25,7 @@ pub struct EventCollector {
     poll_interval: u64,
     producer_buffer: TxLogChunk,
     default_block_range: usize,
+    block_range_hint_regex: regex::Regex,
 }
 
 impl EventCollector {
@@ -34,6 +35,10 @@ impl EventCollector {
         seed: &CollectorSeed,
         default_block_range: usize,
     ) -> Self {
+        // Regex to capture the last two integers (block numbers) from messages like:
+        // "error code -32602: query exceeds max results 20000, retry with the range 22382105-22382515"
+        let block_range_hint_regex = regex::Regex::new(r"(\d+)-(\d+)\s*$").unwrap();
+
         Self {
             contract_address: seed.contract_address,
             filter: seed.filter.clone(),
@@ -43,6 +48,7 @@ impl EventCollector {
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
             default_block_range,
+            block_range_hint_regex,
         }
     }
 
@@ -54,7 +60,14 @@ impl EventCollector {
             std::process::exit(1);
         }
 
+        // The last stored block number in the DB.
         let mut processed_to = self.start_block.saturating_sub(1);
+        // How many blocks per get_logs call.
+        let mut chunk_length = self.default_block_range as u64;
+        // Counts how many successful chunks have been processed.
+        let mut successful_counter: u8 = 0;
+        // Flag that indicates whether we are backfilling the database or fetching the finalized block.
+        let mut backfill_mode = true;
 
         loop {
             let provider = self.provider.clone();
@@ -69,25 +82,45 @@ impl EventCollector {
 
             let remaining = finalized_block.saturating_sub(processed_to);
             if remaining == 0 {
+                // First time, we completed the backfill of the DB, let's inform the user.
+                if backfill_mode {
+                    info!(
+                        "Backfill of the database completed, starting to fetch the finalized block."
+                    );
+                }
+                backfill_mode = false;
                 sleep(Duration::from_secs(self.poll_interval)).await;
                 continue;
             }
 
-            let chunk_starts: Vec<u64> = ((processed_to + 1)..=finalized_block)
-                .step_by(self.default_block_range)
-                .collect();
+            // Prepare a run of up to 5 times the chunk size.
+            let (chunk_starts, step) = if remaining > 5 * chunk_length {
+                (
+                    ((processed_to + 1)..=processed_to + 5 * chunk_length)
+                        .step_by(chunk_length as usize)
+                        .collect::<Vec<u64>>(),
+                    processed_to + 5 * chunk_length,
+                )
+            } else {
+                (
+                    ((processed_to + 1)..=finalized_block)
+                        .step_by(chunk_length as usize)
+                        .collect::<Vec<u64>>(),
+                    finalized_block,
+                )
+            };
 
             let contract_address = self.contract_address;
             let producer_buffer = self.producer_buffer.clone();
             let provider_clone = self.provider.clone();
-            let block_range = self.default_block_range;
-            stream::iter(
+
+            // Process the prepared chunks of the chain history concurrently.
+            // If an error is detected in the series, all the intermediate results are discarded, and the logic
+            // proceeds to reduce the block range and retry the series.
+            let rpc_results: Vec<LogChunk> = match stream::iter(
                 chunk_starts
                     .into_iter()
-                    .map(Ok::<u64, anyhow::Error>),
-            )
-            .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |chunk_start| {
-                let tx = producer_buffer.clone();
+            ).map(|chunk_start| {
                 let provider = provider_clone.clone();
 
                 async move {
@@ -100,11 +133,11 @@ impl EventCollector {
                     }
 
                     let chunk_end = std::cmp::min(
-                        chunk_start + block_range as u64 - 1,
+                        chunk_start + chunk_length - 1,
                         finalized_block,
                     );
 
-                    tracing::info!(
+                    info!(
                         "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
                         chunk_start, chunk_end, contract_address
                     );
@@ -121,24 +154,78 @@ impl EventCollector {
                         filter.topics = custom_filter.topics;
                     }
 
-                    debug!("Filter: {:?}", filter);
-
                     let events = provider.get_logs(&filter).await?;
 
-                    tx.send(LogChunk {
+                    Ok::<_, anyhow::Error>(LogChunk {
                         start_block: chunk_start,
                         end_block: chunk_end,
                         events,
                     })
-                    .await?;
-                    Ok(())
                 }
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("Error collecting events: {}", e))?;
 
-            // All blocks up to `finalized_block` have been queued for processing.
-            processed_to = finalized_block;
+            })
+            .buffer_unordered(MAX_CONCURRENT_RPC_REQUESTS)
+            .try_collect()
+            .await {
+                Ok(results) => results,
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    debug!("Discarded block range: [{processed_to}-{step}]");
+
+                    if err_msg.contains("-32602") {
+                        // Did we receive a hint of the valid range?
+                        let prev_chunk_length = chunk_length;
+                        chunk_length =
+                            if let Some(captures) = self.block_range_hint_regex.captures(&err_msg) {
+                                // Extract the two numbers from the regex capture groups
+                                if let (Some(first_match), Some(second_match)) =
+                                    (captures.get(1), captures.get(2)) {
+                                    let first: u64 = first_match.as_str().parse().unwrap_or(0);
+                                    let second: u64 = second_match.as_str().parse().unwrap_or(0);
+                                    let range = second.saturating_sub(first);
+                                    // And apply a safety margin of a 10% of the range.
+                                    range - (range / 10)
+                                } else {
+                                    chunk_length >> 1
+                                }
+                            } else {
+                                chunk_length >> 1
+                            };
+
+                        if chunk_length == 0 {
+                            return Err(anyhow::anyhow!(
+                                "Block range reduced to zero, cannot continue the indexing."
+                            ));
+                        }
+
+                        warn!("Throttled RPC server, reducing block range from {prev_chunk_length} to {chunk_length}");
+
+                        continue;
+                    } else {
+                        return Err(anyhow::anyhow!("Error received from the RPC server: {e}"));
+                    }
+                }
+            };
+
+            // Reached this statement, we are sure that no errors happened in the series of RPC requests, thus we
+            // can send the results to the consumer task for its storage in the DB.
+            stream::iter(rpc_results.into_iter().map(Ok::<LogChunk, anyhow::Error>))
+                .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |result| {
+                    let tx = producer_buffer.clone();
+                    async move {
+                        tx.send(result).await?;
+                        Ok(())
+                    }
+                })
+                .await?;
+
+            // If we reach the threshold of successful chunks, we can restore the block range to the default value.
+            if successful_counter == 32 {
+                chunk_length = self.default_block_range as u64;
+            }
+
+            processed_to = step;
+            successful_counter = successful_counter.wrapping_add(1);
         }
     }
 
