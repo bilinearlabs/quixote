@@ -238,3 +238,119 @@ impl EventCollector {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the EventCollector.
+    //!
+    //! # Description
+    //!
+    //! The tests included in this module are meant to ensure that the fetching logic behaves as expected. Single
+    //! [EventCollector] instances are launched for fetching some known block ranges whose results are compared
+    //! against a known set of events.
+
+    use super::*;
+    use crate::RpcHost;
+    use alloy::{
+        json_abi::{Event, JsonAbi},
+        providers::Provider,
+        providers::ProviderBuilder,
+        rpc::client::RpcClient,
+        transports::http::reqwest::Url,
+    };
+    use pretty_assertions::assert_eq;
+    use rstest::*;
+    use std::{str::FromStr, sync::Arc};
+    use tokio::sync::mpsc;
+
+    const TRANSFER_EVENT_HASH: &str =
+        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    /// How many transfer events are expected to be fetched within the block range 24022000-24023000
+    /// for the USDC contract.
+    const TRANSFER_EVENT_COUNT: usize = 58620;
+
+    /// Target block for the short test.
+    const TARGET_BLOCK_SHORT_TEST: u64 = 24023000;
+
+    #[fixture]
+    fn provider_fixture() -> Arc<dyn Provider + Send + Sync + 'static> {
+        use std::env;
+
+        // Get credentials and URL from environment variables
+        let rpc_url = env::var("QUIXOTE_TEST_RPC").expect("QUIXOTE_TEST_RPC must be set");
+        let rpc_user =
+            env::var("QUIXOTE_TEST_RPC_USER").expect("QUIXOTE_TEST_RPC_USER must be set");
+        let rpc_password =
+            env::var("QUIXOTE_TEST_RPC_PASSWORD").expect("QUIXOTE_TEST_RPC_PASSWORD must be set");
+
+        let host_str = format!("1:{}:{}@{}", rpc_user, rpc_password, rpc_url);
+        let host = host_str
+            .parse::<RpcHost>()
+            .expect("Failed to parse RPC host");
+        let url: Url = (&host)
+            .try_into()
+            .expect("Failed to convert RPC host to URL");
+
+        Arc::new(ProviderBuilder::new().connect_client(RpcClient::builder().http(url)))
+    }
+
+    #[fixture]
+    fn seed_fixture(usdc_events_fixture: Vec<Event>) -> CollectorSeed {
+        CollectorSeed {
+            // USDC contract address
+            contract_address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+                .unwrap(),
+            events: usdc_events_fixture,
+            start_block: 24022000,
+            sync_mode: BlockNumberOrTag::Latest,
+            filter: None,
+        }
+    }
+
+    #[fixture]
+    fn usdc_events_fixture() -> Vec<Event> {
+        let json = std::fs::read_to_string("./test/fixtures/usdc_abi.json")
+            .expect("Failed to read USDC ABI file");
+        let abi: JsonAbi = serde_json::from_str(&json).expect("Failed to parse USDC ABI");
+        let events = abi.events().cloned().collect::<Vec<Event>>();
+        events
+    }
+
+    /// This test ensures that the fetcher retrieves the expected amount of transfer events for a given block range.
+    #[rstest]
+    #[tokio::test]
+    async fn check_transfer_events_for_a_block_range(
+        provider_fixture: Arc<dyn Provider + Send + Sync + 'static>,
+        seed_fixture: CollectorSeed,
+    ) {
+        let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
+        // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+        collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
+
+        let handle = tokio::spawn(async move {
+            collector.collect().await.unwrap();
+        });
+
+        // Give enough time to fetch the events.
+        sleep(Duration::from_secs(20)).await;
+
+        handle.abort();
+
+        let mut transfer_events = 0;
+
+        while let Some(result) = consumer_buffer.recv().await {
+            transfer_events += result
+                .events
+                .iter()
+                .filter(|log| log.topic0().unwrap().to_string() == TRANSFER_EVENT_HASH)
+                .count();
+        }
+
+        assert_eq!(
+            transfer_events, TRANSFER_EVENT_COUNT,
+            "The number of transfer events fetched is not the expected one"
+        );
+    }
+}
