@@ -124,3 +124,17 @@ Both modes are excluding: the **event** mode takes precedence over the **ABI** m
 The indexer saves the synchronisation status for each indexed event in the DB. This way, if the indexer stops for any reason, it can resume indexing from the last synchronised block. There's a limitation, though. If the DB contains data from a previous **event** operation mode, it won't be able to resume indexing in **ABI** mode.
 
 Consider an initial indexing of 2 events of a smart contract's ABI. Later, you decide that you'd rather like to index the whole contract. This scenario is not supported, as the **ABI** mode requires all the included events to synchronize up to the same block. This check is not ensured when running in **event** mode, as each indexing task is launched asynchronously, and potentially to several RPC servers, which might ultimately end in having one indexing task going faster than the other.
+
+# Development
+
+## Testing
+
+In order to run some of the included tests, a connection to a powerful RPC server is required. The connection is handled via environment variables. You'll need to populate the following variables before running the tests:
+
+```bash
+$ export QUIXOTE_TEST_RPC=<http://myserver.com:8765>
+$ export QUIXOTE_TEST_RPC_USER=<user>
+$ export QUIXOTE_TEST_RPC_PASSWORD=<password>
+```
+
+Then simply run `cargo test`.
