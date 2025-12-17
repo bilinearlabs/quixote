@@ -353,4 +353,42 @@ mod tests {
             "The number of transfer events fetched is not the expected one"
         );
     }
+
+    /// This test ensures that the fetcher handles an error coming from the RPC server due to throttling.
+    #[rstest]
+    #[tokio::test]
+    async fn simple_throttling_test(
+        provider_fixture: Arc<dyn Provider + Send + Sync + 'static>,
+        seed_fixture: CollectorSeed,
+    ) {
+        let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
+        // 10k throttles the RPC at the second request.
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10000);
+        collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
+
+        let handle = tokio::spawn(async move {
+            collector.collect().await.unwrap();
+        });
+
+        // Give enough time to fetch the events.
+        sleep(Duration::from_secs(20)).await;
+
+        handle.abort();
+
+        let mut transfer_events = 0;
+
+        while let Some(result) = consumer_buffer.recv().await {
+            transfer_events += result
+                .events
+                .iter()
+                .filter(|log| log.topic0().unwrap().to_string() == TRANSFER_EVENT_HASH)
+                .count();
+        }
+
+        assert_eq!(
+            transfer_events, TRANSFER_EVENT_COUNT,
+            "The number of transfer events fetched is not the expected one"
+        );
+    }
 }
