@@ -372,7 +372,7 @@ mod tests {
         });
 
         // Give enough time to fetch the events.
-        sleep(Duration::from_secs(40)).await;
+        sleep(Duration::from_secs(50)).await;
 
         handle.abort();
 
