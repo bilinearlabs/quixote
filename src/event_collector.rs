@@ -94,12 +94,12 @@ impl EventCollector {
             }
 
             // Prepare a run of up to 5 times the chunk size.
-            let (chunk_starts, step) = if remaining > 5 * chunk_length {
+            let (chunk_starts, step) = if remaining > CHUNK_MULTIPLIER * chunk_length {
                 (
-                    ((processed_to + 1)..=processed_to + 5 * chunk_length)
+                    ((processed_to + 1)..=processed_to + CHUNK_MULTIPLIER * chunk_length)
                         .step_by(chunk_length as usize)
                         .collect::<Vec<u64>>(),
-                    processed_to + 5 * chunk_length,
+                    processed_to + CHUNK_MULTIPLIER * chunk_length,
                 )
             } else {
                 (
@@ -220,7 +220,7 @@ impl EventCollector {
                 .await?;
 
             // If we reach the threshold of successful chunks, we can restore the block range to the default value.
-            if successful_counter == 32 {
+            if successful_counter == SUCCESSFUL_CHUNKS_THRESHOLD {
                 chunk_length = self.default_block_range as u64;
             }
 
