@@ -13,6 +13,7 @@ pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
+pub mod streamlit_wrapper;
 
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
@@ -60,6 +61,8 @@ pub mod error_codes {
     pub const ERROR_CODE_BAD_DB_STATE: i32 = 3;
     /// Wrong input arguments.
     pub const ERROR_CODE_WRONG_INPUT_ARGUMENTS: i32 = 4;
+    /// Indexing failed.
+    pub const ERROR_CODE_INDEXING_FAILED: i32 = 5;
 }
 
 /// Module with definitions related to the storage of the indexed data.
