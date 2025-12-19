@@ -2,9 +2,10 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use etherduck::{cli::IndexingArgs, indexing_app::IndexingApp};
-use etherduck::{
+use quixote::{
+    cli::IndexingArgs,
     error_codes,
+    indexing_app::IndexingApp,
     streamlit_wrapper::{FrontendOptions, start_frontend},
 };
 use tracing::error;

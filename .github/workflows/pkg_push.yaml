@@ -26,7 +26,7 @@ jobs:
                 dockerfile: ./Containerfile
                 labels: io.containers.autoupdate=registry
                 tags: ghcr.io/${{ github.repository }}:${{ env.VERSION }} ghcr.io/${{ github.repository }}:latest
-                extra_args: --annotation org.opencontainers.image.authors=Felipe\ Torres\ Gonzalez<felipe@bilinearlabs.io> --annotation org.opencontainers.image.description=Etherduck\ Indexer
+                extra_args: --annotation org.opencontainers.image.authors=Felipe\ Torres\ Gonzalez<felipe@bilinearlabs.io> --annotation org.opencontainers.image.description=Quixote\ Indexer
                 push: true
                 security: |
                   --security-opt=seccomp=unconfined

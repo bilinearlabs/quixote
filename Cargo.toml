@@ -1,9 +1,9 @@
 [package]
-name = "etherduck"
+name = "quixote"
 version = "0.1.0"
 edition = "2024"
 description = "Rust-based indexing tool that indexes EVM events"
-repository = "https://github.com/bilinearlabs/etherduck"
+repository = "https://github.com/bilinearlabs/quixote"
 homepage = "https://www.bilinearlabs.io"
 readme = "README.md"
 keywords = ["evm", "indexing", "events", "ethereum"]

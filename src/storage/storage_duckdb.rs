@@ -519,7 +519,7 @@ impl DuckDBStorage {
             DuckDBStorage::create_db_base(&conn_mutex)?;
             conn_mutex
         } else {
-            // Try to retrieve version from etherduck_info table using a query
+            // Try to retrieve version from quixote_info table using a query
             let version: String = conn
                 .query_row(
                     format!("SELECT version FROM {DUCKDB_BASE_TABLE_NAME} LIMIT 1").as_str(),

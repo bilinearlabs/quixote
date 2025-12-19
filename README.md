@@ -14,9 +14,9 @@ Simple command line tool that allows indexing events of a blockchain.
 The tool expects a set of arguments that identify the RPC host from which the data is going to be pulled, along the target event for the indexing and the contract address.
 
 ```raw
-Etherduck
+Quixote
 
-Usage: etherduck [OPTIONS] --rpc-host <RPC_HOST> --contract <CONTRACT>
+Usage: quixote [OPTIONS] --rpc-host <RPC_HOST> --contract <CONTRACT>
 
 Options:
   -r, --rpc-host <RPC_HOST>        RPC host to index.
@@ -33,7 +33,7 @@ Options:
   -s, --start-block <START_BLOCK>  Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.
                                    Example => 28837711
                                    Default: latest
-  -d, --database <DATABASE>        Path to the database file. Default: etherduck_indexer.duckdb
+  -d, --database <DATABASE>        Path to the database file. Default: quixote_indexer.duckdb
   -a, --abi-spec <ABI_SPEC>        Path for the ABI JSON spec of the indexed contract. When give, the entire set of events defined in the ABI will be indexed.
   -j, --api-server <API_SERVER>    Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720
   -h, --help                       Print help (see more with '--help')
@@ -43,7 +43,7 @@ Options:
 This way, an example of usage would be:
 
 ```bash
-$ etherduck -r 1@https://eth.llamarpc.com \
+$ quixote -r 1@https://eth.llamarpc.com \
     -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
     -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
     -s 23744000
@@ -52,7 +52,7 @@ $ etherduck -r 1@https://eth.llamarpc.com \
 To increase the verbosity level up to _debug_, the environment variable `RUST_LOG` shall be used:
 
 ```bash
-$ etherduck -r 1@https://eth.llamarpc.com \
+$ quixote -r 1@https://eth.llamarpc.com \
     -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
     -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
     -s 23744000
@@ -61,7 +61,7 @@ $ etherduck -r 1@https://eth.llamarpc.com \
 Another example for indexing Transfer and Approval events:
 
 ```bash
-$ etherduck -r 1@https://eth.llamarpc.com \
+$ quixote -r 1@https://eth.llamarpc.com \
     -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
     -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
     -e "Approval(address indexed owner, address indexed spender, uint256 value)" \
@@ -85,7 +85,7 @@ The data base includes this schema:
 This table is a record of the indexed blocks. The first and latest indexed blocks can be easily retrieved from a metadata table, though:
 
 ```sql
-SELECT first_block, last_block FROM etherduck_info;
+SELECT first_block, last_block FROM quixote_info;
 ```
 
 The table *blocks* includes these fields:

@@ -8,7 +8,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(author = "Bilinear Labs")]
 #[command(version = "0.1.0")]
-#[command(about = "Etherduck")]
+#[command(about = "Quixote")]
 #[command(long_about = "Ethereum event indexing tool")]
 pub struct IndexingArgs {
     #[arg(
