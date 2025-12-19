@@ -18,6 +18,8 @@ async fn main() -> Result<()> {
     setup_tracing(args.verbosity)?;
 
     let disable_frontend = args.disable_frontend;
+    let frontend_address = args.frontend_address.clone();
+    let frontend_port = args.frontend_port;
 
     // Run the indexing app.
     let app = IndexingApp::build_app(args).with_context(|| "Failed to build the indexing app")?;
@@ -32,8 +34,13 @@ async fn main() -> Result<()> {
     // Launch the Streamlit frontend if not disabled.
     if !disable_frontend {
         tracing::info!("Launching frontend");
-        // TODO: Add options to configure the frontend.
-        if let Err(e) = start_frontend(FrontendOptions::default()).await {
+        let frontend_options = FrontendOptions {
+            url: frontend_address,
+            port: frontend_port,
+            ..Default::default()
+        };
+
+        if let Err(e) = start_frontend(frontend_options).await {
             error!("{e}");
             error!(
                 "The frontend is disabled due to an error. Please restart the application to launch again the frontend."
