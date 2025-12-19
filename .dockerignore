@@ -2,4 +2,4 @@ target
 **/target
 Containerfile
 abi/*
-frontend/*
+quixote_frontend_env/*

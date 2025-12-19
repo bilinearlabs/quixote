@@ -69,4 +69,10 @@ pub struct IndexingArgs {
         default_value_t = 1
     )]
     pub verbosity: u8,
+    #[arg(
+        long,
+        help = "Disable the frontend application.",
+        default_value_t = false
+    )]
+    pub disable_frontend: bool,
 }

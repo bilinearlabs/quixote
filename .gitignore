@@ -1,3 +1,4 @@
 /target
 *.duckdb
 *.duckdb.wal
+quixote_frontend_env/*

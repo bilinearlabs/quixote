@@ -13,6 +13,7 @@ pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
+pub mod streamlit_wrapper;
 
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
@@ -66,6 +67,8 @@ pub mod error_codes {
     pub const ERROR_CODE_BAD_DB_STATE: i32 = 3;
     /// Wrong input arguments.
     pub const ERROR_CODE_WRONG_INPUT_ARGUMENTS: i32 = 4;
+    /// Indexing failed.
+    pub const ERROR_CODE_INDEXING_FAILED: i32 = 5;
 }
 
 /// Module with definitions related to the storage of the indexed data.
@@ -73,56 +76,29 @@ pub mod storage {
     pub mod storage_api;
     pub use storage_api::Storage;
     pub mod storage_duckdb;
-    pub mod storage_query;
     pub use storage_duckdb::{DuckDBStorage, DuckDBStorageFactory};
-    pub use storage_query::StorageQuery;
 
-    use alloy::primitives::Address;
-    pub use chrono::{DateTime, Utc};
-    use serde::{Serialize, Serializer};
+    use serde::Serialize;
 
     // Objects for the REST API.
 
     /// Data object that represents an event descriptor in the database.
-    #[derive(Debug, Clone, Serialize)]
+    #[derive(Debug, Clone, Serialize, Default)]
+    #[serde(rename_all = "camelCase")]
     pub struct EventDescriptorDb {
-        pub event_hash: String,
-        pub event_signature: String,
-        pub event_name: String,
-    }
-
-    /// Data object that represents an event in the database.
-    ///
-    /// TODO: Update the fields to include the non-indexed parameters.
-    #[derive(Debug, Clone, Serialize)]
-    pub struct EventDb {
-        pub block_number: u64,
-        pub transaction_hash: String,
-        pub log_index: u64,
-        pub contract_address: Address,
-        pub topic0: String,
-        pub topic1: Option<String>,
-        pub topic2: Option<String>,
-        pub topic3: Option<String>,
-        #[serde(serialize_with = "serialize_timestamp")]
-        pub block_timestamp: u64,
-    }
-
-    /// Serializes a timestamp to an ISO 8601 string.
-    fn serialize_timestamp<S>(timestamp: &u64, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Serialize as ISO 8601 string
-        let dt = DateTime::<Utc>::from_timestamp(*timestamp as i64, 0)
-            .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
-        serializer.serialize_str(&dt.to_rfc3339())
+        pub event_hash: Option<String>,
+        pub event_signature: Option<String>,
+        pub event_name: Option<String>,
+        pub first_block: Option<u64>,
+        pub last_block: Option<u64>,
+        pub event_count: Option<usize>,
     }
 
     /// Data object that represents a contract descriptor in the database.
     #[derive(Debug, Clone, Serialize)]
     pub struct ContractDescriptorDb {
         pub contract_address: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub contract_name: Option<String>,
     }
 }

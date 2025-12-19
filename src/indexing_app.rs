@@ -109,8 +109,6 @@ impl IndexingApp {
         .await
         .with_context(|| "Failure in the REST API server")?;
 
-        info!("REST API server listening on {}", self.api_server_address);
-
         info!("Starting the indexing of events");
 
         // Launch teh event processor

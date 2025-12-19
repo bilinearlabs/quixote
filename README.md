@@ -72,6 +72,10 @@ The previous call would launch an instance of the tool for indexing ERC20 Transf
 
 The event needs to be fully defined to properly index the events for the chosen smartcontract. **Take the definition from the contract's ABI.**.
 
+### Embedded Frontend
+
+The indexer launches a frontend along the main indexer service, which is available at `http://127.0.0.1:8501`.
+
 ## Data Base Schema
 
 The data base includes this schema:
@@ -138,3 +142,17 @@ $ export QUIXOTE_TEST_RPC_PASSWORD=<password>
 ```
 
 Then simply run `cargo test`.
+
+## How To Package the Frontend
+
+The included frontend runs as a Python application that is called within the main indexer service. To ease running the embedded Python script, a complete environment that includes the Python interpreter along all the needed dependencies is delivered. This way, users of the app won't need to struggle with their local Python installation nor dependencies.
+
+The only requirement to build the environment package is [Conda](https://docs.conda.io/en/latest/). Having **Conda** installed using any of its flavours, the following steps will generate the package to run the frontend:
+
+```bash
+$ conda create -n quixote_frontend_env python=3.11 streamlit pyarrow -y
+$ conda install -c conda-forge conda-pack -y
+$ conda pack -n quixote_frontend_env -o quixote_frontend_env.tar.gz
+```
+
+The compressed package can be distributed so end users only need to extract it to run the full application.
