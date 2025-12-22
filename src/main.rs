@@ -8,8 +8,8 @@ use quixote::{
     indexing_app::IndexingApp,
     streamlit_wrapper::{FrontendOptions, start_frontend},
 };
-use tracing::error;
-use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
+use tracing::{Level, error};
+use tracing_subscriber::{filter::Targets, fmt, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -55,14 +55,16 @@ async fn main() -> Result<()> {
 }
 
 fn setup_tracing(verbosity: u8) -> Result<()> {
+    let tracing_level = match verbosity {
+        0 => Level::WARN,
+        1 => Level::INFO,
+        2 => Level::DEBUG,
+        _ => Level::TRACE,
+    };
+
     tracing_subscriber::registry()
         .with(fmt::layer().with_target(true).with_line_number(false))
-        .with(match verbosity {
-            0 => LevelFilter::WARN,
-            1 => LevelFilter::INFO,
-            2 => LevelFilter::DEBUG,
-            _ => LevelFilter::TRACE,
-        })
+        .with(Targets::new().with_target("quixote", tracing_level))
         .try_init()?;
 
     Ok(())
