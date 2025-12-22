@@ -29,7 +29,7 @@ RUN arch=$(uname -m) && \
 
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-RUN conda create --prefix=./quixote_frontend_env python=3.11 streamlit pyarrow -y
+RUN conda create --prefix=/app/quixote_frontend_env python=3.11 streamlit pyarrow -y
 
 WORKDIR /app
 COPY . .
