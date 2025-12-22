@@ -64,7 +64,11 @@ fn setup_tracing(verbosity: u8) -> Result<()> {
 
     tracing_subscriber::registry()
         .with(fmt::layer().with_target(true).with_line_number(false))
-        .with(Targets::new().with_target("quixote", tracing_level))
+        .with(
+            Targets::new()
+                .with_target("quixote", tracing_level)
+                .with_target("streamlit", tracing_level),
+        )
         .try_init()?;
 
     Ok(())
