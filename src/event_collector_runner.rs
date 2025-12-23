@@ -248,9 +248,14 @@ impl EventCollectorRunner {
             let seed = seed.clone();
             let default_block_range = self.default_block_range;
 
+            let contract_label = seed
+                .contract_address
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|| "any".to_string());
+
             info!(
                 "Spawning collector for seed {} (contract: {}, start_block: {}) on RPC host {}",
-                seed_index, seed.contract_address, seed.start_block, host_index
+                seed_index, contract_label, seed.start_block, host_index
             );
 
             let handle = tokio::spawn(async move {
@@ -258,9 +263,13 @@ impl EventCollectorRunner {
                     EventCollector::new(provider, producer_buffer, &seed, default_block_range);
 
                 if let Err(e) = collector.collect().await {
+                    let contract_label = seed
+                        .contract_address
+                        .map(|addr| addr.to_string())
+                        .unwrap_or_else(|| "any".to_string());
                     error!(
                         "Collector for seed {} (contract: {}) failed: {}",
-                        seed_index, seed.contract_address, e
+                        seed_index, contract_label, e
                     );
                 }
             });

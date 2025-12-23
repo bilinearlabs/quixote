@@ -17,7 +17,7 @@ use tracing::{debug, error};
 
 #[derive(Clone)]
 pub struct EventCollector {
-    contract_address: Address,
+    contract_address: Option<Address>,
     filter: Option<Filter>,
     start_block: u64,
     provider: Arc<dyn Provider + Send + Sync>,
@@ -104,17 +104,22 @@ impl EventCollector {
                         finalized_block,
                     );
 
+                    let contract_label = contract_address
+                        .map(|addr| addr.to_string())
+                        .unwrap_or_else(|| "any".to_string());
                     tracing::info!(
-                        "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
-                        chunk_start, chunk_end, contract_address
+                        "Fetching events for blocks [{:?}-{:?}] contract address: {}",
+                        chunk_start, chunk_end, contract_label
                     );
 
                     // Build the base filter for the get_Logs call. By default, all the events for a given smart
                     // contract are fetched.
                     let mut filter = Filter::new()
                         .from_block(chunk_start)
-                        .to_block(chunk_end)
-                        .address(contract_address);
+                        .to_block(chunk_end);
+                    if let Some(contract_address) = contract_address {
+                        filter = filter.address(contract_address);
+                    }
 
                     // Add custom filters (topics) if provided.
                     if let Some(custom_filter) = self.filter.clone() && !custom_filter.topics.is_empty() {

@@ -3,7 +3,7 @@
 //! Module that handles the command line interface.
 
 use crate::constants;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(author = "Bilinear Labs")]
@@ -23,9 +23,11 @@ pub struct IndexingArgs {
     #[arg(
         short,
         long,
-        help = "Contract to index.\nExample: 0x1234567890123456789012345678901234567890"
+        help = "Contract to index (optional).\n\
+            Example: 0x1234567890123456789012345678901234567890\n\
+            When omitted, all contracts emitting the selected events will be indexed."
     )]
-    pub contract: String,
+    pub contract: Option<String>,
     #[arg(
         short,
         long,
@@ -50,6 +52,20 @@ pub struct IndexingArgs {
         help = "Path for the ABI JSON spec of the indexed contract. When give, the entire set of events defined in the ABI will be indexed."
     )]
     pub abi_spec: Option<String>,
+    #[arg(
+        long,
+        help = "Indexed topic filters in the form EventName.field=value (repeatable).\n\
+            The field must be indexed in the event. Example:\n\
+            --filter \"Transfer.from=0x396343362be2a4da1ce0c1c210945346fb82aa49\""
+    )]
+    pub filter: Option<Vec<String>>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = FilterMode::And,
+        help = "How to combine filters across indexed params: and (default) or"
+    )]
+    pub filter_mode: FilterMode,
     #[arg(
         short = 'j',
         long,
@@ -83,4 +99,11 @@ pub struct IndexingArgs {
     pub frontend_address: String,
     #[arg(long, help = "Frontend listening port", default_value_t = 8501)]
     pub frontend_port: u16,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FilterMode {
+    #[default]
+    And,
+    Or,
 }

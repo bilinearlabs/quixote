@@ -117,19 +117,48 @@ impl Storage for DuckDBStorage {
             // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
 
-            let event_signature = self
-                .event_descriptors
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?
-                .get(&event_hash)
-                .unwrap()
-                .clone();
+            let event_signature = {
+                let mut descriptors = self
+                    .event_descriptors
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?;
 
-            let event_name = Event::parse(&event_signature)
-                .unwrap()
-                .name
-                .as_str()
-                .to_ascii_lowercase();
+                if let Some(signature) = descriptors.get(&event_hash) {
+                    signature.clone()
+                } else {
+                    // Attempt to fetch the descriptor from the database as a fallback.
+                    match tx.query_row(
+                        "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
+                        [event_hash.as_str()],
+                        |row| row.get::<_, String>(0),
+                    ) {
+                        Ok(signature) => {
+                            descriptors.insert(event_hash.clone(), signature.clone());
+                            signature
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Skipping log with unknown event hash: {}. Did you include this event?",
+                                event_hash
+                            );
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            let parsed_event = match Event::parse(&event_signature) {
+                Ok(event) => event,
+                Err(e) => {
+                    warn!(
+                        "Skipping log with unparsable event signature {}: {}",
+                        event_signature, e
+                    );
+                    continue;
+                }
+            };
+
+            let event_name = parsed_event.name.as_str().to_ascii_lowercase();
             let table_name = format!("event_{event_name}_{event_hash}");
             events_by_table
                 .entry(table_name)

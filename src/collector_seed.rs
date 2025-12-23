@@ -22,7 +22,7 @@ use tracing::warn;
 /// events, but as they all belong to the same job, they all need to synchronize up to the same block.
 #[derive(Debug, Clone)]
 pub struct CollectorSeed {
-    pub contract_address: Address,
+    pub contract_address: Option<Address>,
     pub events: Vec<Event>,
     pub start_block: u64,
     pub sync_mode: BlockNumberOrTag,
@@ -39,7 +39,7 @@ impl CollectorSeed {
     ///
     /// TODO: support filters
     pub async fn new(
-        contract_address: Address,
+        contract_address: Option<Address>,
         events: Vec<Event>,
         start_block: u64,
         filter: Option<Filter>,
