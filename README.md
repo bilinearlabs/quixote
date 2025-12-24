@@ -131,6 +131,32 @@ Consider an initial indexing of 2 events of a smart contract's ABI. Later, you d
 
 # Development
 
+## Building the Project
+
+Building the project requires dynamic linking to DuckDB to avoid compiling it from source. Follow these steps (adjust for your architecture):
+- Linux:
+```bash
+$ wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
+$ unzip libduckdb-linux-amd64.zip -d libduckdb
+
+$ export DUCKDB_LIB_DIR=$PWD/libduckdb
+$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+$ export LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
+
+$ cargo build
+```
+- macOS:
+```bash
+$ wget wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-osx-universal.zip
+$ unzip libduckdb-osx-universal.zip -d libduckdb
+
+$ export DUCKDB_LIB_DIR=$PWD/libduckdb
+$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+$ export LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
+
+$ cargo build
+```
+
 ## Testing
 
 In order to run some of the included tests, a connection to a powerful RPC server is required. The connection is handled via environment variables. You'll need to populate the following variables before running the tests:
