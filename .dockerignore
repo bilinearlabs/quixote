@@ -1,5 +1,25 @@
-target
-**/target
-Containerfile
-abi/*
-quixote_frontend_env/*
+# Build artifacts
+target/
+
+# Database files
+*.duckdb
+*.duckdb.wal
+
+# Local conda environment
+quixote_frontend_env/
+
+# Downloaded libraries (will be fetched during build)
+libduckdb/
+*.zip
+*.tar.gz
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.log
