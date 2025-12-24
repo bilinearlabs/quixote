@@ -29,7 +29,7 @@ RUN arch=$(uname -m) && \
 
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
-RUN conda create -n quixote_frontend_env python=3.11 streamlit pyarrow -y
+RUN conda create --prefix=/app/quixote_frontend_env python=3.11 streamlit pyarrow -y
 
 WORKDIR /app
 COPY . .
@@ -39,7 +39,7 @@ RUN cargo build --release
 
 FROM docker.io/debian:trixie-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/target/release/etherduck etherduck
+COPY --from=builder /app/target/release/quixote quixote
 COPY --from=builder /app/frontend/generic_dashboard.py frontend/generic_dashboard.py
 COPY --from=builder /app/quixote_frontend_env quixote_frontend_env
-ENTRYPOINT [ "./etherduck" ]
+ENTRYPOINT [ "./quixote" ]

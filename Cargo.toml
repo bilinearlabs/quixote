@@ -1,17 +1,18 @@
 [package]
-name = "etherduck"
+name = "quixote"
 version = "0.1.0"
 edition = "2024"
 description = "Rust-based indexing tool that indexes EVM events"
-repository = "https://github.com/bilinearlabs/etherduck"
+repository = "https://github.com/bilinearlabs/quixote"
 homepage = "https://www.bilinearlabs.io"
 readme = "README.md"
 keywords = ["evm", "indexing", "events", "ethereum"]
 
 [dependencies]
-alloy = { version = "1.1.2", features = ["rpc-types", "json", "rpc-client", "json-rpc"] }
+alloy = { version = "1.2.1", features = ["rpc-types", "json", "rpc-client", "json-rpc"] }
 anyhow = "1.0.100"
 axum = { version = "0.8.7", features = ["default", "http2"] }
+hex = "0.4"
 clap = { version = "4.5.51", features = ["derive"] }
 duckdb = { version = "1.4.2", features = ["bundled"] }
 futures = "0.3.31"

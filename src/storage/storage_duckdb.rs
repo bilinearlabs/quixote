@@ -20,7 +20,7 @@ use serde_json::{Map, Number, Value, json};
 use std::{
     collections::{HashMap, HashSet},
     string::ToString,
-    sync::Mutex,
+    sync::{Mutex, RwLock},
 };
 use tracing::{debug, error, info, warn};
 
@@ -28,7 +28,7 @@ use tracing::{debug, error, info, warn};
 pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     db_path: String,
-    event_descriptors: Mutex<HashMap<String, String>>,
+    event_descriptors: RwLock<HashMap<String, Event>>,
 }
 
 /// Simple factory pattern to allow opening a new connection to the same database from a task.
@@ -99,9 +99,6 @@ impl Storage for DuckDBStorage {
 
         // Second stage: insert the new events into the event_X table.
 
-        // Cache parsed events by event_hash to avoid repeated DB queries and parsing
-        let mut event_cache: HashMap<String, Event> = HashMap::new();
-
         // Group events by table name for bulk insertion using appenders
         let mut events_by_table: HashMap<String, Vec<&Log>> = HashMap::new();
 
@@ -119,18 +116,21 @@ impl Storage for DuckDBStorage {
 
             let event_signature = self
                 .event_descriptors
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?
+                .read()
+                .map_err(|_| anyhow::anyhow!("Failed to acquire read lock for the event descriptor"))?
                 .get(&event_hash)
-                .unwrap()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Event descriptor not found for hash: {}. Ensure the event is registered before processing.",
+                        event_hash
+                    )
+                })?
                 .clone();
 
-            let event_name = Event::parse(&event_signature)
-                .unwrap()
-                .name
-                .as_str()
-                .to_ascii_lowercase();
-            let table_name = format!("event_{event_name}_{event_hash}");
+            let table_name = format!(
+                "event_{}_{event_hash}",
+                event_signature.name.as_str().to_ascii_lowercase()
+            );
             events_by_table
                 .entry(table_name)
                 .or_insert_with(Vec::new)
@@ -146,17 +146,18 @@ impl Storage for DuckDBStorage {
             // Get event_hash from table name (remove "event_" prefix)
             let event_hash = table_name.split("_").nth(2).unwrap().to_string();
 
-            // Get or cache the parsed event
-            let parsed_event = event_cache.entry(event_hash.clone()).or_insert_with(|| {
-                let event_signature: String = tx
-                    .query_row(
-                        "SELECT event_signature FROM event_descriptor WHERE event_hash = ?",
-                        [event_hash.as_str()],
-                        |row| row.get(0),
+            // Get the parsed event from the event descriptors
+            let parsed_event = self
+                .event_descriptors
+                .read()
+                .map_err(|_| anyhow::anyhow!("Failed to acquire read lock for the event descriptor"))?
+                .get(&event_hash)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Event descriptor not found for hash: {event_hash}. Ensure the event is registered before processing.",
                     )
-                    .expect("Event signature not found in database");
-                Event::parse(&event_signature).expect("Failed to parse event signature")
-            });
+                })?
+                .clone();
 
             let mut appender = tx.appender(&table_name)?;
 
@@ -189,18 +190,7 @@ impl Storage for DuckDBStorage {
                     parsed_event.decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())
                 {
                     for item in body {
-                        let value = match item {
-                            DynSolValue::Address(a) => a.to_string(),
-                            DynSolValue::Bool(b) => b.to_string(),
-                            DynSolValue::Int(i, _) => i.to_string(),
-                            DynSolValue::Uint(u, _) => u.to_string(),
-                            DynSolValue::String(s) => s.to_string(),
-                            _ => {
-                                error!("Unsupported value: {:?}", item);
-                                continue;
-                            }
-                        };
-                        row_vals.push(value);
+                        row_vals.push(Self::dyn_sol_value_to_string(&item));
                     }
                 }
 
@@ -292,15 +282,12 @@ impl Storage for DuckDBStorage {
 
     fn include_events(&self, events: &[Event]) -> Result<()> {
         DuckDBStorage::create_event_schema(&self.conn, events)?;
-        let mut event_descriptors = self
-            .event_descriptors
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Failed to acquire lock for the event descriptor"))?;
+        let mut event_descriptors = self.event_descriptors.write().map_err(|_| {
+            anyhow::anyhow!("Failed to acquire write lock for the event descriptor")
+        })?;
+        // Populate the local cache of the indexed events.
         for event in events {
-            event_descriptors.insert(
-                event.selector().to_string(),
-                event.full_signature().to_string(),
-            );
+            event_descriptors.insert(event.selector().to_string(), event.clone());
         }
 
         Ok(())
@@ -519,7 +506,7 @@ impl DuckDBStorage {
             DuckDBStorage::create_db_base(&conn_mutex)?;
             conn_mutex
         } else {
-            // Try to retrieve version from etherduck_info table using a query
+            // Try to retrieve version from quixote_info table using a query
             let version: String = conn
                 .query_row(
                     format!("SELECT version FROM {DUCKDB_BASE_TABLE_NAME} LIMIT 1").as_str(),
@@ -541,7 +528,7 @@ impl DuckDBStorage {
         Ok(DuckDBStorage {
             conn: conn_mutex,
             db_path: db_path.to_string(),
-            event_descriptors: Mutex::new(HashMap::new()),
+            event_descriptors: RwLock::new(HashMap::new()),
         })
     }
 
@@ -819,5 +806,45 @@ impl DuckDBStorage {
         }
 
         Ok(column_names)
+    }
+
+    /// Converts a `DynSolValue` to a String representation.
+    ///
+    /// # Description
+    ///
+    /// For simple types, returns their natural string representation.
+    /// For complex types (arrays, tuples), flattens them into a JSON-like string format.
+    fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
+        match value {
+            DynSolValue::Address(a) => a.to_string(),
+            DynSolValue::Bool(b) => b.to_string(),
+            DynSolValue::Int(i, _) => i.to_string(),
+            DynSolValue::Uint(u, _) => u.to_string(),
+            DynSolValue::String(s) => s.clone(),
+            DynSolValue::FixedBytes(bytes, size) => {
+                // Convert fixed bytes to hex string, taking only the relevant bytes
+                format!("0x{}", hex::encode(&bytes[..(*size).min(32)]))
+            }
+            DynSolValue::Bytes(bytes) => {
+                // Convert dynamic bytes to hex string
+                format!("0x{}", hex::encode(bytes))
+            }
+            DynSolValue::Function(f) => {
+                // Function is 24 bytes: 20 bytes address + 4 bytes selector
+                format!("0x{}", hex::encode(f.as_slice()))
+            }
+            DynSolValue::Array(values) | DynSolValue::FixedArray(values) => {
+                // Flatten array into a JSON-like string representation
+                let elements: Vec<String> =
+                    values.iter().map(Self::dyn_sol_value_to_string).collect();
+                format!("[{}]", elements.join(","))
+            }
+            DynSolValue::Tuple(values) => {
+                // Flatten tuple into a JSON-like string representation
+                let elements: Vec<String> =
+                    values.iter().map(Self::dyn_sol_value_to_string).collect();
+                format!("({})", elements.join(","))
+            }
+        }
     }
 }

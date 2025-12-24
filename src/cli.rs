@@ -8,7 +8,7 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(author = "Bilinear Labs")]
 #[command(version = "0.1.0")]
-#[command(about = "Etherduck")]
+#[command(about = "Quixote")]
 #[command(long_about = "Ethereum event indexing tool")]
 pub struct IndexingArgs {
     #[arg(
@@ -75,4 +75,12 @@ pub struct IndexingArgs {
         default_value_t = false
     )]
     pub disable_frontend: bool,
+    #[arg(
+        long,
+        help = "Frontend listening address",
+        default_value_t = String::from("127.0.0.1"),
+    )]
+    pub frontend_address: String,
+    #[arg(long, help = "Frontend listening port", default_value_t = 8501)]
+    pub frontend_port: u16,
 }

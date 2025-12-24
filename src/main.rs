@@ -2,13 +2,14 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use etherduck::{cli::IndexingArgs, indexing_app::IndexingApp};
-use etherduck::{
+use quixote::{
+    cli::IndexingArgs,
     error_codes,
+    indexing_app::IndexingApp,
     streamlit_wrapper::{FrontendOptions, start_frontend},
 };
-use tracing::error;
-use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*};
+use tracing::{Level, error};
+use tracing_subscriber::{filter::Targets, fmt, prelude::*};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,6 +19,8 @@ async fn main() -> Result<()> {
     setup_tracing(args.verbosity)?;
 
     let disable_frontend = args.disable_frontend;
+    let frontend_address = args.frontend_address.clone();
+    let frontend_port = args.frontend_port;
 
     // Run the indexing app.
     let app = IndexingApp::build_app(args).with_context(|| "Failed to build the indexing app")?;
@@ -32,8 +35,13 @@ async fn main() -> Result<()> {
     // Launch the Streamlit frontend if not disabled.
     if !disable_frontend {
         tracing::info!("Launching frontend");
-        // TODO: Add options to configure the frontend.
-        if let Err(e) = start_frontend(FrontendOptions::default()).await {
+        let frontend_options = FrontendOptions {
+            url: frontend_address,
+            port: frontend_port,
+            ..Default::default()
+        };
+
+        if let Err(e) = start_frontend(frontend_options).await {
             error!("{e}");
             error!(
                 "The frontend is disabled due to an error. Please restart the application to launch again the frontend."
@@ -47,14 +55,20 @@ async fn main() -> Result<()> {
 }
 
 fn setup_tracing(verbosity: u8) -> Result<()> {
+    let tracing_level = match verbosity {
+        0 => Level::WARN,
+        1 => Level::INFO,
+        2 => Level::DEBUG,
+        _ => Level::TRACE,
+    };
+
     tracing_subscriber::registry()
         .with(fmt::layer().with_target(true).with_line_number(false))
-        .with(match verbosity {
-            0 => LevelFilter::WARN,
-            1 => LevelFilter::INFO,
-            2 => LevelFilter::DEBUG,
-            _ => LevelFilter::TRACE,
-        })
+        .with(
+            Targets::new()
+                .with_target("quixote", tracing_level)
+                .with_target("streamlit", tracing_level),
+        )
         .try_init()?;
 
     Ok(())

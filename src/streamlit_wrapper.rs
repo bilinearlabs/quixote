@@ -33,8 +33,8 @@ impl Default for FrontendOptions {
 
 /// Configures and starts the Python frontend based on Streamlit.
 pub async fn start_frontend(options: FrontendOptions) -> Result<()> {
-    // Use ETHERDUCK_HOME if set, otherwise use current working directory
-    let app_root: PathBuf = env::var("ETHERDUCK_HOME")
+    // Use QUIXOTE_HOME if set, otherwise use current working directory
+    let app_root: PathBuf = env::var("QUIXOTE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"));
 

@@ -1,6 +1,6 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-//! Library of the Etherduck crate.
+//! Library of the Quixote crate.
 
 pub mod event_collector_runner;
 pub use event_collector_runner::EventCollectorRunner;
@@ -42,11 +42,11 @@ pub mod constants {
     /// Cup size for the event collector.
     pub const DEFAULT_BACKOFF_LAYER_CUP_SIZE: u64 = 100;
     /// Path to the DuckDB database file.
-    pub const DUCKDB_FILE_PATH: &str = "etherduck_indexer.duckdb";
+    pub const DUCKDB_FILE_PATH: &str = "quixote_indexer.duckdb";
     /// Schema version for the DuckDB database.
     pub const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
     /// Base table name for the DuckDB database.
-    pub const DUCKDB_BASE_TABLE_NAME: &str = "etherduck_info";
+    pub const DUCKDB_BASE_TABLE_NAME: &str = "quixote_info";
     /// Default length for VARCHAR columns in the DuckDB database.
     pub const DEFAULT_VARCHAR_LENGTH: usize = 66;
     /// Value to choose between using filters or not on eth_getLogs.
