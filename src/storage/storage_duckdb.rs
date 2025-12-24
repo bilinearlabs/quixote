@@ -190,18 +190,7 @@ impl Storage for DuckDBStorage {
                     parsed_event.decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())
                 {
                     for item in body {
-                        let value = match item {
-                            DynSolValue::Address(a) => a.to_string(),
-                            DynSolValue::Bool(b) => b.to_string(),
-                            DynSolValue::Int(i, _) => i.to_string(),
-                            DynSolValue::Uint(u, _) => u.to_string(),
-                            DynSolValue::String(s) => s.to_string(),
-                            _ => {
-                                error!("Unsupported value: {:?}", item);
-                                continue;
-                            }
-                        };
-                        row_vals.push(value);
+                        row_vals.push(Self::dyn_sol_value_to_string(&item));
                     }
                 }
 
@@ -817,5 +806,45 @@ impl DuckDBStorage {
         }
 
         Ok(column_names)
+    }
+
+    /// Converts a `DynSolValue` to a String representation.
+    ///
+    /// # Description
+    ///
+    /// For simple types, returns their natural string representation.
+    /// For complex types (arrays, tuples), flattens them into a JSON-like string format.
+    fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
+        match value {
+            DynSolValue::Address(a) => a.to_string(),
+            DynSolValue::Bool(b) => b.to_string(),
+            DynSolValue::Int(i, _) => i.to_string(),
+            DynSolValue::Uint(u, _) => u.to_string(),
+            DynSolValue::String(s) => s.clone(),
+            DynSolValue::FixedBytes(bytes, size) => {
+                // Convert fixed bytes to hex string, taking only the relevant bytes
+                format!("0x{}", hex::encode(&bytes[..(*size).min(32)]))
+            }
+            DynSolValue::Bytes(bytes) => {
+                // Convert dynamic bytes to hex string
+                format!("0x{}", hex::encode(bytes))
+            }
+            DynSolValue::Function(f) => {
+                // Function is 24 bytes: 20 bytes address + 4 bytes selector
+                format!("0x{}", hex::encode(f.as_slice()))
+            }
+            DynSolValue::Array(values) | DynSolValue::FixedArray(values) => {
+                // Flatten array into a JSON-like string representation
+                let elements: Vec<String> =
+                    values.iter().map(Self::dyn_sol_value_to_string).collect();
+                format!("[{}]", elements.join(","))
+            }
+            DynSolValue::Tuple(values) => {
+                // Flatten tuple into a JSON-like string representation
+                let elements: Vec<String> =
+                    values.iter().map(Self::dyn_sol_value_to_string).collect();
+                format!("({})", elements.join(","))
+            }
+        }
     }
 }
