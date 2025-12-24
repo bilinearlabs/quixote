@@ -31,15 +31,25 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 RUN conda create --prefix=/app/quixote_frontend_env python=3.11 streamlit pyarrow -y
 
+RUN apt-get update && apt-get install -y wget unzip
 WORKDIR /app
 COPY . .
-RUN cargo build --release
+RUN wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
+    -O libduckdb.zip \
+    && unzip -o -q libduckdb.zip -d libduckdb
+RUN DUCKDB_LIB_DIR=$PWD/libduckdb \
+    DUCKDB_INCLUDE_DIR=$PWD/libduckdb \
+    LD_LIBRARY_PATH=$PWD/libduckdb \
+    cargo build --release
 
 # Runtime stage -------------
 
 FROM docker.io/debian:trixie-slim AS runtime
 WORKDIR /app
 COPY --from=builder /app/target/release/quixote quixote
+COPY --from=builder /app/libduckdb /duckdb
 COPY --from=builder /app/frontend/generic_dashboard.py frontend/generic_dashboard.py
 COPY --from=builder /app/quixote_frontend_env quixote_frontend_env
+ENV DUCKDB_LIB_DIR=/duckdb
+ENV LD_LIBRARY_PATH=/duckdb
 ENTRYPOINT [ "./quixote" ]
