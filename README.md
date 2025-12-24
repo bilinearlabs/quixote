@@ -131,6 +131,18 @@ Consider an initial indexing of 2 events of a smart contract's ABI. Later, you d
 
 # Development
 
+## Testing
+
+In order to run some of the included tests, a connection to a powerful RPC server is required. The connection is handled via environment variables. You'll need to populate the following variables before running the tests:
+
+```bash
+$ export QUIXOTE_TEST_RPC=<http://myserver.com:8765>
+$ export QUIXOTE_TEST_RPC_USER=<user>
+$ export QUIXOTE_TEST_RPC_PASSWORD=<password>
+```
+
+Then simply run `cargo test`.
+
 ## How To Package the Frontend
 
 The included frontend runs as a Python application that is called within the main indexer service. To ease running the embedded Python script, a complete environment that includes the Python interpreter along all the needed dependencies is delivered. This way, users of the app won't need to struggle with their local Python installation nor dependencies.
