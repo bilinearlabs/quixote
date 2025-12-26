@@ -25,9 +25,17 @@ use std::{
 use tracing::{debug, error, info, warn};
 
 /// Implementation of the Storage trait for the DuckDB database.
+///
+/// # Description
+///
+/// The DuckDBStorage object is responsible for the connection to the DuckDB database. It provides a thread-safe
+/// interface for the storage of the indexed data.
+///
+/// The logic can run in strict mode, which means that the indexing will stop if an event fails to be processed.
 pub struct DuckDBStorage {
     conn: Mutex<Connection>,
     db_path: String,
+    strict_mode: bool,
     event_descriptors: RwLock<HashMap<String, Event>>,
 }
 
@@ -118,21 +126,35 @@ impl Storage for DuckDBStorage {
                 [..CONTRACT_ADDRESS_BYTES_FOR_TABLE_NAME]
                 .to_string();
 
-            let event_signature = self
+            // Parse the received events (as hashes) into event descriptors using the local cache of known events.
+            // Only known events by the indexer can be processed. Thus if the indexer is running in strict mode, the
+            // indexing will stop if the event descriptor is not found.
+            let event = match self
                 .event_descriptors
                 .read()
-                .map_err(|_| anyhow::anyhow!("Failed to acquire read lock for the event descriptor"))?
-                .get(&event_hash)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Event descriptor not found for hash: {event_hash}. Ensure the event is registered before processing."
-                    )
+                .map_err(|_| {
+                    anyhow::anyhow!("Failed to acquire read lock for the event descriptor")
                 })?
-                .clone();
+                .get(&event_hash)
+            {
+                Some(event) => event.clone(),
+                None => {
+                    if self.strict_mode {
+                        return Err(anyhow::anyhow!(
+                            "The event {event_hash} was received but the event descriptor was not found. You can either include the event in the command line arguments or run the indexer with the strict mode disabled."
+                        ));
+                    } else {
+                        warn!(
+                            "The event {event_hash} was received but the event descriptor was not found. This event will be ignored."
+                        );
+                        continue;
+                    }
+                }
+            };
 
             let table_name = format!(
                 "event_{}_{contract_address}",
-                event_signature.name.as_str().to_ascii_lowercase()
+                event.name.as_str().to_ascii_lowercase()
             );
             events_by_table
                 .entry(table_name)
@@ -529,6 +551,7 @@ impl DuckDBStorage {
         Ok(DuckDBStorage {
             conn: conn_mutex,
             db_path: db_path.to_string(),
+            strict_mode: false,
             event_descriptors: RwLock::new(HashMap::new()),
         })
     }
@@ -878,5 +901,15 @@ impl DuckDBStorage {
                 format!("({})", elements.join(","))
             }
         }
+    }
+
+    /// Sets the strict mode for the storage.
+    pub fn set_strict_mode(&mut self, strict_mode: bool) {
+        self.strict_mode = strict_mode;
+    }
+
+    /// Gets the strict mode for the storage.
+    pub fn strict_mode(&self) -> bool {
+        self.strict_mode
     }
 }

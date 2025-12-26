@@ -83,4 +83,10 @@ pub struct IndexingArgs {
     pub frontend_address: String,
     #[arg(long, help = "Frontend listening port", default_value_t = 8501)]
     pub frontend_port: u16,
+    #[arg(
+        long,
+        help = "Enable strict mode (stops the indexing when an event fails to be processed)",
+        default_value_t = false
+    )]
+    pub strict_mode: bool,
 }

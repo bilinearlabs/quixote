@@ -35,13 +35,17 @@ impl IndexingApp {
 
         // Instantiate the DB handlers, for the consumer task and the API server.
         let (storage, storage_for_api) = if let Some(db_path) = &args.database {
+            let mut storage = DuckDBStorage::with_db(db_path)?;
+            storage.set_strict_mode(args.strict_mode);
             (
-                DuckDBStorage::with_db(db_path)?,
+                storage,
                 Arc::new(DuckDBStorageFactory::new(db_path.clone())),
             )
         } else {
+            let mut storage = DuckDBStorage::new()?;
+            storage.set_strict_mode(args.strict_mode);
             (
-                DuckDBStorage::new()?,
+                storage,
                 Arc::new(DuckDBStorageFactory::new(
                     constants::DUCKDB_FILE_PATH.to_string(),
                 )),
