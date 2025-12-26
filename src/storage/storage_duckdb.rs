@@ -906,3 +906,134 @@ impl DuckDBStorage {
         self.strict_mode
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::rpc::types::Log;
+    use serde_json::json;
+    use std::str::FromStr;
+
+    fn erc721_transfer_event() -> Event {
+        Event::from_str(
+            "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)",
+        )
+        .expect("failed to build ERC721 Transfer event")
+    }
+
+    fn erc20_transfer_event() -> Event {
+        Event::from_str("event Transfer(address indexed from,address indexed to,uint256 amount)")
+            .expect("failed to build ERC20 Transfer event")
+    }
+
+    fn event_table_name(event: &Event) -> String {
+        format!(
+            "event_{}_{}",
+            event.name.as_str().to_ascii_lowercase(),
+            event.selector()
+        )
+    }
+
+    fn storage_with(events: &[Event]) -> DuckDBStorage {
+        let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
+        storage.set_strict_mode(true);
+        storage
+            .include_events(events)
+            .expect("failed to register events");
+        storage
+    }
+
+    #[test]
+    fn uint256_values_are_not_stripped() {
+        let erc721 = erc721_transfer_event();
+        let storage = storage_with(&[erc721.clone()]);
+
+        // The expected token id
+        let token_id_padded = "0x000000000000000000000000000000000000000000000000000000000000beef";
+
+        let log: Log = serde_json::from_value(json!({
+            "address": "0x000000000000000000000000000000000000c0de",
+            "topics": [
+                erc721.selector().to_string(),
+                "0x000000000000000000000000000000000000000000000000000000000000d00d",
+                "0x000000000000000000000000000000000000000000000000000000000000f00d",
+                // Token id goes here
+                token_id_padded,
+            ],
+            "data": "0x",
+            "blockNumber": "0x1",
+            "transactionHash": format!("0x{:064x}", 0xaaa_u64),
+            "transactionIndex": "0x0",
+            "blockHash": format!("0x{:064x}", 0xbbb_u64),
+            "logIndex": "0x0",
+            "removed": false
+        }))
+        .expect("failed to build erc721 log");
+
+        storage
+            .add_events(&[log])
+            .expect("erc721 transfer should be accepted");
+
+        let table = event_table_name(&erc721);
+        let conn = storage
+            .conn
+            .lock()
+            .expect("failed to lock connection for verification");
+        let stored_token_id: String = conn
+            .query_row(&format!("SELECT \"tokenId\" FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("tokenId must exist");
+
+        // We retrieve exactly the same token id
+        assert_eq!(
+            stored_token_id, token_id_padded,
+            "tokenId should keep its leading zeros"
+        );
+    }
+
+    #[test]
+    fn addresses_are_stripped_correctly() {
+        let erc20 = erc20_transfer_event();
+        let storage = storage_with(&[erc20.clone()]);
+
+        // This is the address we want to store
+        let from_address = "0x000083970c0bd792a6d1402a12c65628bcb3f8b4";
+
+        let log: Log = serde_json::from_value(json!({
+            "address": "0x000000000000000000000000000000000000c0de",
+            "topics": [
+                erc20.selector().to_string(),
+                // Addresses are 40 bytes but they are used as 64 bytes
+                format!("{:0>64}", &from_address.trim_start_matches("0x")),
+                "0x000000000000000000000000000000000000000000000000000000000000f00d",
+            ],
+            "data": format!("0x{:064x}", 0u64),
+            "blockNumber": "0x2",
+            "transactionHash": format!("0x{:064x}", 0xccc_u64),
+            "transactionIndex": "0x0",
+            "blockHash": format!("0x{:064x}", 0xddd_u64),
+            "logIndex": "0x0",
+            "removed": false
+        }))
+        .expect("failed to build erc20 log");
+
+        storage
+            .add_events(&[log])
+            .expect("erc20 transfer should be accepted");
+
+        let table = event_table_name(&erc20);
+        let conn = storage
+            .conn
+            .lock()
+            .expect("failed to lock connection for verification");
+        let stored_from: String = conn
+            .query_row(&format!("SELECT \"from\" FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("from must exist");
+
+        // We retrieve the expected address
+        assert_eq!(stored_from, from_address);
+    }
+}
