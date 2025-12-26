@@ -53,7 +53,7 @@ impl IndexingApp {
 
         // Define the tables for the requested events.
         for seed in seeds.iter() {
-            storage.include_events(seed.events.as_slice())?;
+            storage.include_events(seed.contract_address, seed.events.as_slice())?;
         }
 
         let api_server_address = args
@@ -185,7 +185,7 @@ impl IndexingApp {
             let events = abi.events().cloned().collect::<Vec<Event>>();
 
             // Attempt to register the events of the ABI, when existing the operation will be ignored.
-            conn.include_events(events.as_slice())?;
+            conn.include_events(contract_address, events.as_slice())?;
 
             let start_block = Self::set_start_block_for_events(
                 conn,
@@ -301,7 +301,7 @@ impl IndexingApp {
                 "The event {} will be registered in the DB and indexed from the block {first_block}",
                 event.name
             );
-            conn.include_events(std::slice::from_ref(event))?;
+            conn.include_events(contract_address, std::slice::from_ref(event))?;
             conn.set_first_block(event, first_block)?;
             first_block
         };

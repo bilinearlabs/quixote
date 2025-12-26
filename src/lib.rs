@@ -57,6 +57,8 @@ pub mod constants {
     pub const CHUNK_MULTIPLIER: u64 = 5;
     /// Threshold for the number of successful chunks to restore the block range to the default value.
     pub const SUCCESSFUL_CHUNKS_THRESHOLD: u8 = 32;
+    /// Bytes of the contract address used as table name.
+    pub const CONTRACT_ADDRESS_BYTES_FOR_TABLE_NAME: usize = 6;
 }
 
 /// Error codes that are used when calling exit.

@@ -4,7 +4,7 @@ use crate::{
     EventStatus,
     storage::{ContractDescriptorDb, EventDescriptorDb},
 };
-use alloy::{json_abi::Event, rpc::types::Log};
+use alloy::{json_abi::Event, primitives::Address, rpc::types::Log};
 use anyhow::Result;
 use serde_json::Value;
 use std::any::Any;
@@ -22,8 +22,12 @@ pub trait Storage: Send + Sync + 'static + Any {
     /// # Description
     ///
     /// This method shall be used once at the beginning of the application to include the events that
-    /// are to going be indexed.
-    fn include_events(&self, events: &[Event]) -> Result<()>;
+    /// are to going be indexed. The contract address is needed to differentiate between events with the same signature
+    /// coming from different contracts.
+    ///
+    /// It is safe to call this method multiple times with the same input events, as the data is only recorded once in
+    /// the database.
+    fn include_events(&self, contract_address: Address, events: &[Event]) -> Result<()>;
     /// Gets the full signature of an event type by its hash.
     ///
     /// # Description

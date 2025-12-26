@@ -11,7 +11,7 @@ use crate::{
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
     json_abi::Event,
-    primitives::B256,
+    primitives::Address,
     rpc::types::Log,
 };
 use anyhow::{Context, Result};
@@ -100,7 +100,7 @@ impl Storage for DuckDBStorage {
         // Second stage: insert the new events into the event_X table.
 
         // Group events by table name for bulk insertion using appenders
-        let mut events_by_table: HashMap<String, Vec<&Log>> = HashMap::new();
+        let mut events_by_table: HashMap<String, (String, Vec<&Log>)> = HashMap::new();
 
         // First pass: filter and group events by table
         for log in events {
@@ -113,6 +113,10 @@ impl Storage for DuckDBStorage {
 
             // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
+            // Let's get the first bytes of the contract address for the event's table in the DB.
+            let contract_address = hex::encode(log.address()).to_ascii_lowercase()
+                [..CONTRACT_ADDRESS_BYTES_FOR_TABLE_NAME]
+                .to_string();
 
             let event_signature = self
                 .event_descriptors
@@ -121,30 +125,27 @@ impl Storage for DuckDBStorage {
                 .get(&event_hash)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Event descriptor not found for hash: {}. Ensure the event is registered before processing.",
-                        event_hash
+                        "Event descriptor not found for hash: {event_hash}. Ensure the event is registered before processing."
                     )
                 })?
                 .clone();
 
             let table_name = format!(
-                "event_{}_{event_hash}",
+                "event_{}_{contract_address}",
                 event_signature.name.as_str().to_ascii_lowercase()
             );
             events_by_table
                 .entry(table_name)
-                .or_insert_with(Vec::new)
+                .or_insert_with(|| (event_hash, Vec::new()))
+                .1
                 .push(log);
         }
 
         // Second pass: process each table's events in bulk
-        for (table_name, table_events) in events_by_table {
+        for (table_name, (event_hash, table_events)) in events_by_table {
             if table_events.is_empty() {
                 continue;
             }
-
-            // Get event_hash from table name (remove "event_" prefix)
-            let event_hash = table_name.split("_").nth(2).unwrap().to_string();
 
             // Get the parsed event from the event descriptors
             let parsed_event = self
@@ -280,8 +281,8 @@ impl Storage for DuckDBStorage {
         )?)
     }
 
-    fn include_events(&self, events: &[Event]) -> Result<()> {
-        DuckDBStorage::create_event_schema(&self.conn, events)?;
+    fn include_events(&self, contract_address: Address, events: &[Event]) -> Result<()> {
+        DuckDBStorage::create_event_schema(&self.conn, contract_address, events)?;
         let mut event_descriptors = self.event_descriptors.write().map_err(|_| {
             anyhow::anyhow!("Failed to acquire write lock for the event descriptor")
         })?;
@@ -580,10 +581,15 @@ impl DuckDBStorage {
         Ok(())
     }
 
-    fn create_event_schema(conn: &Mutex<Connection>, events: &[Event]) -> Result<()> {
+    fn create_event_schema(
+        conn: &Mutex<Connection>,
+        contract_address: Address,
+        events: &[Event],
+    ) -> Result<()> {
         for event in events {
-            // These will be the name used to create the new table: event_<name>_<hash>.
-            let table_name = B256::from(event.selector()).to_string();
+            let table_name = hex::encode(contract_address).to_ascii_lowercase()
+                [..CONTRACT_ADDRESS_BYTES_FOR_TABLE_NAME]
+                .to_string();
             let event_name = event.name.as_str().to_ascii_lowercase();
 
             debug!("Creating event schema for: {}", event.full_signature());
