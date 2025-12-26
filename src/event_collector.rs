@@ -70,6 +70,16 @@ impl EventCollector {
         let mut backfill_mode = true;
 
         loop {
+            // Check tha the RPC server is not syncing. If syncing, a raw exit is issued as we prefer to stop
+            // all the running logic just in case some RPC request returns inconsistent data that gets
+            // stored in the database.
+            if self.check_sync_status().await? {
+                error!(
+                    "The RPC server is syncing, resume indexing when the syncing process is complete"
+                );
+                std::process::exit(1);
+            }
+
             let provider = self.provider.clone();
             let finalized_block = match provider.get_block_by_number(self.sync_mode).await {
                 Ok(Some(block)) => block.header.number,
@@ -117,56 +127,46 @@ impl EventCollector {
             // Process the prepared chunks of the chain history concurrently.
             // If an error is detected in the series, all the intermediate results are discarded, and the logic
             // proceeds to reduce the block range and retry the series.
-            let rpc_results: Vec<LogChunk> = match stream::iter(
-                chunk_starts
-                    .into_iter()
-            ).map(|chunk_start| {
-                let provider = provider_clone.clone();
+            let rpc_results: Vec<LogChunk> = match stream::iter(chunk_starts.into_iter())
+                .map(|chunk_start| {
+                    let provider = provider_clone.clone();
 
-                async move {
-                    // Check tha the RPC server is not syncing. If syncing, a raw exit is issued as we prefer to stop
-                    // all the running logic just in case some RPC request returns inconsistent data that gets
-                    // stored in the database.
-                    if self.check_sync_status().await? {
-                        error!("The RPC server is syncing, resume indexing when the syncing process is complete");
-                        std::process::exit(1);
+                    async move {
+                        let chunk_end =
+                            std::cmp::min(chunk_start + chunk_length - 1, finalized_block);
+
+                        info!(
+                            "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
+                            chunk_start, chunk_end, contract_address
+                        );
+
+                        // Build the base filter for the get_Logs call. By default, all the events for a given smart
+                        // contract are fetched.
+                        let mut filter = Filter::new()
+                            .from_block(chunk_start)
+                            .to_block(chunk_end)
+                            .address(contract_address);
+
+                        // Add custom filters (topics) if provided.
+                        if let Some(custom_filter) = self.filter.clone()
+                            && !custom_filter.topics.is_empty()
+                        {
+                            filter.topics = custom_filter.topics;
+                        }
+
+                        let events = provider.get_logs(&filter).await?;
+
+                        Ok::<_, anyhow::Error>(LogChunk {
+                            start_block: chunk_start,
+                            end_block: chunk_end,
+                            events,
+                        })
                     }
-
-                    let chunk_end = std::cmp::min(
-                        chunk_start + chunk_length - 1,
-                        finalized_block,
-                    );
-
-                    info!(
-                        "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
-                        chunk_start, chunk_end, contract_address
-                    );
-
-                    // Build the base filter for the get_Logs call. By default, all the events for a given smart
-                    // contract are fetched.
-                    let mut filter = Filter::new()
-                        .from_block(chunk_start)
-                        .to_block(chunk_end)
-                        .address(contract_address);
-
-                    // Add custom filters (topics) if provided.
-                    if let Some(custom_filter) = self.filter.clone() && !custom_filter.topics.is_empty() {
-                        filter.topics = custom_filter.topics;
-                    }
-
-                    let events = provider.get_logs(&filter).await?;
-
-                    Ok::<_, anyhow::Error>(LogChunk {
-                        start_block: chunk_start,
-                        end_block: chunk_end,
-                        events,
-                    })
-                }
-
-            })
-            .buffer_unordered(MAX_CONCURRENT_RPC_REQUESTS)
-            .try_collect()
-            .await {
+                })
+                .buffer_unordered(MAX_CONCURRENT_RPC_REQUESTS)
+                .try_collect()
+                .await
+            {
                 Ok(results) => results,
                 Err(e) => {
                     let err_msg = e.to_string();
@@ -175,22 +175,24 @@ impl EventCollector {
                     if err_msg.contains("-32602") {
                         // Did we receive a hint of the valid range?
                         let prev_chunk_length = chunk_length;
-                        chunk_length =
-                            if let Some(captures) = self.block_range_hint_regex.captures(&err_msg) {
-                                // Extract the two numbers from the regex capture groups
-                                if let (Some(first_match), Some(second_match)) =
-                                    (captures.get(1), captures.get(2)) {
-                                    let first: u64 = first_match.as_str().parse().unwrap_or(0);
-                                    let second: u64 = second_match.as_str().parse().unwrap_or(0);
-                                    let range = second.saturating_sub(first);
-                                    // And apply a safety margin of a 10% of the range.
-                                    range - (range / 10)
-                                } else {
-                                    chunk_length >> 1
-                                }
+                        chunk_length = if let Some(captures) =
+                            self.block_range_hint_regex.captures(&err_msg)
+                        {
+                            // Extract the two numbers from the regex capture groups
+                            if let (Some(first_match), Some(second_match)) =
+                                (captures.get(1), captures.get(2))
+                            {
+                                let first: u64 = first_match.as_str().parse().unwrap_or(0);
+                                let second: u64 = second_match.as_str().parse().unwrap_or(0);
+                                let range = second.saturating_sub(first);
+                                // And apply a safety margin of a 10% of the range.
+                                range - (range / 10)
                             } else {
                                 chunk_length >> 1
-                            };
+                            }
+                        } else {
+                            chunk_length >> 1
+                        };
 
                         if chunk_length == 0 {
                             return Err(anyhow::anyhow!(
@@ -198,7 +200,9 @@ impl EventCollector {
                             ));
                         }
 
-                        warn!("Throttled RPC server, reducing block range from {prev_chunk_length} to {chunk_length}");
+                        warn!(
+                            "Throttled RPC server, reducing block range from {prev_chunk_length} to {chunk_length}"
+                        );
 
                         continue;
                     } else {
