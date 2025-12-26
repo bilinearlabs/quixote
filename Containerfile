@@ -56,9 +56,8 @@ RUN DUCKDB_LIB_DIR=$PWD/libduckdb \
 FROM docker.io/debian:trixie-slim AS runtime
 WORKDIR /app
 COPY --from=builder /app/target/release/quixote quixote
-COPY --from=builder /app/libduckdb /duckdb
+COPY --from=builder /app/libduckdb/libduckdb.so .
 COPY --from=builder /app/frontend/generic_dashboard.py frontend/generic_dashboard.py
 COPY --from=builder /app/quixote_frontend_env quixote_frontend_env
-ENV DUCKDB_LIB_DIR=/duckdb
-ENV LD_LIBRARY_PATH=/duckdb
+
 ENTRYPOINT [ "./quixote" ]

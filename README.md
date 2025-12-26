@@ -137,25 +137,19 @@ Building the project requires dynamic linking to DuckDB to avoid compiling it fr
 - Linux:
 ```bash
 $ wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
-$ unzip libduckdb-linux-amd64.zip -d libduckdb
-
-$ export DUCKDB_LIB_DIR=$PWD/libduckdb
-$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
-$ export LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
-
+$ unzip libduckdb-linux-amd64.zip -d lib
+$ export DUCKDB_LIB_DIR=$PWD/lib
 $ cargo build
 ```
 - macOS:
 ```bash
 $ wget wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-osx-universal.zip
-$ unzip libduckdb-osx-universal.zip -d libduckdb
-
-$ export DUCKDB_LIB_DIR=$PWD/libduckdb
-$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
-$ export LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
-
+$ unzip libduckdb-osx-universal.zip -d lib
+$ export DUCKDB_LIB_DIR=$PWD/lib
 $ cargo build
 ```
+
+The `lib` folder needs to be delivered along the binary when the indexer is distributed as a precompiled package. This way, it won't be necessary to specify the library path ahead of running the indexer.
 
 ## Testing
 
