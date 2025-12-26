@@ -181,7 +181,7 @@ impl Storage for DuckDBStorage {
                     row_vals.push(
                         log.topics()
                             .get(i)
-                            .map(|t| t.to_string())
+                            .map(|t| Self::strip_leading_zeros(&t.to_string()))
                             .unwrap_or_default(),
                     );
                 }
@@ -814,6 +814,32 @@ impl DuckDBStorage {
         Ok(column_names)
     }
 
+    /// Strips leading zeros from an Ethereum address string.
+    ///
+    /// # Description
+    ///
+    /// Converts addresses like `0x0000000000000000000000007176f0f071379fee51668eb6387dda9129e5ca6b`
+    /// to `0x7176f0f071379fee51668eb6387dda9129e5ca6b`, saving storage space.
+    ///
+    /// The `0x` prefix is preserved, and at least one character after the prefix is kept
+    /// (e.g., `0x0000...0000` becomes `0x0`).
+    #[inline]
+    fn strip_leading_zeros(addr: &str) -> String {
+        // Ensure the address starts with "0x"
+        if !addr.starts_with("0x") {
+            return addr.to_string();
+        }
+
+        let hex_part = &addr[2..];
+        let trimmed = hex_part.trim_start_matches('0');
+
+        if trimmed.is_empty() {
+            "0x0".to_string()
+        } else {
+            format!("0x{}", trimmed)
+        }
+    }
+
     /// Converts a `DynSolValue` to a String representation.
     ///
     /// # Description
@@ -822,7 +848,7 @@ impl DuckDBStorage {
     /// For complex types (arrays, tuples), flattens them into a JSON-like string format.
     fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
         match value {
-            DynSolValue::Address(a) => a.to_string(),
+            DynSolValue::Address(a) => Self::strip_leading_zeros(&a.to_string()),
             DynSolValue::Bool(b) => b.to_string(),
             DynSolValue::Int(i, _) => i.to_string(),
             DynSolValue::Uint(u, _) => u.to_string(),
