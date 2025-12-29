@@ -603,17 +603,19 @@ impl DuckDBStorage {
                 "
                     CREATE TABLE IF NOT EXISTS event_{event_name}_{table_name}(
                         block_number UBIGINT NOT NULL,
-                        transaction_hash VARCHAR(42) NOT NULL,
+                        transaction_hash VARCHAR NOT NULL,
                         log_index USMALLINT NOT NULL,
-                        contract_address VARCHAR(42) NOT NULL,
+                        contract_address VARCHAR NOT NULL,
                 ",
             );
 
             event.inputs.iter().for_each(|param| {
-                statement.push_str(&format!(
-                    "\"{}\" VARCHAR({DEFAULT_VARCHAR_LENGTH}),",
-                    param.name
-                ));
+                let db_type = if param.selector_type() == "uint256" {
+                    "BIGNUM"
+                } else {
+                    "VARCHAR"
+                };
+                statement.push_str(&format!("\"{}\" {db_type},", param.name));
             });
 
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
