@@ -46,6 +46,12 @@ pub struct RawQueryResponse {
     pub query_result: Value,
 }
 
+/// Response type for db_schema endpoint
+#[derive(Serialize)]
+pub struct DbSchemaResponse {
+    pub schema: Value,
+}
+
 /// GET handler for /list_events
 ///
 /// # Description
@@ -178,12 +184,51 @@ async fn raw_query_handler(
     }
 }
 
+/// GET handler for /db_schema
+///
+/// # Description
+///
+/// This handler returns the database schema including all tables (except quixote_info)
+/// and their column definitions.
+#[instrument(skip(factory))]
+async fn db_schema_handler(
+    State(factory): State<Arc<DuckDBStorageFactory>>,
+) -> Result<Json<DbSchemaResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let storage = factory.create().map_err(|e| {
+        error!("Failed to create database connection: {e}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "An internal error occurred, try again later.".to_owned(),
+            }),
+        )
+    })?;
+
+    match storage.describe_database() {
+        Ok(schema) => {
+            debug!("Database schema retrieved successfully");
+            trace!("Schema: {:?}", schema);
+            Ok(Json(DbSchemaResponse { schema }))
+        }
+        Err(e) => {
+            error!("Failed to retrieve database schema: {e}");
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "An internal error occurred, try again later.".to_owned(),
+                }),
+            ))
+        }
+    }
+}
+
 /// Creates and returns the REST API router
 pub fn create_router(factory: Arc<DuckDBStorageFactory>) -> Router {
     Router::new()
         .route("/list_events", get(list_events_handler))
         .route("/list_contracts", get(list_contracts_handler))
         .route("/raw_query", post(raw_query_handler))
+        .route("/db_schema", get(db_schema_handler))
         .with_state(factory)
 }
 

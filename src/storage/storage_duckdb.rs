@@ -905,4 +905,56 @@ impl DuckDBStorage {
     pub fn strict_mode(&self) -> bool {
         self.strict_mode
     }
+
+    /// Describe the tables in the database.
+    ///
+    /// # Description
+    ///
+    /// Returns a JSON array where each element is an object with a single key (the table name)
+    /// whose value is an object mapping column names to their types.
+    /// The `quixote_info` table is excluded from the results.
+    pub fn describe_database(&self) -> Result<Value> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // Get all tables using SHOW TABLES
+        let mut stmt = conn.prepare("SHOW TABLES")?;
+        let mut rows = stmt.query([])?;
+
+        let mut tables = Vec::new();
+        while let Some(row) = rows.next()? {
+            let table_name: String = row.get(0)?;
+            // Exclude quixote_info table
+            if table_name != DUCKDB_BASE_TABLE_NAME {
+                tables.push(table_name);
+            }
+        }
+
+        // Need to drop the statement and rows before reusing conn
+        drop(rows);
+        drop(stmt);
+
+        // For each table, get its description
+        let mut result = Vec::new();
+        for table_name in tables {
+            let mut desc_stmt = conn.prepare(&format!("DESCRIBE {}", table_name))?;
+            let mut desc_rows = desc_stmt.query([])?;
+
+            let mut columns = Map::new();
+            while let Some(row) = desc_rows.next()? {
+                // DESCRIBE returns: column_name, column_type, null, key, default, extra
+                let column_name: String = row.get(0)?;
+                let column_type: String = row.get(1)?;
+                columns.insert(column_name, Value::String(column_type));
+            }
+
+            let mut table_obj = Map::new();
+            table_obj.insert(table_name, Value::Object(columns));
+            result.push(Value::Object(table_obj));
+        }
+
+        Ok(Value::Array(result))
+    }
 }
