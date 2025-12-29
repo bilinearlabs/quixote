@@ -191,25 +191,13 @@ impl Storage for DuckDBStorage {
                     log.address().to_string(),
                 ];
 
-                // Now we need to consider how many indexed topics our current event includes.
-                let indexed_params = parsed_event
-                    .inputs
-                    .iter()
-                    .filter(|input| input.indexed)
-                    .count();
-                for i in 1..=indexed_params {
-                    row_vals.push(
-                        log.topics()
-                            .get(i)
-                            .map(|t| Self::strip_leading_zeros(&t.to_string()))
-                            .unwrap_or_default(),
-                    );
-                }
-
-                // Time to include the non-indexed parameters.
-                if let Ok(DecodedEvent { body, .. }) =
+                // Parse the indexed and non-indexed parameters and convert them to strings ready for the DB.
+                if let Ok(DecodedEvent { indexed, body, .. }) =
                     parsed_event.decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())
                 {
+                    for item in indexed {
+                        row_vals.push(Self::dyn_sol_value_to_string(&item));
+                    }
                     for item in body {
                         row_vals.push(Self::dyn_sol_value_to_string(&item));
                     }
@@ -830,29 +818,23 @@ impl DuckDBStorage {
         Ok(column_names)
     }
 
-    /// Strips leading zeros from an Ethereum address string.
+    /// Remove padding of Ethereum addresses to save storage space.
     ///
     /// # Description
     ///
-    /// Converts addresses like `0x0000000000000000000000007176f0f071379fee51668eb6387dda9129e5ca6b`
-    /// to `0x7176f0f071379fee51668eb6387dda9129e5ca6b`, saving storage space.
-    ///
-    /// The `0x` prefix is preserved, and at least one character after the prefix is kept
-    /// (e.g., `0x0000...0000` becomes `0x0`).
+    /// Only the first 24 bytes of the address are removed. The rest are kept regardless of the number of zeros.
     #[inline]
-    fn strip_leading_zeros(addr: &str) -> String {
-        // Ensure the address starts with "0x"
-        if !addr.starts_with("0x") {
+    fn remove_address_padding(addr: &str) -> String {
+        // Ensure the address starts with "0x" and it's a full address (66 characters).
+        if !addr.starts_with("0x") || addr.len() != 66 {
             return addr.to_string();
         }
 
-        let hex_part = &addr[2..];
-        let trimmed = hex_part.trim_start_matches('0');
-
-        if trimmed.is_empty() {
-            "0x0".to_string()
+        // Check if the input address is aligned to 64B using 0s.
+        if &addr[..26] == "0x000000000000000000000000" {
+            format!("0x{}", &addr[27..])
         } else {
-            format!("0x{}", trimmed)
+            addr.to_string()
         }
     }
 
@@ -864,7 +846,7 @@ impl DuckDBStorage {
     /// For complex types (arrays, tuples), flattens them into a JSON-like string format.
     fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
         match value {
-            DynSolValue::Address(a) => Self::strip_leading_zeros(&a.to_string()),
+            DynSolValue::Address(a) => Self::remove_address_padding(&a.to_string()),
             DynSolValue::Bool(b) => b.to_string(),
             DynSolValue::Int(i, _) => i.to_string(),
             DynSolValue::Uint(u, _) => u.to_string(),
