@@ -42,8 +42,15 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 
 WORKDIR /app
 COPY . .
-RUN wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
-    -O libduckdb.zip && \
+RUN arch=$(uname -m) && \
+    if [ "$arch" = "x86_64" ]; then \
+      DUCK_URL="https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip"; \
+    elif [ "$arch" = "aarch64" ]; then \
+      DUCK_URL="https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-arm64.zip"; \
+    else \
+      echo "Unsupported architecture for DuckDB: $arch" && exit 1; \
+    fi && \
+    wget "$DUCK_URL" -O libduckdb.zip && \
     unzip -o -q libduckdb.zip -d libduckdb && \
     rm -f libduckdb.zip
 RUN DUCKDB_LIB_DIR=$PWD/libduckdb \
