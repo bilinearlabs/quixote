@@ -57,23 +57,20 @@ impl EventProcessor {
                             // Try to process as many contiguous chunks as possible.  The next
                             // expected chunk must start exactly at `last_processed + 1`.
                             while let Some((end, ev)) = buffer.remove(&(last_processed + 1)) {
-                                match self.storage.add_events(ev.as_slice()) {
-                                    Ok(count) => {
-                                        info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
-                                        // When no logs were received for the given block range, the database is in an
-                                        // inconsistent state as the logic to insert events wasn't triggered.
-                                        // Save the last processed block so we keep track of the indexing progress when
-                                        // very long ranges of blocks include no events.
-                                        if count == 0 {
-                                            self.storage.synchronize_events(Some(last_processed))?;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Error adding events: {}", e);
-                                        // Ensure the database is in a consistent state.
-                                        self.storage.synchronize_events(Some(last_processed))?;
-                                        return Err(e);
-                                    }
+                                // If the chunk includes no events, just update that we have processed up to the last
+                                // block.
+                                if ev.is_empty() {
+                                    self.storage.synchronize_events(Some(last_processed))?;
+                                    continue;
+                                }
+
+                                if let Err(e) = self.storage.add_events(ev.as_slice()) {
+                                    error!("Error adding events: {}", e);
+                                    // Ensure the database is in a consistent state.
+                                    self.storage.synchronize_events(Some(last_processed))?;
+                                    return Err(e);
+                                } else {
+                                    info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
                                 }
 
                                 // Update the cursor so that the next expected start is directly

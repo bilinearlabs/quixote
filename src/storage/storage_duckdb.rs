@@ -69,11 +69,11 @@ impl Clone for DuckDBStorage {
 }
 
 impl Storage for DuckDBStorage {
-    fn add_events(&self, events: &[Log]) -> Result<usize> {
+    fn add_events(&self, events: &[Log]) -> Result<()> {
         // Quick check to avoid unnecessary operations.
         if events.is_empty() {
             info!("No events for the given block range");
-            return Ok(usize::default());
+            return Ok(());
         }
 
         let mut conn = self
@@ -220,7 +220,7 @@ impl Storage for DuckDBStorage {
         // Explicitly commit the transaction
         tx.commit()?;
 
-        Ok(events.len())
+        Ok(())
     }
 
     fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> {
@@ -1114,10 +1114,9 @@ mod tests {
             .expect("failed to register events");
 
         // Insert both events
-        let inserted = storage
+        storage
             .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
             .expect("strict mode should accept known events");
-        assert_eq!(inserted, 10);
 
         // Transfer events are persisted
         assert_eq!(

@@ -12,7 +12,7 @@ use std::any::Any;
 /// Trait that defines the API between the producer task and the storage.
 pub trait Storage: Send + Sync + 'static + Any {
     /// Adds a list of events to the storage.
-    fn add_events(&self, events: &[Log]) -> Result<usize>;
+    fn add_events(&self, events: &[Log]) -> Result<()>;
     /// Lists the events that are registered in the storage along their indexing status.
     fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>>;
     /// Get the status of an event in the database.
