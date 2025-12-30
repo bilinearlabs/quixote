@@ -889,6 +889,250 @@ impl DuckDBStorage {
     pub fn strict_mode(&self) -> bool {
         self.strict_mode
     }
+
+    /// Describe the tables in the database.
+    ///
+    /// # Description
+    ///
+    /// Returns a JSON array where each element is an object with a single key (the table name)
+    /// whose value is an object mapping column names to their types.
+    /// The `quixote_info` table is excluded from the results.
+    pub fn describe_database(&self) -> Result<Value> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // Get all tables using SHOW TABLES
+        let mut stmt = conn.prepare("SHOW TABLES")?;
+        let mut rows = stmt.query([])?;
+
+        let mut tables = Vec::new();
+        while let Some(row) = rows.next()? {
+            let table_name: String = row.get(0)?;
+            // Exclude quixote_info table
+            if table_name != DUCKDB_BASE_TABLE_NAME {
+                tables.push(table_name);
+            }
+        }
+
+        // Need to drop the statement and rows before reusing conn
+        drop(rows);
+        drop(stmt);
+
+        // For each table, get its description
+        let mut result = Vec::new();
+        for table_name in tables {
+            let mut desc_stmt = conn.prepare(&format!("DESCRIBE {}", table_name))?;
+            let mut desc_rows = desc_stmt.query([])?;
+
+            let mut columns = Map::new();
+            while let Some(row) = desc_rows.next()? {
+                // DESCRIBE returns: column_name, column_type, null, key, default, extra
+                let column_name: String = row.get(0)?;
+                let column_type: String = row.get(1)?;
+                columns.insert(column_name, Value::String(column_type));
+            }
+
+            let mut table_obj = Map::new();
+            table_obj.insert(table_name, Value::Object(columns));
+            result.push(Value::Object(table_obj));
+        }
+
+        Ok(Value::Array(result))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::rpc::types::Log;
+    use serde_json::json;
+    use std::str::FromStr;
+
+    fn transfer_event() -> Event {
+        Event::from_str("event Transfer(address indexed from,address indexed to,uint256 amount)")
+            .expect("failed to build sample event descriptor")
+    }
+
+    fn approval_event() -> Event {
+        Event::from_str(
+            "event Approval(address indexed owner,address indexed spender,uint256 value)",
+        )
+        .expect("failed to build approval event descriptor")
+    }
+
+    /// Creates 5 transfer logs with some mock data.
+    fn get_5_transfer_logs() -> Vec<Log> {
+        (0u64..5)
+            .map(|i| {
+                serde_json::from_value(json!({
+                    "address": "0x000000000000000000000000000000000000dead",
+                    "topics": [
+                        transfer_event().selector().to_string(),
+                        "0x000000000000000000000000000000000000000000000000000000000000d00d",
+                        "0x000000000000000000000000000000000000000000000000000000000000f00d"
+                    ],
+                    "data": format!("0x{:064x}", i + 1),
+                    "blockNumber": "0x1",
+                    "transactionHash": format!("0x{:064x}", i + 1),
+                    "transactionIndex": "0x0",
+                    "blockHash": "0x000000000000000000000000000000000000000000000000000000000000babe",
+                    "logIndex": format!("0x{:x}", i),
+                    "removed": false
+                }))
+                .expect("failed to build transfer log")
+            })
+            .collect()
+    }
+
+    /// Creates 5 approval logs with some mock data.
+    fn get_5_approval_logs() -> Vec<Log> {
+        (0u64..5)
+            .map(|i| {
+                serde_json::from_value(json!({
+                    "address": "0x000000000000000000000000000000000000d00d",
+                    "topics": [
+                        approval_event().selector().to_string(),
+                        "0x000000000000000000000000000000000000000000000000000000000000d00d",
+                        "0x000000000000000000000000000000000000000000000000000000000000f00d"
+                    ],
+                    "data": format!("0x{:064x}", (i + 1) * 10),
+                    "blockNumber": "0x1",
+                    "transactionHash": format!("0x{:064x}", i + 100),
+                    "transactionIndex": "0x0",
+                    "blockHash": "0x0000000000000000000000000000000000000000000000000000000000000002",
+                    "logIndex": format!("0x{:x}", i + 10),
+                    "removed": false
+                }))
+                .expect("failed to build approval log")
+            })
+            .collect()
+    }
+
+    /// Given a storage and an event, returns the number of rows stored in the
+    /// storage for that event. If the table doesnt exists, it returns 0.
+    fn stored_count_for_event(storage: &DuckDBStorage, event: &Event) -> usize {
+        // Note: This logic is duplicated. Table name should be given by the storage.
+        let table_name = format!(
+            "event_{}_{}",
+            event.name.as_str().to_ascii_lowercase(),
+            event.selector()
+        );
+        let conn = storage
+            .conn
+            .lock()
+            .expect("failed to lock connection for verification");
+        match conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}"), [], |row| {
+            row.get(0)
+        }) {
+            Ok(count) => count,
+            Err(_) => 0,
+        }
+    }
+
+    #[test]
+    fn strict_mode_rejects_unknown_events() {
+        let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
+
+        // Strict mode is enabled. Meaning we require all events to be registered.
+        storage.set_strict_mode(true);
+
+        // We register only the transfer event
+        storage
+            .include_events(&[transfer_event()])
+            .expect("failed to register transfer event");
+
+        // But we try to add both transfer and approval events
+        let err = storage
+            .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
+            .expect_err("strict mode must error on unknown events");
+
+        // It errors because the approval event is not registered
+        assert!(
+            err.to_string().contains("event descriptor was not found"),
+            "unexpected error: {err}"
+        );
+
+        // No transfer events were persisted
+        assert_eq!(
+            stored_count_for_event(&storage, &transfer_event()),
+            0,
+            "no transfer events must be stored"
+        );
+
+        // No approval events were persisted
+        assert_eq!(
+            stored_count_for_event(&storage, &approval_event()),
+            0,
+            "no approval events must be stored"
+        );
+    }
+
+    #[test]
+    fn non_strict_mode_skips_unknown_events() {
+        let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
+
+        // Strict mode is disabled. Meaning we just skip unknown events without failing.
+        storage.set_strict_mode(false);
+
+        // Register only the Transfer event
+        storage
+            .include_events(&[transfer_event()])
+            .expect("failed to register event");
+
+        // We try to add both transfer and approval events
+        storage
+            .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
+            .expect("non-strict mode should skip unknown events without failing");
+
+        // Transfer events were persisted (verified by querying the DB)
+        assert_eq!(
+            stored_count_for_event(&storage, &transfer_event()),
+            5,
+            "transfer events must be stored"
+        );
+
+        // Approval events were skipped
+        assert_eq!(
+            stored_count_for_event(&storage, &approval_event()),
+            0,
+            "approval events must be skipped"
+        );
+    }
+
+    #[test]
+    fn strict_mode_works_with_known_events() {
+        let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
+
+        // Set strict mode. We require all events to be registered.
+        storage.set_strict_mode(true);
+
+        // Register both events
+        storage
+            .include_events(&[transfer_event(), approval_event()])
+            .expect("failed to register events");
+
+        // Insert both events
+        let inserted = storage
+            .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
+            .expect("strict mode should accept known events");
+        assert_eq!(inserted, 10);
+
+        // Transfer events are persisted
+        assert_eq!(
+            stored_count_for_event(&storage, &transfer_event()),
+            5,
+            "all transfer logs must be stored"
+        );
+
+        // Approval events are persisted
+        assert_eq!(
+            stored_count_for_event(&storage, &approval_event()),
+            5,
+            "all approval events must be stored"
+        );
+    }
 }
 
 #[cfg(test)]
