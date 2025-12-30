@@ -1046,13 +1046,11 @@ mod tests {
             .expect("failed to register event");
 
         // We try to add both transfer and approval events
-        let inserted = storage
+        storage
             .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
             .expect("non-strict mode should skip unknown events without failing");
 
-        assert_eq!(inserted, 5);
-
-        // Transfer events were persisted
+        // Transfer events were persisted (verified by querying the DB)
         assert_eq!(
             stored_count_for_event(&storage, &transfer_event()),
             5,
