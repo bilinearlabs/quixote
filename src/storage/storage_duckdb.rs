@@ -1133,14 +1133,6 @@ mod tests {
             "all approval events must be stored"
         );
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use alloy::rpc::types::Log;
-    use serde_json::json;
-    use std::str::FromStr;
 
     fn erc721_transfer_event() -> Event {
         Event::from_str(
