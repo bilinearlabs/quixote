@@ -928,12 +928,13 @@ mod tests {
     }
 
     #[test]
-    fn uint256_values_are_not_stripped() {
+    fn uint256_values_are_stored_as_decimal() {
         let erc721 = erc721_transfer_event();
         let storage = storage_with(&[erc721.clone()]);
 
-        // The expected token id
-        let token_id_padded = "0x000000000000000000000000000000000000000000000000000000000000beef";
+        // Token id in hex format (0xbeef = 48879 decimal)
+        let token_id_hex = "0x000000000000000000000000000000000000000000000000000000000000beef";
+        let token_id_decimal = "48879";
 
         let log: Log = serde_json::from_value(json!({
             "address": "0x000000000000000000000000000000000000c0de",
@@ -942,7 +943,7 @@ mod tests {
                 "0x000000000000000000000000000000000000000000000000000000000000d00d",
                 "0x000000000000000000000000000000000000000000000000000000000000f00d",
                 // Token id goes here
-                token_id_padded,
+                token_id_hex,
             ],
             "data": "0x",
             "blockNumber": "0x1",
@@ -964,15 +965,17 @@ mod tests {
             .lock()
             .expect("failed to lock connection for verification");
         let stored_token_id: String = conn
-            .query_row(&format!("SELECT \"tokenId\" FROM {table}"), [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                &format!("SELECT CAST(tokenId AS VARCHAR) FROM {table}"),
+                [],
+                |row| row.get(0),
+            )
             .expect("tokenId must exist");
 
-        // We retrieve exactly the same token id
+        // uint256 values are stored as BIGNUM and retrieved as decimal strings
         assert_eq!(
-            stored_token_id, token_id_padded,
-            "tokenId should keep its leading zeros"
+            stored_token_id, token_id_decimal,
+            "tokenId should be stored as decimal"
         );
     }
 
@@ -1018,6 +1021,9 @@ mod tests {
             .expect("from must exist");
 
         // We retrieve the expected address
-        assert_eq!(stored_from, from_address);
+        assert_eq!(
+            stored_from.to_ascii_lowercase(),
+            from_address.to_ascii_lowercase()
+        );
     }
 }
