@@ -191,25 +191,13 @@ impl Storage for DuckDBStorage {
                     log.address().to_string(),
                 ];
 
-                // Now we need to consider how many indexed topics our current event includes.
-                let indexed_params = parsed_event
-                    .inputs
-                    .iter()
-                    .filter(|input| input.indexed)
-                    .count();
-                for i in 1..=indexed_params {
-                    row_vals.push(
-                        log.topics()
-                            .get(i)
-                            .map(|t| Self::strip_leading_zeros(&t.to_string()))
-                            .unwrap_or_default(),
-                    );
-                }
-
-                // Time to include the non-indexed parameters.
-                if let Ok(DecodedEvent { body, .. }) =
+                // Parse the indexed and non-indexed parameters and convert them to strings ready for the DB.
+                if let Ok(DecodedEvent { indexed, body, .. }) =
                     parsed_event.decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())
                 {
+                    for item in indexed {
+                        row_vals.push(Self::dyn_sol_value_to_string(&item));
+                    }
                     for item in body {
                         row_vals.push(Self::dyn_sol_value_to_string(&item));
                     }
@@ -615,17 +603,19 @@ impl DuckDBStorage {
                 "
                     CREATE TABLE IF NOT EXISTS event_{event_name}_{table_name}(
                         block_number UBIGINT NOT NULL,
-                        transaction_hash VARCHAR(42) NOT NULL,
+                        transaction_hash VARCHAR NOT NULL,
                         log_index USMALLINT NOT NULL,
-                        contract_address VARCHAR(42) NOT NULL,
+                        contract_address VARCHAR NOT NULL,
                 ",
             );
 
             event.inputs.iter().for_each(|param| {
-                statement.push_str(&format!(
-                    "\"{}\" VARCHAR({DEFAULT_VARCHAR_LENGTH}),",
-                    param.name
-                ));
+                let db_type = if param.selector_type() == "uint256" {
+                    "BIGNUM"
+                } else {
+                    "VARCHAR"
+                };
+                statement.push_str(&format!("\"{}\" {db_type},", param.name));
             });
 
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
@@ -830,29 +820,23 @@ impl DuckDBStorage {
         Ok(column_names)
     }
 
-    /// Strips leading zeros from an Ethereum address string.
+    /// Remove padding of Ethereum addresses to save storage space.
     ///
     /// # Description
     ///
-    /// Converts addresses like `0x0000000000000000000000007176f0f071379fee51668eb6387dda9129e5ca6b`
-    /// to `0x7176f0f071379fee51668eb6387dda9129e5ca6b`, saving storage space.
-    ///
-    /// The `0x` prefix is preserved, and at least one character after the prefix is kept
-    /// (e.g., `0x0000...0000` becomes `0x0`).
+    /// Only the first 24 bytes of the address are removed. The rest are kept regardless of the number of zeros.
     #[inline]
-    fn strip_leading_zeros(addr: &str) -> String {
-        // Ensure the address starts with "0x"
-        if !addr.starts_with("0x") {
+    fn remove_address_padding(addr: &str) -> String {
+        // Ensure the address starts with "0x" and it's a full address (66 characters).
+        if !addr.starts_with("0x") || addr.len() != 66 {
             return addr.to_string();
         }
 
-        let hex_part = &addr[2..];
-        let trimmed = hex_part.trim_start_matches('0');
-
-        if trimmed.is_empty() {
-            "0x0".to_string()
+        // Check if the input address is aligned to 64B using 0s.
+        if &addr[..26] == "0x000000000000000000000000" {
+            format!("0x{}", &addr[27..])
         } else {
-            format!("0x{}", trimmed)
+            addr.to_string()
         }
     }
 
@@ -864,7 +848,7 @@ impl DuckDBStorage {
     /// For complex types (arrays, tuples), flattens them into a JSON-like string format.
     fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
         match value {
-            DynSolValue::Address(a) => Self::strip_leading_zeros(&a.to_string()),
+            DynSolValue::Address(a) => Self::remove_address_padding(&a.to_string()),
             DynSolValue::Bool(b) => b.to_string(),
             DynSolValue::Int(i, _) => i.to_string(),
             DynSolValue::Uint(u, _) => u.to_string(),
@@ -1147,6 +1131,135 @@ mod tests {
             stored_count_for_event(&storage, &approval_event()),
             5,
             "all approval events must be stored"
+        );
+    }
+
+    fn erc721_transfer_event() -> Event {
+        Event::from_str(
+            "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)",
+        )
+        .expect("failed to build ERC721 Transfer event")
+    }
+
+    fn erc20_transfer_event() -> Event {
+        Event::from_str("event Transfer(address indexed from,address indexed to,uint256 amount)")
+            .expect("failed to build ERC20 Transfer event")
+    }
+
+    fn event_table_name(event: &Event) -> String {
+        format!(
+            "event_{}_{}",
+            event.name.as_str().to_ascii_lowercase(),
+            event.selector()
+        )
+    }
+
+    fn storage_with(events: &[Event]) -> DuckDBStorage {
+        let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
+        storage.set_strict_mode(true);
+        storage
+            .include_events(events)
+            .expect("failed to register events");
+        storage
+    }
+
+    #[test]
+    fn uint256_values_are_stored_as_decimal() {
+        let erc721 = erc721_transfer_event();
+        let storage = storage_with(&[erc721.clone()]);
+
+        // Token id in hex format (0xbeef = 48879 decimal)
+        let token_id_hex = "0x000000000000000000000000000000000000000000000000000000000000beef";
+        let token_id_decimal = "48879";
+
+        let log: Log = serde_json::from_value(json!({
+            "address": "0x000000000000000000000000000000000000c0de",
+            "topics": [
+                erc721.selector().to_string(),
+                "0x000000000000000000000000000000000000000000000000000000000000d00d",
+                "0x000000000000000000000000000000000000000000000000000000000000f00d",
+                // Token id goes here
+                token_id_hex,
+            ],
+            "data": "0x",
+            "blockNumber": "0x1",
+            "transactionHash": format!("0x{:064x}", 0xaaa_u64),
+            "transactionIndex": "0x0",
+            "blockHash": format!("0x{:064x}", 0xbbb_u64),
+            "logIndex": "0x0",
+            "removed": false
+        }))
+        .expect("failed to build erc721 log");
+
+        storage
+            .add_events(&[log])
+            .expect("erc721 transfer should be accepted");
+
+        let table = event_table_name(&erc721);
+        let conn = storage
+            .conn
+            .lock()
+            .expect("failed to lock connection for verification");
+        let stored_token_id: String = conn
+            .query_row(
+                &format!("SELECT CAST(tokenId AS VARCHAR) FROM {table}"),
+                [],
+                |row| row.get(0),
+            )
+            .expect("tokenId must exist");
+
+        // uint256 values are stored as BIGNUM and retrieved as decimal strings
+        assert_eq!(
+            stored_token_id, token_id_decimal,
+            "tokenId should be stored as decimal"
+        );
+    }
+
+    #[test]
+    fn addresses_are_stripped_correctly() {
+        let erc20 = erc20_transfer_event();
+        let storage = storage_with(&[erc20.clone()]);
+
+        // This is the address we want to store
+        let from_address = "0x000083970c0bd792a6d1402a12c65628bcb3f8b4";
+
+        let log: Log = serde_json::from_value(json!({
+            "address": "0x000000000000000000000000000000000000c0de",
+            "topics": [
+                erc20.selector().to_string(),
+                // Addresses are 40 bytes but they are used as 64 bytes
+                format!("{:0>64}", &from_address.trim_start_matches("0x")),
+                "0x000000000000000000000000000000000000000000000000000000000000f00d",
+            ],
+            "data": format!("0x{:064x}", 0u64),
+            "blockNumber": "0x2",
+            "transactionHash": format!("0x{:064x}", 0xccc_u64),
+            "transactionIndex": "0x0",
+            "blockHash": format!("0x{:064x}", 0xddd_u64),
+            "logIndex": "0x0",
+            "removed": false
+        }))
+        .expect("failed to build erc20 log");
+
+        storage
+            .add_events(&[log])
+            .expect("erc20 transfer should be accepted");
+
+        let table = event_table_name(&erc20);
+        let conn = storage
+            .conn
+            .lock()
+            .expect("failed to lock connection for verification");
+        let stored_from: String = conn
+            .query_row(&format!("SELECT \"from\" FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .expect("from must exist");
+
+        // We retrieve the expected address
+        assert_eq!(
+            stored_from.to_ascii_lowercase(),
+            from_address.to_ascii_lowercase()
         );
     }
 }
