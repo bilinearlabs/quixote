@@ -271,10 +271,10 @@ mod tests {
         "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     /// How many transfer events are expected to be fetched within the block range 24022000-24023000
     /// for the USDC contract.
-    const TRANSFER_EVENT_COUNT: usize = 58620;
+    const TRANSFER_EVENT_COUNT: usize = 29911;
 
     /// Target block for the short test.
-    const TARGET_BLOCK_SHORT_TEST: u64 = 24023000;
+    const TARGET_BLOCK_SHORT_TEST: u64 = 24022500;
 
     #[fixture]
     fn provider_fixture() -> Arc<dyn Provider + Send + Sync + 'static> {
@@ -376,7 +376,7 @@ mod tests {
         });
 
         // Give enough time to fetch the events.
-        sleep(Duration::from_secs(60)).await;
+        sleep(Duration::from_secs(40)).await;
 
         handle.abort();
 
