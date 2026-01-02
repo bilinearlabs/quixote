@@ -1,15 +1,17 @@
 services:
   quixote:
-    image: SET_YOUR_IMAGE_HERE
+    image: ${QUIXOTE_IMAGE}
     command:
       - -r
-      - 1@REDACTED
+      - ${RPC_CONFIG}
       - -c
       - 0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85
       - -e
       - Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
       - -s
       - "23890166"
+      - --api-server
+      - "0.0.0.0:9720"
       - --metrics
       - --metrics-address
       - 0.0.0.0
@@ -17,8 +19,11 @@ services:
       - "5054"
       - --metrics-allow-origin
       - "*"
+    env_file:
+      - .env
     ports:
       - "5054:5054"
+      - "9720:9720"
 
   prom-agent:
     image: prom/prometheus:v2.43.1

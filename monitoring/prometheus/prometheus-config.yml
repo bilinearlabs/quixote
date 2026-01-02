@@ -5,10 +5,10 @@ global:
     monitor: "quixote"
 
 remote_write:
-  - url: REDACTED
+  - url: ${PROMETHEUS_REMOTE_URL}
     basic_auth:
-      username: REDACTED
-      password: REDACTED
+      username: ${PROMETHEUS_USERNAME}
+      password: ${PROMETHEUS_PASSWORD}
     write_relabel_configs:
       - source_labels: [__name__]
         regex: '^quixote.*'
@@ -19,4 +19,3 @@ scrape_configs:
     static_configs:
       - targets: ["quixote:5054"]
     metrics_path: /metrics
-

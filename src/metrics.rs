@@ -3,17 +3,17 @@
 //! Prometheus metrics exporter.
 use anyhow::Result;
 use axum::{
+    Router,
     body::Body,
     extract::State,
     http::{
-        header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE},
         HeaderValue, StatusCode,
+        header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE},
     },
     response::Response,
     routing::get,
-    Router,
 };
-use prometheus::{Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
+use prometheus::{Encoder, GaugeVec, IntGaugeVec, Opts, Registry, TextEncoder};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 
@@ -36,6 +36,7 @@ struct MetricsInner {
     registry: Registry,
     indexed_block: IntGaugeVec,
     chain_head_block: IntGaugeVec,
+    backfill_percentage: GaugeVec,
     allow_origin: Option<String>,
 }
 
@@ -75,11 +76,21 @@ impl MetricsHandle {
             .set(1);
         registry.register(Box::new(build_info.clone()))?;
 
+        let backfill_percentage = GaugeVec::new(
+            Opts::new(
+                "backfill_percentage",
+                "Percentage of the backfill that has been completed.",
+            ),
+            &["chain_id", "contract_address"],
+        )?;
+        registry.register(Box::new(backfill_percentage.clone()))?;
+
         Ok(Self {
             inner: Some(Arc::new(MetricsInner {
                 registry,
                 indexed_block,
                 chain_head_block,
+                backfill_percentage,
                 allow_origin: config.allow_origin.clone(),
             })),
         })
@@ -112,6 +123,17 @@ impl MetricsHandle {
         }
     }
 
+    #[inline]
+    pub fn record_backfill_percentage(&self, chain_id: u64, contract: &str, percentage: f64) {
+        if let Some(inner) = &self.inner {
+            let chain_id_str = chain_id.to_string();
+            inner
+                .backfill_percentage
+                .with_label_values(&[chain_id_str.as_str(), contract])
+                .set(percentage);
+        }
+    }
+
     pub async fn serve(&self, config: MetricsConfig) -> Result<Option<JoinHandle<()>>> {
         let Some(inner) = self.inner.clone() else {
             return Ok(None);
@@ -131,7 +153,10 @@ impl MetricsHandle {
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .unwrap_or_else(|_| panic!("Failed to bind metrics server to {addr}"));
-            tracing::info!("Metrics server listening on {}", listener.local_addr().unwrap());
+            tracing::info!(
+                "Metrics server listening on {}",
+                listener.local_addr().unwrap()
+            );
 
             axum::serve(listener, app)
                 .await
@@ -168,8 +193,8 @@ async fn metrics_handler(State(state): State<MetricsState>) -> Response {
         .expect("response building should not fail");
 
     if let Some(origin) = state.allow_origin.as_ref() {
-        let header_value = HeaderValue::from_str(origin)
-            .unwrap_or_else(|_| HeaderValue::from_static("*"));
+        let header_value =
+            HeaderValue::from_str(origin).unwrap_or_else(|_| HeaderValue::from_static("*"));
         response
             .headers_mut()
             .insert(ACCESS_CONTROL_ALLOW_ORIGIN, header_value);
@@ -177,4 +202,3 @@ async fn metrics_handler(State(state): State<MetricsState>) -> Response {
 
     response
 }
-

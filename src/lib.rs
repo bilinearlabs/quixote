@@ -13,8 +13,8 @@ pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
-pub mod streamlit_wrapper;
 pub mod metrics;
+pub mod streamlit_wrapper;
 
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;

@@ -76,6 +76,8 @@ impl EventCollector {
         let mut successful_counter: u8 = 0;
         // Flag that indicates whether we are backfilling the database or fetching the finalized block.
         let mut backfill_mode = true;
+        // The percentage of the backfill that has been completed.
+        let mut backfill_percentage = 0.0;
 
         loop {
             // Check tha the RPC server is not syncing. If syncing, a raw exit is issued as we prefer to stop
@@ -106,6 +108,22 @@ impl EventCollector {
             );
 
             let remaining = finalized_block.saturating_sub(processed_to);
+
+            let start_block = self.start_block.saturating_sub(1);
+            let backfill_blocks = finalized_block.saturating_sub(start_block);
+            let new_backfill_percentage =
+                (backfill_blocks - remaining) as f64 / backfill_blocks as f64;
+            // Only update the backfill percentage if it is less than 1.0.
+            if backfill_percentage < 1.0 {
+                info!("Backfill percentage: {:?}", new_backfill_percentage);
+                self.metrics.record_backfill_percentage(
+                    self.chain_id,
+                    &self.contract_address_str,
+                    new_backfill_percentage,
+                );
+                backfill_percentage = new_backfill_percentage;
+            }
+
             if remaining == 0 {
                 // First time, we completed the backfill of the DB, let's inform the user.
                 if backfill_mode {
@@ -170,6 +188,8 @@ impl EventCollector {
                         }
 
                         let events = provider.get_logs(&filter).await?;
+
+                        info!("Events fetched: {:?}", events.len());
 
                         Ok::<_, anyhow::Error>(LogChunk {
                             start_block: chunk_start,
@@ -345,8 +365,14 @@ mod tests {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         let metrics = crate::metrics::MetricsHandle::default();
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
-        let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10, 1, metrics);
+        let mut collector = EventCollector::new(
+            provider_fixture,
+            producer_buffer,
+            &seed_fixture,
+            10,
+            1,
+            metrics,
+        );
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -384,8 +410,14 @@ mod tests {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         let metrics = crate::metrics::MetricsHandle::default();
         // 10k throttles the RPC at the second request.
-        let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10000, 1, metrics);
+        let mut collector = EventCollector::new(
+            provider_fixture,
+            producer_buffer,
+            &seed_fixture,
+            10000,
+            1,
+            metrics,
+        );
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {

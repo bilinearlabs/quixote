@@ -139,6 +139,8 @@ Building the project requires dynamic linking to DuckDB to avoid compiling it fr
 $ wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
 $ unzip libduckdb-linux-amd64.zip -d lib
 $ export DUCKDB_LIB_DIR=$PWD/lib
+$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+$ export LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
 $ cargo build
 ```
 - macOS:
@@ -146,6 +148,8 @@ $ cargo build
 $ wget wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-osx-universal.zip
 $ unzip libduckdb-osx-universal.zip -d lib
 $ export DUCKDB_LIB_DIR=$PWD/lib
+$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+$ export DYLD_FALLBACK_LIBRARY_PATH=$DUCKDB_LIB_DIR
 $ cargo build
 ```
 
