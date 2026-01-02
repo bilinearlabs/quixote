@@ -1,0 +1,36 @@
+services:
+  quixote:
+    image: SET_YOUR_IMAGE_HERE
+    command:
+      - -r
+      - 1@REDACTED
+      - -c
+      - 0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85
+      - -e
+      - Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
+      - -s
+      - "23890166"
+      - --metrics
+      - --metrics-address
+      - 0.0.0.0
+      - --metrics-port
+      - "5054"
+      - --metrics-allow-origin
+      - "*"
+    ports:
+      - "5054:5054"
+
+  prom-agent:
+    image: prom/prometheus:v2.43.1
+    volumes:
+      - ./monitoring/prometheus/prometheus-config.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    depends_on:
+      - quixote
+    ports:
+      - 127.0.0.1:9090:9090
+
+volumes:
+  prometheus_data:

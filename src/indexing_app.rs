@@ -5,6 +5,7 @@ use crate::{
     api_rest::start_api_server,
     cli::IndexingArgs,
     constants, error_codes,
+    metrics::{MetricsConfig, MetricsHandle},
     storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
 };
 use alloy::{
@@ -26,12 +27,24 @@ pub struct IndexingApp {
     pub cancellation_token: CancellationToken,
     pub seeds: Vec<CollectorSeed>,
     pub default_block_range: usize,
+    pub metrics_config: MetricsConfig,
+    pub metrics: MetricsHandle,
+    pub chain_id: u64,
+    pub contract_address: String,
 }
 
 impl IndexingApp {
     /// Builds a new instance fo the indexing app using the command line arguments.
     pub fn build_app(args: IndexingArgs) -> Result<Self> {
         let cancellation_token = CancellationToken::default();
+
+        let metrics_config = MetricsConfig {
+            enabled: args.metrics,
+            address: args.metrics_address.clone(),
+            port: args.metrics_port,
+            allow_origin: args.metrics_allow_origin.clone(),
+        };
+        let metrics = MetricsHandle::new(&metrics_config)?;
 
         // Instantiate the DB handlers, for the consumer task and the API server.
         let (storage, storage_for_api) = if let Some(db_path) = &args.database {
@@ -64,7 +77,9 @@ impl IndexingApp {
             .api_server
             .unwrap_or(constants::DEFAULT_API_SERVER_ADDRESS.to_string());
 
-        let host_list = vec![args.rpc_host.parse::<RpcHost>()?];
+        let host = args.rpc_host.parse::<RpcHost>()?;
+        let chain_id = host.chain_id;
+        let host_list = vec![host];
         Ok(Self {
             storage: Arc::new(storage),
             host_list,
@@ -73,6 +88,10 @@ impl IndexingApp {
             cancellation_token,
             seeds,
             default_block_range: args.block_range,
+            metrics_config,
+            metrics,
+            chain_id,
+            contract_address: args.contract,
         })
     }
 
@@ -82,6 +101,14 @@ impl IndexingApp {
         let (producer_buffer, consumer_buffer) = mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
 
         let start_block = self.seeds.first().unwrap().start_block;
+
+        if self.metrics.is_enabled() {
+            let _ = self
+                .metrics
+                .serve(self.metrics_config.clone())
+                .await
+                .with_context(|| "Failed to start metrics server")?;
+        }
 
         self.seeds.iter().for_each(|seed| {
             if seed.start_block != start_block {
@@ -95,6 +122,7 @@ impl IndexingApp {
             self.seeds.clone(),
             producer_buffer,
             self.default_block_range,
+            self.metrics.clone(),
         )?;
 
         let mut event_processor = EventProcessor::new(
@@ -102,6 +130,9 @@ impl IndexingApp {
             start_block,
             consumer_buffer,
             self.cancellation_token.clone(),
+            self.chain_id,
+            self.contract_address.clone(),
+            self.metrics.clone(),
         );
 
         // Start the REST API server

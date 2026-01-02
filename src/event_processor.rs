@@ -17,6 +17,9 @@ pub struct EventProcessor {
     start_block: u64,
     producer_buffer: RxLogChunk,
     cancellation_token: CancellationToken,
+    chain_id: u64,
+    contract_address: String,
+    metrics: crate::metrics::MetricsHandle,
 }
 
 impl EventProcessor {
@@ -25,12 +28,18 @@ impl EventProcessor {
         start_block: u64,
         producer_buffer: RxLogChunk,
         cancellation_token: CancellationToken,
+        chain_id: u64,
+        contract_address: String,
+        metrics: crate::metrics::MetricsHandle,
     ) -> Self {
         Self {
             storage,
             start_block,
             producer_buffer,
             cancellation_token,
+            chain_id,
+            contract_address,
+            metrics,
         }
     }
 
@@ -61,6 +70,11 @@ impl EventProcessor {
                                 // block.
                                 if ev.is_empty() {
                                     self.storage.synchronize_events(Some(last_processed))?;
+                                    self.metrics.record_indexed_block(
+                                        self.chain_id,
+                                        &self.contract_address,
+                                        last_processed,
+                                    );
                                     continue;
                                 }
 
@@ -79,6 +93,11 @@ impl EventProcessor {
                                 *last_processed_shared.lock().unwrap() = last_processed;
 
                             debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
+                                self.metrics.record_indexed_block(
+                                    self.chain_id,
+                                    &self.contract_address,
+                                    last_processed,
+                                );
                             }
                         }
                         None => {
@@ -86,6 +105,11 @@ impl EventProcessor {
                             info!("Event channel closed, all events processed");
                             // Ensure the database is in a consistent state.
                             self.storage.synchronize_events(Some(*last_processed_shared.lock().unwrap()))?;
+                            self.metrics.record_indexed_block(
+                                self.chain_id,
+                                &self.contract_address,
+                                *last_processed_shared.lock().unwrap(),
+                            );
                             return Ok(());
                         }
                     }

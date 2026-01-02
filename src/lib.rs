@@ -14,6 +14,7 @@ pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
 pub mod streamlit_wrapper;
+pub mod metrics;
 
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;

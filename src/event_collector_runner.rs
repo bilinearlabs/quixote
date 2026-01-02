@@ -175,10 +175,17 @@ fn extract_wait_seconds(error_msg: &str) -> Option<u64> {
 /// possible. Each seed is assigned to a producer task, this way, all the events that belong to the same seed are
 /// ensured to be synchronized up to the same block.
 pub struct EventCollectorRunner {
-    provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>>,
+    provider_list: Vec<ProviderContext>,
     seeds: Vec<CollectorSeed>,
     producer_buffer: TxLogChunk,
     default_block_range: usize,
+    metrics: crate::metrics::MetricsHandle,
+}
+
+#[derive(Clone)]
+struct ProviderContext {
+    provider: Arc<dyn Provider + Send + Sync + 'static>,
+    chain_id: u64,
 }
 
 impl EventCollectorRunner {
@@ -187,6 +194,7 @@ impl EventCollectorRunner {
         seeds: Vec<CollectorSeed>,
         producer_buffer: TxLogChunk,
         default_block_range: usize,
+        metrics: crate::metrics::MetricsHandle,
     ) -> Result<Self> {
         let always_retry_policy = AlwaysRetryPolicy::default();
 
@@ -197,7 +205,7 @@ impl EventCollectorRunner {
             always_retry_policy,
         );
 
-        let mut provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>> = Vec::new();
+        let mut provider_list: Vec<ProviderContext> = Vec::new();
         for (idx, host) in host_list.iter().enumerate() {
             let url: Url = host
                 .try_into()
@@ -210,7 +218,10 @@ impl EventCollectorRunner {
 
             let provider = ProviderBuilder::new()
                 .connect_client(RpcClient::builder().layer(retry_policy.clone()).http(url));
-            provider_list.push(Arc::new(provider));
+            provider_list.push(ProviderContext {
+                provider: Arc::new(provider),
+                chain_id: host.chain_id,
+            });
         }
 
         Ok(Self {
@@ -218,6 +229,7 @@ impl EventCollectorRunner {
             seeds,
             producer_buffer,
             default_block_range,
+            metrics,
         })
     }
 
@@ -243,10 +255,12 @@ impl EventCollectorRunner {
         for (seed_index, seed) in self.seeds.iter().enumerate() {
             // Assign seed to RPC host using round-robin
             let host_index = seed_index % self.provider_list.len();
-            let provider = self.provider_list[host_index].clone();
+            let provider = self.provider_list[host_index].provider.clone();
+            let chain_id = self.provider_list[host_index].chain_id;
             let producer_buffer = self.producer_buffer.clone();
             let seed = seed.clone();
             let default_block_range = self.default_block_range;
+            let metrics = self.metrics.clone();
 
             info!(
                 "Spawning collector for seed {} (contract: {}, start_block: {}) on RPC host {}",
@@ -254,8 +268,14 @@ impl EventCollectorRunner {
             );
 
             let handle = tokio::spawn(async move {
-                let collector =
-                    EventCollector::new(provider, producer_buffer, &seed, default_block_range);
+                let collector = EventCollector::new(
+                    provider,
+                    producer_buffer,
+                    &seed,
+                    default_block_range,
+                    chain_id,
+                    metrics,
+                );
 
                 if let Err(e) = collector.collect().await {
                     error!(

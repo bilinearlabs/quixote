@@ -89,4 +89,23 @@ pub struct IndexingArgs {
         default_value_t = false
     )]
     pub strict_mode: bool,
+    #[arg(
+        long,
+        help = "Enable the Prometheus metrics endpoint.",
+        default_value_t = false
+    )]
+    pub metrics: bool,
+    #[arg(
+        long,
+        help = "Metrics server listening address",
+        default_value_t = String::from("127.0.0.1"),
+    )]
+    pub metrics_address: String,
+    #[arg(long, help = "Metrics server listening port", default_value_t = 5054)]
+    pub metrics_port: u16,
+    #[arg(
+        long,
+        help = "Optional Access-Control-Allow-Origin value for the metrics endpoint"
+    )]
+    pub metrics_allow_origin: Option<String>,
 }

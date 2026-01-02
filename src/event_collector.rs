@@ -18,6 +18,7 @@ use tracing::{debug, error, info, warn};
 #[derive(Clone)]
 pub struct EventCollector {
     contract_address: Address,
+    contract_address_str: String,
     filter: Option<Filter>,
     start_block: u64,
     provider: Arc<dyn Provider + Send + Sync>,
@@ -26,6 +27,8 @@ pub struct EventCollector {
     producer_buffer: TxLogChunk,
     default_block_range: usize,
     block_range_hint_regex: regex::Regex,
+    chain_id: u64,
+    metrics: crate::metrics::MetricsHandle,
 }
 
 impl EventCollector {
@@ -34,6 +37,8 @@ impl EventCollector {
         producer_buffer: TxLogChunk,
         seed: &CollectorSeed,
         default_block_range: usize,
+        chain_id: u64,
+        metrics: crate::metrics::MetricsHandle,
     ) -> Self {
         // Regex to capture the last two integers (block numbers) from messages like:
         // "error code -32602: query exceeds max results 20000, retry with the range 22382105-22382515"
@@ -41,6 +46,7 @@ impl EventCollector {
 
         Self {
             contract_address: seed.contract_address,
+            contract_address_str: seed.contract_address.to_string(),
             filter: seed.filter.clone(),
             start_block: seed.start_block,
             provider,
@@ -49,6 +55,8 @@ impl EventCollector {
             producer_buffer,
             default_block_range,
             block_range_hint_regex,
+            chain_id,
+            metrics,
         }
     }
 
@@ -89,6 +97,13 @@ impl EventCollector {
                     return Err(anyhow::anyhow!("RPC connection error: {}", e));
                 }
             };
+
+            // Export the chain head so consumers can compare with the indexed progress.
+            self.metrics.record_chain_head_block(
+                self.chain_id,
+                &self.contract_address_str,
+                finalized_block,
+            );
 
             let remaining = finalized_block.saturating_sub(processed_to);
             if remaining == 0 {
@@ -328,9 +343,10 @@ mod tests {
         seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
+        let metrics = crate::metrics::MetricsHandle::default();
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
         let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10, 1, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -366,9 +382,10 @@ mod tests {
         seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
+        let metrics = crate::metrics::MetricsHandle::default();
         // 10k throttles the RPC at the second request.
         let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10000);
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10000, 1, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
