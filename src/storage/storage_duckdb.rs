@@ -1261,4 +1261,142 @@ mod tests {
             from_address.to_ascii_lowercase()
         );
     }
+
+    /// Represents a test case for verifying Solidity event type storage.
+    /// The input_value is encoded automatically based on the event signature,
+    /// and expected_value is what should be stored in the database.
+    struct SolidityTypeTestCase {
+        /// The Solidity event signature (e.g., "event Test(uint256 value)")
+        event_signature: &'static str,
+        /// The input value to encode and store
+        input_value: DynSolValue,
+        /// The expected value after storing in the database
+        expected_value: &'static str,
+    }
+
+    /// Test that all Solidity data types are properly stored in the database.
+    /// For each test case:
+    /// 1. Parse the event signature to determine param type and if indexed
+    /// 2. Encode the input_value appropriately (topics for indexed, data for non-indexed)
+    /// 3. Store the event and verify the stored value matches expected_value
+    #[test]
+    fn all_solidity_types_stored_correctly() {
+        use alloy::primitives::{Address, FixedBytes, I256, U256};
+
+        fn to_bytes32_hex(val: u64) -> String {
+            format!("0x{:064x}", val)
+        }
+
+        let test_cases: Vec<SolidityTypeTestCase> = vec![
+            // address (indexed)
+            SolidityTypeTestCase {
+                event_signature: "event Test(address indexed addr)",
+                input_value: DynSolValue::Address(
+                    "0xabcdef1234567890abcdef1234567890abcdef12"
+                        .parse::<Address>()
+                        .unwrap(),
+                ),
+                expected_value: "0xabcdef1234567890abcdef1234567890abcdef12",
+            },
+        ];
+
+        for (i, test_case) in test_cases.iter().enumerate() {
+            let event = Event::from_str(test_case.event_signature).unwrap_or_else(|_| {
+                panic!(
+                    "Failed to parse event signature: {}",
+                    test_case.event_signature
+                )
+            });
+            let storage = storage_with(&[event.clone()]);
+
+            // Build topics and data based on event signature
+            let mut topics: Vec<String> = vec![event.selector().to_string()];
+            let mut data_values: Vec<DynSolValue> = vec![];
+
+            // Process each parameter in the event
+            for param in &event.inputs {
+                if param.indexed {
+                    // Indexed params go in topics - encode as 32-byte topic
+                    // For the test, we use the input_value for the param we're testing
+                    // and dummy values for other indexed params
+                    if event.inputs.len() == 1
+                        || (param.selector_type() == "address"
+                            && test_case.input_value.as_address().is_some())
+                    {
+                        let encoded = test_case.input_value.abi_encode();
+                        topics.push(format!("0x{}", hex::encode(&encoded)));
+                    } else {
+                        // Dummy indexed value for other indexed params (like from/to in Transfer)
+                        topics.push(format!("0x{:064x}", i + 1));
+                    }
+                } else {
+                    // Non-indexed params go in data
+                    data_values.push(test_case.input_value.clone());
+                }
+            }
+
+            // Encode data field
+            let data = if data_values.is_empty() {
+                "0x".to_string()
+            } else {
+                let tuple = DynSolValue::Tuple(data_values);
+                format!("0x{}", hex::encode(tuple.abi_encode_params()))
+            };
+
+            // Get the column name from the last non-indexed param, or the test param
+            let column_name = event
+                .inputs
+                .iter()
+                .filter(|p| !p.indexed)
+                .last()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| event.inputs.last().unwrap().name.clone());
+
+            let log: Log = serde_json::from_value(json!({
+                "address": "0x000000000000000000000000000000000000c0de",
+                "topics": topics,
+                "data": data,
+                "blockNumber": format!("0x{:x}", i + 1),
+                "transactionHash": to_bytes32_hex((i + 1) as u64),
+                "transactionIndex": "0x0",
+                "blockHash": to_bytes32_hex((i + 100) as u64),
+                "logIndex": "0x0",
+                "removed": false
+            }))
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to build log for {}: {}",
+                    test_case.event_signature, e
+                )
+            });
+
+            storage.add_events(&[log]).unwrap_or_else(|e| {
+                panic!("Failed to store event {}: {}", test_case.event_signature, e)
+            });
+
+            let table = event_table_name(&event);
+            let conn = storage.conn.lock().expect("Failed to lock connection");
+
+            let query = format!("SELECT CAST({} AS VARCHAR) FROM {}", column_name, table);
+
+            let stored: String = conn
+                .query_row(&query, [], |row| row.get(0))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Column '{}' must exist and not be null for event '{}': {}",
+                        column_name, test_case.event_signature, e
+                    )
+                });
+
+            assert_eq!(
+                stored.to_lowercase(),
+                test_case.expected_value.to_lowercase(),
+                "Mismatch for event '{}' column '{}': expected '{}', got '{}'",
+                test_case.event_signature,
+                column_name,
+                test_case.expected_value,
+                stored
+            );
+        }
+    }
 }
