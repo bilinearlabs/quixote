@@ -611,7 +611,7 @@ impl DuckDBStorage {
 
             event.inputs.iter().for_each(|param| {
                 let db_type = if param.selector_type() == "uint256" {
-                    "BIGNUM"
+                    "VARINT"
                 } else {
                     "VARCHAR"
                 };
@@ -1263,22 +1263,20 @@ mod tests {
     }
 
     /// Represents a test case for verifying Solidity event type storage.
-    /// The input_value is encoded automatically based on the event signature,
-    /// and expected_value is what should be stored in the database.
     struct SolidityTypeTestCase {
         /// The Solidity event signature (e.g., "event Test(uint256 value)")
         event_signature: &'static str,
         /// The input value to encode and store
         input_value: DynSolValue,
-        /// The expected value after storing in the database
+        /// The expected column name in DuckDB
+        expected_name: &'static str,
+        /// The expected DuckDB column type (e.g., "VARINT", "VARCHAR")
+        expected_type: &'static str,
+        /// The expected value as a string (use CAST to VARCHAR for comparison)
         expected_value: &'static str,
     }
 
     /// Test that all Solidity data types are properly stored in the database.
-    /// For each test case:
-    /// 1. Parse the event signature to determine param type and if indexed
-    /// 2. Encode the input_value appropriately (topics for indexed, data for non-indexed)
-    /// 3. Store the event and verify the stored value matches expected_value
     #[test]
     fn all_solidity_types_stored_correctly() {
         use alloy::primitives::{Address, FixedBytes, I256, U256};
@@ -1296,7 +1294,219 @@ mod tests {
                         .parse::<Address>()
                         .unwrap(),
                 ),
+                expected_name: "addr",
+                expected_type: "VARCHAR",
                 expected_value: "0xabcdef1234567890abcdef1234567890abcdef12",
+            },
+            // address (non-indexed)
+            SolidityTypeTestCase {
+                event_signature: "event Test(address addr)",
+                input_value: DynSolValue::Address(
+                    "0xabcdef1234567890abcdef1234567890abcdef12"
+                        .parse::<Address>()
+                        .unwrap(),
+                ),
+                expected_name: "addr",
+                expected_type: "VARCHAR",
+                expected_value: "0xabcdef1234567890abcdef1234567890abcdef12",
+            },
+            // bool true
+            SolidityTypeTestCase {
+                event_signature: "event Test(bool flag)",
+                input_value: DynSolValue::Bool(true),
+                expected_name: "flag",
+                expected_type: "VARCHAR",
+                expected_value: "true",
+            },
+            // bool false
+            SolidityTypeTestCase {
+                event_signature: "event Test(bool flag)",
+                input_value: DynSolValue::Bool(false),
+                expected_name: "flag",
+                expected_type: "VARCHAR",
+                expected_value: "false",
+            },
+            // uint256
+            SolidityTypeTestCase {
+                event_signature: "event Test(uint256 value)",
+                input_value: DynSolValue::Uint(U256::from(12345u64), 256),
+                expected_name: "value",
+                expected_type: "VARINT",
+                expected_value: "12345",
+            },
+            // uint128
+            SolidityTypeTestCase {
+                event_signature: "event Test(uint128 value)",
+                input_value: DynSolValue::Uint(U256::from(255u64), 128),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "255",
+            },
+            // uint64
+            SolidityTypeTestCase {
+                event_signature: "event Test(uint64 value)",
+                input_value: DynSolValue::Uint(U256::from(0xdeadbeefu64), 64),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "3735928559",
+            },
+            // uint32
+            SolidityTypeTestCase {
+                event_signature: "event Test(uint32 value)",
+                input_value: DynSolValue::Uint(U256::from(1000000u64), 32),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "1000000",
+            },
+            // uint16
+            SolidityTypeTestCase {
+                event_signature: "event Test(uint16 value)",
+                input_value: DynSolValue::Uint(U256::from(65535u64), 16),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "65535",
+            },
+            // uint8
+            SolidityTypeTestCase {
+                event_signature: "event Test(uint8 value)",
+                input_value: DynSolValue::Uint(U256::from(255u64), 8),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "255",
+            },
+            // int256 negative
+            SolidityTypeTestCase {
+                event_signature: "event Test(int256 value)",
+                input_value: DynSolValue::Int(I256::MINUS_ONE, 256),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "-1",
+            },
+            // int256 positive
+            SolidityTypeTestCase {
+                event_signature: "event Test(int256 value)",
+                input_value: DynSolValue::Int(I256::try_from(123i64).unwrap(), 256),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "123",
+            },
+            // int128
+            SolidityTypeTestCase {
+                event_signature: "event Test(int128 value)",
+                input_value: DynSolValue::Int(I256::try_from(-123i64).unwrap(), 128),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "-123",
+            },
+            // int64
+            SolidityTypeTestCase {
+                event_signature: "event Test(int64 value)",
+                input_value: DynSolValue::Int(I256::try_from(-2i64).unwrap(), 64),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "-2",
+            },
+            // int32
+            SolidityTypeTestCase {
+                event_signature: "event Test(int32 value)",
+                input_value: DynSolValue::Int(I256::try_from(-42i64).unwrap(), 32),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "-42",
+            },
+            // int16
+            SolidityTypeTestCase {
+                event_signature: "event Test(int16 value)",
+                input_value: DynSolValue::Int(I256::try_from(-100i64).unwrap(), 16),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "-100",
+            },
+            // int8
+            SolidityTypeTestCase {
+                event_signature: "event Test(int8 value)",
+                input_value: DynSolValue::Int(I256::MINUS_ONE, 8),
+                expected_name: "value",
+                expected_type: "VARCHAR",
+                expected_value: "-1",
+            },
+            // bytes32
+            SolidityTypeTestCase {
+                event_signature: "event Test(bytes32 data)",
+                input_value: DynSolValue::FixedBytes(
+                    FixedBytes::<32>::from_slice(
+                        &hex::decode(
+                            "deadbeef00000000000000000000000000000000000000000000000000000001",
+                        )
+                        .unwrap(),
+                    ),
+                    32,
+                ),
+                expected_name: "data",
+                expected_type: "VARCHAR",
+                expected_value: "0xdeadbeef00000000000000000000000000000000000000000000000000000001",
+            },
+            // bytes16
+            SolidityTypeTestCase {
+                event_signature: "event Test(bytes16 data)",
+                input_value: DynSolValue::FixedBytes(
+                    FixedBytes::<32>::right_padding_from(
+                        &hex::decode("deadbeefcafebabe1234567800000000").unwrap(),
+                    ),
+                    16,
+                ),
+                expected_name: "data",
+                expected_type: "VARCHAR",
+                expected_value: "0xdeadbeefcafebabe1234567800000000",
+            },
+            // bytes8
+            SolidityTypeTestCase {
+                event_signature: "event Test(bytes8 data)",
+                input_value: DynSolValue::FixedBytes(
+                    FixedBytes::<32>::right_padding_from(&hex::decode("deadbeefcafebabe").unwrap()),
+                    8,
+                ),
+                expected_name: "data",
+                expected_type: "VARCHAR",
+                expected_value: "0xdeadbeefcafebabe",
+            },
+            // bytes4
+            SolidityTypeTestCase {
+                event_signature: "event Test(bytes4 data)",
+                input_value: DynSolValue::FixedBytes(
+                    FixedBytes::<32>::right_padding_from(&hex::decode("deadbeef").unwrap()),
+                    4,
+                ),
+                expected_name: "data",
+                expected_type: "VARCHAR",
+                expected_value: "0xdeadbeef",
+            },
+            // bytes1
+            SolidityTypeTestCase {
+                event_signature: "event Test(bytes1 data)",
+                input_value: DynSolValue::FixedBytes(
+                    FixedBytes::<32>::right_padding_from(&[0xab]),
+                    1,
+                ),
+                expected_name: "data",
+                expected_type: "VARCHAR",
+                expected_value: "0xab",
+            },
+            // bytes (dynamic)
+            SolidityTypeTestCase {
+                event_signature: "event Test(bytes data)",
+                input_value: DynSolValue::Bytes(hex::decode("deadbeef").unwrap()),
+                expected_name: "data",
+                expected_type: "VARCHAR",
+                expected_value: "0xdeadbeef",
+            },
+            // string
+            SolidityTypeTestCase {
+                event_signature: "event Test(string message)",
+                input_value: DynSolValue::String("hello".to_string()),
+                expected_name: "message",
+                expected_type: "VARCHAR",
+                expected_value: "hello",
             },
         ];
 
@@ -1309,48 +1519,26 @@ mod tests {
             });
             let storage = storage_with(&[event.clone()]);
 
-            // Build topics and data based on event signature
-            let mut topics: Vec<String> = vec![event.selector().to_string()];
-            let mut data_values: Vec<DynSolValue> = vec![];
+            // Each test event has exactly one parameter
+            let param = &event.inputs[0];
 
-            // Process each parameter in the event
-            for param in &event.inputs {
-                if param.indexed {
-                    // Indexed params go in topics - encode as 32-byte topic
-                    // For the test, we use the input_value for the param we're testing
-                    // and dummy values for other indexed params
-                    if event.inputs.len() == 1
-                        || (param.selector_type() == "address"
-                            && test_case.input_value.as_address().is_some())
-                    {
-                        let encoded = test_case.input_value.abi_encode();
-                        topics.push(format!("0x{}", hex::encode(&encoded)));
-                    } else {
-                        // Dummy indexed value for other indexed params (like from/to in Transfer)
-                        topics.push(format!("0x{:064x}", i + 1));
-                    }
-                } else {
-                    // Non-indexed params go in data
-                    data_values.push(test_case.input_value.clone());
-                }
-            }
-
-            // Encode data field
-            let data = if data_values.is_empty() {
-                "0x".to_string()
+            // Encode based on whether the param is indexed (topic) or not (data)
+            let (topics, data) = if param.indexed {
+                let encoded = test_case.input_value.abi_encode();
+                (
+                    vec![
+                        event.selector().to_string(),
+                        format!("0x{}", hex::encode(&encoded)),
+                    ],
+                    "0x".to_string(),
+                )
             } else {
-                let tuple = DynSolValue::Tuple(data_values);
-                format!("0x{}", hex::encode(tuple.abi_encode_params()))
+                let encoded = test_case.input_value.abi_encode_params();
+                (
+                    vec![event.selector().to_string()],
+                    format!("0x{}", hex::encode(&encoded)),
+                )
             };
-
-            // Get the column name from the last non-indexed param, or the test param
-            let column_name = event
-                .inputs
-                .iter()
-                .filter(|p| !p.indexed)
-                .last()
-                .map(|p| p.name.clone())
-                .unwrap_or_else(|| event.inputs.last().unwrap().name.clone());
 
             let log: Log = serde_json::from_value(json!({
                 "address": "0x000000000000000000000000000000000000c0de",
@@ -1370,6 +1558,7 @@ mod tests {
                 )
             });
 
+            // Add log to storage
             storage.add_events(&[log]).unwrap_or_else(|e| {
                 panic!("Failed to store event {}: {}", test_case.event_signature, e)
             });
@@ -1377,25 +1566,58 @@ mod tests {
             let table = event_table_name(&event);
             let conn = storage.conn.lock().expect("Failed to lock connection");
 
-            let query = format!("SELECT CAST({} AS VARCHAR) FROM {}", column_name, table);
-
-            let stored: String = conn
-                .query_row(&query, [], |row| row.get(0))
+            // 1. Verify column name exists
+            let col_info: (String, String) = conn
+                .query_row(
+                    &format!(
+                        "SELECT column_name, data_type FROM information_schema.columns \
+                         WHERE table_name = '{}' AND column_name = '{}'",
+                        table, test_case.expected_name
+                    ),
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
                 .unwrap_or_else(|e| {
                     panic!(
-                        "Column '{}' must exist and not be null for event '{}': {}",
-                        column_name, test_case.event_signature, e
+                        "Column '{}' must exist for event '{}': {}",
+                        test_case.expected_name, test_case.event_signature, e
+                    )
+                });
+
+            // 2. Verify column type
+            assert_eq!(
+                col_info.1.to_uppercase(),
+                test_case.expected_type,
+                "Type mismatch for '{}': expected '{}', got '{}'",
+                test_case.event_signature,
+                test_case.expected_type,
+                col_info.1
+            );
+
+            // 3. Verify stored value (cast to VARCHAR for uniform comparison)
+            let stored_value: String = conn
+                .query_row(
+                    &format!(
+                        "SELECT CAST({} AS VARCHAR) FROM {}",
+                        test_case.expected_name, table
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to read value for '{}': {}",
+                        test_case.event_signature, e
                     )
                 });
 
             assert_eq!(
-                stored.to_lowercase(),
+                stored_value.to_lowercase(),
                 test_case.expected_value.to_lowercase(),
-                "Mismatch for event '{}' column '{}': expected '{}', got '{}'",
+                "Value mismatch for '{}': expected '{}', got '{}'",
                 test_case.event_signature,
-                column_name,
                 test_case.expected_value,
-                stored
+                stored_value
             );
         }
     }
