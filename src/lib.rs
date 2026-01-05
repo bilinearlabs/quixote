@@ -13,7 +13,9 @@ pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
+pub mod configuration;
 pub mod streamlit_wrapper;
+pub use configuration::IndexerConfiguration;
 
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
@@ -67,6 +69,10 @@ pub mod error_codes {
     pub const ERROR_CODE_WRONG_INPUT_ARGUMENTS: i32 = 4;
     /// Indexing failed.
     pub const ERROR_CODE_INDEXING_FAILED: i32 = 5;
+    /// Configuration file not found.
+    pub const ERROR_CODE_CONFIGURATION_FILE_NOT_FOUND: i32 = 6;
+    /// Failed to load configuration from file.
+    pub const ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE: i32 = 7;
 }
 
 /// Module with definitions related to the storage of the indexed data.
