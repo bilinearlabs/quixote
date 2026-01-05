@@ -72,6 +72,34 @@ The previous call would launch an instance of the tool for indexing ERC20 Transf
 
 The event needs to be fully defined to properly index the events for the chosen smartcontract. **Take the definition from the contract's ABI.**.
 
+### Using a Configuration File
+
+To include some advanced features such as filtering, a configuration file shall be used instead of the CLI arguments. The configuration file is a YAML file that contains definitions for _indexing jobs_. Pass the configuration file to the app using the CLI argument `--config <path to config file>`.
+
+An example of a configuration file:
+
+```yaml
+database_path: "quixote_indexer.duckdb"
+abi_spec: "abi.json"
+api_server_address: "127.0.0.1"
+api_server_port: 9720
+frontend_address: "127.0.0.1"
+frontend_port: 8501
+index_jobs:
+  - rpc_url: "https://eth.somerpc.com"
+    contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    events:
+      - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
+        filters:
+          from: "0x12347F958D2ee523a2206206994597C13D831ec7"
+      - full_signature: "Approval(address indexed owner, address indexed spender, uint256 value)"
+
+  - rpc_url: "https://eth.andanotherone.com"
+    contract: "0x112200958D2ee523a2206206994597C13D831000"
+    events:
+      - full_signature: "Approval(address indexed owner, address indexed spender, uint256 value)"
+```
+
 ### Embedded Frontend
 
 The indexer launches a frontend along the main indexer service, which is available at `http://127.0.0.1:8501`.
