@@ -90,6 +90,7 @@ pub mod storage {
     #[derive(Debug, Clone, Serialize, Default)]
     #[serde(rename_all = "camelCase")]
     pub struct EventDescriptorDb {
+        pub chain_id: Option<u64>,
         pub event_hash: Option<String>,
         pub event_signature: Option<String>,
         pub event_name: Option<String>,

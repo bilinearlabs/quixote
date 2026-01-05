@@ -69,7 +69,7 @@ impl CollectorSeed {
         filter: Option<Filter>,
     ) -> Result<Self> {
         // Ensure the given set of events are synchronized up to the same block.
-        let stored_start_block = Self::check_start_block(db_conn, &events).await?;
+        let stored_start_block = Self::check_start_block(db_conn, chain_id, &events).await?;
 
         // If the DB is empty, consider the given start_block, if not resume from the last
         // stored block.
@@ -90,17 +90,22 @@ impl CollectorSeed {
         })
     }
 
-    /// Ensure all the given events are synchronized up to the same block.
-    async fn check_start_block(db_conn: &DuckDBStorage, events: &[Event]) -> Result<u64> {
+    /// Ensure all the given events are synchronized up to the same block for a specific chain.
+    async fn check_start_block(
+        db_conn: &DuckDBStorage,
+        chain_id: u64,
+        events: &[Event],
+    ) -> Result<u64> {
         // Check that all the events synchronized the same blocks.
         // If a previous run indexed events using -e multiple times, and the current run is
         // using the -a option, the indexing state for such event might be different. Thus
         // we can't resume indexing these events as a block (using the same eth_getLogs call).
-        let current_start_block = db_conn.first_block(events.iter().next().unwrap())?;
+        let current_start_block = db_conn.first_block(chain_id, events.iter().next().unwrap())?;
         for event in events {
-            if current_start_block != db_conn.first_block(event)? {
+            if current_start_block != db_conn.first_block(chain_id, event)? {
                 return Err(anyhow::anyhow!(
-                    "The given events are disjoint. This means that you need to run the indexer using -e for each one of the given events."
+                    "The given events are disjoint for chain {:#x}. This means that you need to run the indexer using -e for each one of the given events.",
+                    chain_id
                 ));
             }
         }
@@ -115,6 +120,7 @@ impl CollectorSeed {
     /// the command line arguments. It also ensures the first_block is set if the DB was empty.
     fn set_start_block_for_events(
         conn: &DuckDBStorage,
+        chain_id: u64,
         events: &[Event],
         start_block_arg: Option<u64>,
     ) -> Result<u64> {
@@ -123,25 +129,30 @@ impl CollectorSeed {
         // If not, consider the start block from the command line arguments.
         let event = events.first().unwrap();
 
-        if let Ok(last_block) = conn.last_block(event) {
+        if let Ok(last_block) = conn.last_block(chain_id, event) {
             if last_block != 0 {
                 info!(
-                    "The DB contains events of the ABI up to the block {last_block}. Resuming indexing from the last synchronized block."
+                    "Chain {:#x}: The DB contains events of the ABI up to the block {last_block}. Resuming indexing from the last synchronized block.",
+                    chain_id
                 );
                 Ok(last_block.saturating_add(1))
             } else {
-                info!("The DB is empty for the events included in the ABI.");
+                info!(
+                    "Chain {:#x}: The DB is empty for the events included in the ABI.",
+                    chain_id
+                );
                 let start_block = start_block_arg.unwrap_or_default();
 
                 for event in events {
-                    conn.set_first_block(event, start_block)?;
+                    conn.set_first_block(chain_id, event, start_block)?;
                 }
 
                 Ok(start_block)
             }
         } else {
             Err(anyhow::anyhow!(
-                "Failed to access the sync state for the event {}. Check the integrity of the database.",
+                "Chain {:#x}: Failed to access the sync state for the event {}. Check the integrity of the database.",
+                chain_id,
                 event.name
             ))
         }
@@ -249,14 +260,14 @@ impl CollectorSeed {
             };
 
             // Register the events in the DB. If the events are already registered, the operation will be ignored.
-            db_conn.include_events(&events)?;
+            db_conn.include_events(chain_id, &events)?;
             // Now, ensure all these events are synchronized up to the same block.
-            let start_block = Self::check_start_block(db_conn, &events).await?;
+            let start_block = Self::check_start_block(db_conn, chain_id, &events).await?;
 
             // If the DB is empty, initialize the DB to start indexing from the given start block.
             // Otherwise, resume from the last synchronized block.
             let start_block = if start_block == 0 {
-                Self::set_start_block_for_events(db_conn, &events, job.start_block)?
+                Self::set_start_block_for_events(db_conn, chain_id, &events, job.start_block)?
             } else {
                 start_block
             };
@@ -282,7 +293,7 @@ impl CollectorSeed {
             };
 
             info!(
-                "Created indexing job for chain {} at {} for contract {} with {} event(s), starting from block {}",
+                "Created indexing job for chain {:#x} at {} for contract {} with {} event(s), starting from block {}",
                 seed.chain_id,
                 seed.rpc_url,
                 seed.contract_address,

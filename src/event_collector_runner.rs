@@ -13,8 +13,8 @@ use alloy::{
     },
 };
 use anyhow::Result;
-use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, error, info};
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -170,19 +170,20 @@ fn extract_wait_seconds(error_msg: &str) -> Option<u64> {
 /// ## Resource assignment
 ///
 /// Each seed is assigned to its own provider and producer task, ensuring all events that belong to the
-/// same seed are synchronized up to the same block.
+/// same seed are synchronized up to the same block. Each chain has its own buffer to maintain block ordering.
 pub struct EventCollectorRunner {
     /// List of providers, one per seed, created from each seed's rpc_url.
     provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>>,
     seeds: Vec<CollectorSeed>,
-    producer_buffer: TxLogChunk,
+    /// Per-chain buffers: chain_id -> TxLogChunk
+    chain_buffers: HashMap<u64, TxLogChunk>,
     default_block_range: usize,
 }
 
 impl EventCollectorRunner {
     pub fn new(
         seeds: Vec<CollectorSeed>,
-        producer_buffer: TxLogChunk,
+        chain_buffers: HashMap<u64, TxLogChunk>,
         default_block_range: usize,
     ) -> Result<Self> {
         let always_retry_policy = AlwaysRetryPolicy::default();
@@ -198,7 +199,7 @@ impl EventCollectorRunner {
         let mut provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>> = Vec::new();
         for (idx, seed) in seeds.iter().enumerate() {
             info!(
-                "Creating provider {} for RPC URL: {} (chain_id: {})",
+                "Creating provider {} for RPC URL: {} (chain_id: {:#x})",
                 idx, seed.rpc_url, seed.chain_id
             );
 
@@ -213,7 +214,7 @@ impl EventCollectorRunner {
         Ok(Self {
             provider_list,
             seeds,
-            producer_buffer,
+            chain_buffers,
             default_block_range,
         })
     }
@@ -226,7 +227,11 @@ impl EventCollectorRunner {
             anyhow::bail!("Exiting app as no providers are available");
         }
 
-        info!("Starting {} collector tasks", self.seeds.len());
+        info!(
+            "Starting {} collector tasks across {} chain(s)",
+            self.seeds.len(),
+            self.chain_buffers.len()
+        );
 
         // Collect all task handles
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
@@ -236,12 +241,24 @@ impl EventCollectorRunner {
             self.seeds.iter().zip(self.provider_list.iter()).enumerate()
         {
             let provider = provider.clone();
-            let producer_buffer = self.producer_buffer.clone();
+
+            // Get the buffer for this seed's chain
+            let producer_buffer = match self.chain_buffers.get(&seed.chain_id) {
+                Some(buffer) => buffer.clone(),
+                None => {
+                    error!(
+                        "No buffer found for chain_id {:#x}. This is a bug.",
+                        seed.chain_id
+                    );
+                    continue;
+                }
+            };
+
             let seed = seed.clone();
             let default_block_range = self.default_block_range;
 
             info!(
-                "Spawning collector for seed {} (chain_id: {}, contract: {}, start_block: {})",
+                "Spawning collector for seed {} (chain_id: {:#x}, contract: {}, start_block: {})",
                 seed_index, seed.chain_id, seed.contract_address, seed.start_block
             );
 
@@ -251,7 +268,7 @@ impl EventCollectorRunner {
 
                 if let Err(e) = collector.collect().await {
                     error!(
-                        "Collector for seed {} (chain_id: {}, contract: {}) failed: {}",
+                        "Collector for seed {} (chain_id: {:#x}, contract: {}) failed: {}",
                         seed_index, seed.chain_id, seed.contract_address, e
                     );
                 }
