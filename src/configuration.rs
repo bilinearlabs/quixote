@@ -2,7 +2,8 @@
 
 //! Module that handles the configuration of the application.
 
-use crate::{cli::IndexingArgs, constants, error_codes};
+use crate::{RpcHost, cli::IndexingArgs, constants, error_codes};
+use alloy::transports::http::reqwest::Url;
 use clap::Parser;
 use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
@@ -136,6 +137,10 @@ impl IndexerConfiguration {
 
 impl FileConfiguration {
     /// Build from CLI arguments (no config file).
+    ///
+    /// # Panics
+    ///
+    /// This function will log an error and exit if the RPC host string cannot be parsed.
     pub fn from_args(args: &IndexingArgs) -> Self {
         let index_jobs = if let Some(ref contract) = args.contract {
             let events = args.event.as_ref().map(|evts| {
@@ -147,8 +152,27 @@ impl FileConfiguration {
                     .collect()
             });
 
+            // Parse the CLI rpc_host string and convert to a proper URL
+            let rpc_url = if let Some(ref rpc_host_str) = args.rpc_host {
+                let rpc_host: RpcHost = rpc_host_str.parse().unwrap_or_else(|e| {
+                    error!("Failed to parse RPC host '{}': {}", rpc_host_str, e);
+                    std::process::exit(
+                        error_codes::ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE,
+                    );
+                });
+                let url: Url = (&rpc_host).try_into().unwrap_or_else(|e| {
+                    error!("Failed to convert RPC host to URL: {}", e);
+                    std::process::exit(
+                        error_codes::ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE,
+                    );
+                });
+                url.to_string()
+            } else {
+                String::new()
+            };
+
             vec![IndexJob {
-                rpc_url: args.rpc_host.clone().unwrap_or_default(),
+                rpc_url,
                 contract: contract.clone(),
                 start_block: args.start_block.as_ref().and_then(|s| s.parse().ok()),
                 block_range: Some(args.block_range),
@@ -184,5 +208,85 @@ impl FileConfiguration {
             .add_source(Environment::with_prefix("QUIXOTE"))
             .build()?
             .try_deserialize()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::IndexingArgs;
+    use crate::constants::DEFAULT_BLOCK_RANGE;
+    use rstest::rstest;
+
+    const TEST_CONTRACT: &str = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+
+    /// Helper to create IndexingArgs for testing
+    fn create_test_args(rpc_host: Option<String>, contract: Option<String>) -> IndexingArgs {
+        IndexingArgs {
+            rpc_host,
+            contract,
+            event: None,
+            start_block: None,
+            database: None,
+            abi_spec: None,
+            api_server: None,
+            block_range: DEFAULT_BLOCK_RANGE,
+            verbosity: 1,
+            disable_frontend: false,
+            frontend_address: "127.0.0.1".to_string(),
+            frontend_port: 8501,
+            strict_mode: false,
+            config: None,
+        }
+    }
+
+    #[rstest]
+    #[case::with_credentials("user:pass@http://localhost:8545", "http://user:pass@localhost:8545/")]
+    #[case::without_credentials("http://localhost:8545", "http://localhost:8545/")]
+    #[case::with_credentials_host_port(
+        "user:pass@localhost:8545",
+        "http://user:pass@localhost:8545/"
+    )]
+    #[case::https_url("https://eth.example.com", "https://eth.example.com/")]
+    #[case::https_with_credentials(
+        "user:pass@https://eth.example.com",
+        "https://user:pass@eth.example.com/"
+    )]
+    fn from_args_parses_rpc_host_correctly(#[case] input: &str, #[case] expected_url: &str) {
+        let args = create_test_args(Some(input.to_string()), Some(TEST_CONTRACT.to_string()));
+
+        let config = FileConfiguration::from_args(&args);
+
+        assert_eq!(config.index_jobs.len(), 1);
+        assert_eq!(config.index_jobs[0].rpc_url, expected_url);
+    }
+
+    #[rstest]
+    fn from_args_without_contract_creates_no_jobs() {
+        let args = create_test_args(Some("http://localhost:8545".to_string()), None);
+
+        let config = FileConfiguration::from_args(&args);
+
+        assert!(config.index_jobs.is_empty());
+    }
+
+    #[rstest]
+    fn from_args_with_events_creates_event_jobs() {
+        let mut args = create_test_args(
+            Some("http://localhost:8545".to_string()),
+            Some(TEST_CONTRACT.to_string()),
+        );
+        args.event = Some(vec![
+            "Transfer(address indexed from, address indexed to, uint256 value)".to_string(),
+            "Approval(address indexed owner, address indexed spender, uint256 value)".to_string(),
+        ]);
+
+        let config = FileConfiguration::from_args(&args);
+
+        assert_eq!(config.index_jobs.len(), 1);
+        let events = config.index_jobs[0].events.as_ref().unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events[0].full_signature.contains("Transfer"));
+        assert!(events[1].full_signature.contains("Approval"));
     }
 }

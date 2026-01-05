@@ -17,7 +17,9 @@ use alloy::{
     eips::BlockNumberOrTag,
     json_abi::{Event, JsonAbi},
     primitives::Address,
-    rpc::types::Filter,
+    providers::{Provider, ProviderBuilder},
+    rpc::{client::RpcClient, types::Filter},
+    transports::http::reqwest::Url,
 };
 use anyhow::Result;
 use tracing::{debug, info};
@@ -28,13 +30,23 @@ use tracing::{debug, info};
 ///
 /// This object includes all the information needed to start an indexing job. The indexing job may fetch one or many
 /// events, but as they all belong to the same job, they all need to synchronize up to the same block.
+///
+/// All input data is validated during construction to ensure the seed is ready to use.
 #[derive(Debug, Clone)]
 pub struct CollectorSeed {
-    //pub chain_id: u64,
+    /// The chain ID of the network where the contract is deployed.
+    pub chain_id: u64,
+    /// The RPC URL to connect to the network (already parsed and validated).
+    pub rpc_url: Url,
+    /// The contract address to index.
     pub contract_address: Address,
+    /// The events to index from the contract.
     pub events: Vec<Event>,
+    /// The block number to start indexing from.
     pub start_block: u64,
+    /// The sync mode for the indexing job.
     pub sync_mode: BlockNumberOrTag,
+    /// Optional filter for the events.
     pub filter: Option<Filter>,
 }
 
@@ -49,6 +61,8 @@ impl CollectorSeed {
     /// TODO: fully support filters
     pub async fn new(
         db_conn: &DuckDBStorage,
+        chain_id: u64,
+        rpc_url: Url,
         contract_address: Address,
         events: Vec<Event>,
         start_block: u64,
@@ -66,6 +80,8 @@ impl CollectorSeed {
         };
 
         Ok(Self {
+            chain_id,
+            rpc_url,
             contract_address,
             events,
             start_block,
@@ -131,6 +147,23 @@ impl CollectorSeed {
         }
     }
 
+    /// Fetches the chain_id from the given RPC URL.
+    ///
+    /// # Description
+    ///
+    /// Creates a temporary provider to query the chain_id from the RPC endpoint.
+    pub async fn fetch_chain_id(rpc_url: String) -> Result<u64, anyhow::Error> {
+        let url: Url = rpc_url
+            .parse()
+            .map_err(|e| anyhow::anyhow!("Failed to parse RPC URL '{}': {}", rpc_url, e))?;
+
+        let provider = ProviderBuilder::new().connect_client(RpcClient::builder().http(url));
+        provider
+            .get_chain_id()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to fetch chain_id from RPC '{}': {}", rpc_url, e))
+    }
+
     /// Builds a list of CollectorSeed from the configuration's index jobs.
     ///
     /// # Description
@@ -146,9 +179,36 @@ impl CollectorSeed {
         db_conn: &DuckDBStorage,
         config: &IndexerConfiguration,
     ) -> Result<Vec<Self>, anyhow::Error> {
+        Self::build_seeds_with_chain_id_resolver(db_conn, config, Self::fetch_chain_id).await
+    }
+
+    /// Builds a list of CollectorSeed from the configuration's index jobs with a custom chain_id resolver.
+    ///
+    /// # Description
+    ///
+    /// This method allows injecting a custom chain_id resolver, which is useful for testing
+    /// without making real RPC calls.
+    pub async fn build_seeds_with_chain_id_resolver<F, Fut>(
+        db_conn: &DuckDBStorage,
+        config: &IndexerConfiguration,
+        chain_id_resolver: F,
+    ) -> Result<Vec<Self>, anyhow::Error>
+    where
+        F: Fn(String) -> Fut,
+        Fut: std::future::Future<Output = Result<u64, anyhow::Error>>,
+    {
         let mut job_seeds = Vec::new();
 
         for job in config.index_jobs.iter() {
+            // Parse and validate the RPC URL
+            let rpc_url: Url = job
+                .rpc_url
+                .parse()
+                .map_err(|e| anyhow::anyhow!("Failed to parse RPC URL '{}': {}", job.rpc_url, e))?;
+
+            // Fetch chain_id from the RPC
+            let chain_id = chain_id_resolver(job.rpc_url.clone()).await?;
+
             // Parse the contract address
             let contract_address = job.contract.parse::<Address>().map_err(|_| {
                 anyhow::anyhow!(format!(
@@ -212,6 +272,8 @@ impl CollectorSeed {
             };
 
             let seed = Self {
+                chain_id,
+                rpc_url,
                 contract_address,
                 events,
                 start_block,
@@ -220,7 +282,9 @@ impl CollectorSeed {
             };
 
             info!(
-                "Created indexing job for contract {} with {} event(s), starting from block {}",
+                "Created indexing job for chain {} at {} for contract {} with {} event(s), starting from block {}",
+                seed.chain_id,
+                seed.rpc_url,
                 seed.contract_address,
                 seed.events.len(),
                 seed.start_block
@@ -256,10 +320,22 @@ mod tests {
     use rstest::{fixture, rstest};
 
     const TEST_CONTRACT_ADDRESS: &str = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+    const TEST_RPC_URL: &str = "http://localhost:8545/";
+    const TEST_CHAIN_ID: u64 = 1;
     const TRANSFER_EVENT_SIGNATURE: &str =
         "Transfer(address indexed from, address indexed to, uint256 value)";
     const APPROVAL_EVENT_SIGNATURE: &str =
         "Approval(address indexed owner, address indexed spender, uint256 value)";
+
+    /// Mock chain_id resolver that returns a fixed chain_id without making RPC calls.
+    async fn mock_chain_id_resolver(_rpc_url: String) -> Result<u64, anyhow::Error> {
+        Ok(TEST_CHAIN_ID)
+    }
+
+    /// Helper to get the expected parsed URL for assertions.
+    fn expected_rpc_url() -> Url {
+        TEST_RPC_URL.parse().unwrap()
+    }
 
     /// Creates an in-memory DuckDB storage for testing.
     #[fixture]
@@ -363,9 +439,13 @@ mod tests {
         test_db: DuckDBStorage,
         config_single_event: IndexerConfiguration,
     ) {
-        let seeds = CollectorSeed::build_seeds(&test_db, &config_single_event)
-            .await
-            .expect("build_seeds should succeed");
+        let seeds = CollectorSeed::build_seeds_with_chain_id_resolver(
+            &test_db,
+            &config_single_event,
+            mock_chain_id_resolver,
+        )
+        .await
+        .expect("build_seeds should succeed");
 
         // Should create exactly one seed
         assert_eq!(
@@ -375,6 +455,10 @@ mod tests {
         );
 
         let seed = &seeds[0];
+
+        // Verify the chain_id and rpc_url
+        assert_eq!(seed.chain_id, TEST_CHAIN_ID);
+        assert_eq!(seed.rpc_url, expected_rpc_url());
 
         // Verify the contract address
         let expected_address: Address = TEST_CONTRACT_ADDRESS.parse().unwrap();
@@ -407,14 +491,22 @@ mod tests {
         test_db: DuckDBStorage,
         config_with_abi: IndexerConfiguration,
     ) {
-        let seeds = CollectorSeed::build_seeds(&test_db, &config_with_abi)
-            .await
-            .expect("build_seeds should succeed");
+        let seeds = CollectorSeed::build_seeds_with_chain_id_resolver(
+            &test_db,
+            &config_with_abi,
+            mock_chain_id_resolver,
+        )
+        .await
+        .expect("build_seeds should succeed");
 
         // Should create exactly one seed
         assert_eq!(seeds.len(), 1, "Expected exactly one seed for ABI config");
 
         let seed = &seeds[0];
+
+        // Verify the chain_id and rpc_url
+        assert_eq!(seed.chain_id, TEST_CHAIN_ID);
+        assert_eq!(seed.rpc_url, expected_rpc_url());
 
         // Verify the contract address
         let expected_address: Address = TEST_CONTRACT_ADDRESS.parse().unwrap();
@@ -442,9 +534,13 @@ mod tests {
         test_db: DuckDBStorage,
         config_two_events: IndexerConfiguration,
     ) {
-        let seeds = CollectorSeed::build_seeds(&test_db, &config_two_events)
-            .await
-            .expect("build_seeds should succeed");
+        let seeds = CollectorSeed::build_seeds_with_chain_id_resolver(
+            &test_db,
+            &config_two_events,
+            mock_chain_id_resolver,
+        )
+        .await
+        .expect("build_seeds should succeed");
 
         // Should create exactly two seeds
         assert_eq!(
@@ -459,6 +555,8 @@ mod tests {
 
         // Verify first seed (Transfer event)
         let first_seed = &seeds[0];
+        assert_eq!(first_seed.chain_id, TEST_CHAIN_ID);
+        assert_eq!(first_seed.rpc_url, expected_rpc_url());
         assert_eq!(first_seed.contract_address, expected_address);
         assert_eq!(
             first_seed.events.len(),
@@ -474,6 +572,8 @@ mod tests {
 
         // Verify second seed (Approval event)
         let second_seed = &seeds[1];
+        assert_eq!(second_seed.chain_id, TEST_CHAIN_ID);
+        assert_eq!(second_seed.rpc_url, expected_rpc_url());
         assert_eq!(second_seed.contract_address, expected_address);
         assert_eq!(
             second_seed.events.len(),

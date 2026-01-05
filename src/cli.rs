@@ -16,9 +16,9 @@ pub struct IndexingArgs {
         long,
         required_unless_present = "config",
         help = "RPC host to index.
-            \nFormat: <chain_id>[:<username>:<password>]@<host>:<port>
-            \nExample for an RPC with basic auth => 1:user:pass@http://localhost:9822
-            \nExample for an authless RPC => 1@http://localhost:9822"
+            \nFormat: [<username>:<password>@]<url>
+            \nExample for an RPC with basic auth => user:pass@http://localhost:8545
+            \nExample for an authless RPC => http://localhost:8545"
     )]
     pub rpc_host: Option<String>,
     #[arg(

@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, RpcHost,
+    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor,
     api_rest::start_api_server,
     configuration::IndexerConfiguration,
     constants, error_codes,
@@ -14,7 +14,6 @@ use tracing::{error, info, warn};
 
 pub struct IndexingApp {
     pub storage: Arc<dyn Storage + Send + Sync>,
-    pub host_list: Vec<RpcHost>,
     pub api_server_address: String,
     pub storage_for_api: Arc<DuckDBStorageFactory>,
     pub cancellation_token: CancellationToken,
@@ -48,14 +47,6 @@ impl IndexingApp {
 
         let api_server_address =
             format!("{}:{}", config.api_server_address, config.api_server_port);
-        let host_list = vec![
-            config
-                .index_jobs
-                .first()
-                .unwrap()
-                .rpc_url
-                .parse::<RpcHost>()?,
-        ];
         let default_block_range = config
             .index_jobs
             .first()
@@ -65,7 +56,6 @@ impl IndexingApp {
 
         Ok(Self {
             storage: Arc::new(storage),
-            host_list,
             api_server_address,
             storage_for_api,
             cancellation_token,
@@ -89,7 +79,6 @@ impl IndexingApp {
         });
 
         let event_collector_runner = EventCollectorRunner::new(
-            &self.host_list,
             self.seeds.clone(),
             producer_buffer,
             self.default_block_range,

@@ -277,7 +277,7 @@ mod tests {
     const TARGET_BLOCK_SHORT_TEST: u64 = 24022500;
 
     #[fixture]
-    fn provider_fixture() -> Arc<dyn Provider + Send + Sync + 'static> {
+    fn rpc_host_fixture() -> RpcHost {
         use std::env;
 
         // Get credentials and URL from environment variables
@@ -287,20 +287,33 @@ mod tests {
         let rpc_password =
             env::var("QUIXOTE_TEST_RPC_PASSWORD").expect("QUIXOTE_TEST_RPC_PASSWORD must be set");
 
-        let host_str = format!("1:{}:{}@{}", rpc_user, rpc_password, rpc_url);
-        let host = host_str
+        let host_str = format!("{}:{}@{}", rpc_user, rpc_password, rpc_url);
+        host_str
             .parse::<RpcHost>()
-            .expect("Failed to parse RPC host");
-        let url: Url = (&host)
+            .expect("Failed to parse RPC host")
+    }
+
+    #[fixture]
+    fn provider_fixture(rpc_host_fixture: RpcHost) -> Arc<dyn Provider + Send + Sync + 'static> {
+        let url: Url = (&rpc_host_fixture)
             .try_into()
             .expect("Failed to convert RPC host to URL");
 
         Arc::new(ProviderBuilder::new().connect_client(RpcClient::builder().http(url)))
     }
 
+    /// Chain ID for Ethereum mainnet (used in integration tests).
+    const TEST_CHAIN_ID: u64 = 1;
+
     #[fixture]
-    fn seed_fixture(usdc_events_fixture: Vec<Event>) -> CollectorSeed {
+    fn seed_fixture(usdc_events_fixture: Vec<Event>, rpc_host_fixture: RpcHost) -> CollectorSeed {
+        let rpc_url: Url = (&rpc_host_fixture)
+            .try_into()
+            .expect("Failed to convert RPC host to URL");
+
         CollectorSeed {
+            chain_id: TEST_CHAIN_ID,
+            rpc_url,
             // USDC contract address
             contract_address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
                 .unwrap(),
