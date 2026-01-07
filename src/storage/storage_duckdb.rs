@@ -1705,9 +1705,11 @@ mod tests {
             });
 
             // Add log to storage
-            storage.add_events(&[log]).unwrap_or_else(|e| {
-                panic!("Failed to store event {}: {}", test_case.event_signature, e)
-            });
+            storage
+                .add_events(TEST_CHAIN_ID, &[log])
+                .unwrap_or_else(|e| {
+                    panic!("Failed to store event {}: {}", test_case.event_signature, e)
+                });
 
             let table = event_table_name(&event);
             let conn = storage.conn.lock().expect("Failed to lock connection");

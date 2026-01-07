@@ -14,7 +14,7 @@ anyhow = "1.0.100"
 axum = { version = "0.8.7", features = ["default", "http2"] }
 hex = "0.4"
 clap = { version = "4.5.51", features = ["derive"] }
-duckdb = { version = "1.4.3" }
+duckdb = { version = "1.4.3", features = ["bundled"] }
 futures = "0.3.31"
 regex = "1.12.2"
 secrecy = "0.10.3"
