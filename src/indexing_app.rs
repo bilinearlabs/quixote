@@ -18,7 +18,6 @@ pub struct IndexingApp {
     pub storage_for_api: Arc<DuckDBStorageFactory>,
     pub cancellation_token: CancellationToken,
     pub seeds: Vec<CollectorSeed>,
-    pub default_block_range: usize,
 }
 
 impl IndexingApp {
@@ -47,12 +46,6 @@ impl IndexingApp {
 
         let api_server_address =
             format!("{}:{}", config.api_server_address, config.api_server_port);
-        let default_block_range = config
-            .index_jobs
-            .first()
-            .unwrap()
-            .block_range
-            .unwrap_or(constants::DEFAULT_BLOCK_RANGE);
 
         Ok(Self {
             storage: Arc::new(storage),
@@ -60,7 +53,6 @@ impl IndexingApp {
             storage_for_api,
             cancellation_token,
             seeds,
-            default_block_range,
         })
     }
 
@@ -119,8 +111,7 @@ impl IndexingApp {
         }
 
         // Create the event collector runner with per-chain buffers
-        let event_collector_runner =
-            EventCollectorRunner::new(self.seeds.clone(), chain_buffers, self.default_block_range)?;
+        let event_collector_runner = EventCollectorRunner::new(self.seeds.clone(), chain_buffers)?;
 
         // Start the REST API server
         start_api_server(

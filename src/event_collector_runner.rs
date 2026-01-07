@@ -177,15 +177,10 @@ pub struct EventCollectorRunner {
     seeds: Vec<CollectorSeed>,
     /// Per-chain buffers: chain_id -> TxLogChunk
     chain_buffers: HashMap<u64, TxLogChunk>,
-    default_block_range: usize,
 }
 
 impl EventCollectorRunner {
-    pub fn new(
-        seeds: Vec<CollectorSeed>,
-        chain_buffers: HashMap<u64, TxLogChunk>,
-        default_block_range: usize,
-    ) -> Result<Self> {
+    pub fn new(seeds: Vec<CollectorSeed>, chain_buffers: HashMap<u64, TxLogChunk>) -> Result<Self> {
         let always_retry_policy = AlwaysRetryPolicy::default();
 
         let retry_policy = RetryBackoffLayer::new_with_policy(
@@ -215,7 +210,6 @@ impl EventCollectorRunner {
             provider_list,
             seeds,
             chain_buffers,
-            default_block_range,
         })
     }
 
@@ -255,16 +249,18 @@ impl EventCollectorRunner {
             };
 
             let seed = seed.clone();
-            let default_block_range = self.default_block_range;
 
             info!(
-                "Spawning collector for seed {} (chain_id: {:#x}, contract: {}, start_block: {})",
-                seed_index, seed.chain_id, seed.contract_address, seed.start_block
+                "Spawning collector for seed {} (chain_id: {:#x}, contract: {}, start_block: {}, block_range: {})",
+                seed_index,
+                seed.chain_id,
+                seed.contract_address,
+                seed.start_block,
+                seed.block_range
             );
 
             let handle = tokio::spawn(async move {
-                let collector =
-                    EventCollector::new(provider, producer_buffer, &seed, default_block_range);
+                let collector = EventCollector::new(provider, producer_buffer, &seed);
 
                 if let Err(e) = collector.collect().await {
                     error!(

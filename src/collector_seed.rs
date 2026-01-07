@@ -11,6 +11,7 @@
 
 use crate::{
     configuration::IndexerConfiguration,
+    constants,
     storage::{DuckDBStorage, Storage},
 };
 use alloy::{
@@ -48,6 +49,8 @@ pub struct CollectorSeed {
     pub sync_mode: BlockNumberOrTag,
     /// Optional filter for the events.
     pub filter: Option<Filter>,
+    /// Block range for RPC requests (how many blocks per get_logs call).
+    pub block_range: usize,
 }
 
 impl CollectorSeed {
@@ -67,6 +70,7 @@ impl CollectorSeed {
         events: Vec<Event>,
         start_block: u64,
         filter: Option<Filter>,
+        block_range: usize,
     ) -> Result<Self> {
         // Ensure the given set of events are synchronized up to the same block.
         let stored_start_block = Self::check_start_block(db_conn, chain_id, &events).await?;
@@ -87,6 +91,7 @@ impl CollectorSeed {
             start_block,
             sync_mode: BlockNumberOrTag::Finalized,
             filter,
+            block_range,
         })
     }
 
@@ -282,6 +287,9 @@ impl CollectorSeed {
                 )
             };
 
+            // Use job-specific block_range if set, otherwise fall back to default
+            let block_range = job.block_range.unwrap_or(constants::DEFAULT_BLOCK_RANGE);
+
             let seed = Self {
                 chain_id,
                 rpc_url,
@@ -290,6 +298,7 @@ impl CollectorSeed {
                 start_block,
                 sync_mode: BlockNumberOrTag::Finalized,
                 filter,
+                block_range,
             };
 
             info!(

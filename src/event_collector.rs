@@ -33,7 +33,6 @@ impl EventCollector {
         provider: Arc<dyn Provider + Send + Sync>,
         producer_buffer: TxLogChunk,
         seed: &CollectorSeed,
-        default_block_range: usize,
     ) -> Self {
         // Regex to capture the last two integers (block numbers) from messages like:
         // "error code -32602: query exceeds max results 20000, retry with the range 22382105-22382515"
@@ -47,7 +46,7 @@ impl EventCollector {
             sync_mode: seed.sync_mode,
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
-            default_block_range,
+            default_block_range: seed.block_range,
             block_range_hint_regex,
         }
     }
@@ -316,6 +315,7 @@ mod tests {
             start_block: 24022000,
             sync_mode: BlockNumberOrTag::Latest,
             filter: None,
+            block_range: crate::constants::DEFAULT_BLOCK_RANGE,
         }
     }
 
@@ -333,12 +333,12 @@ mod tests {
     #[tokio::test]
     async fn check_transfer_events_for_a_block_range(
         provider_fixture: Arc<dyn Provider + Send + Sync + 'static>,
-        seed_fixture: CollectorSeed,
+        mut seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
-        let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+        seed_fixture.block_range = 10;
+        let mut collector = EventCollector::new(provider_fixture, producer_buffer, &seed_fixture);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -371,12 +371,12 @@ mod tests {
     #[tokio::test]
     async fn simple_throttling_test(
         provider_fixture: Arc<dyn Provider + Send + Sync + 'static>,
-        seed_fixture: CollectorSeed,
+        mut seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         // 10k throttles the RPC at the second request.
-        let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10000);
+        seed_fixture.block_range = 10000;
+        let mut collector = EventCollector::new(provider_fixture, producer_buffer, &seed_fixture);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
