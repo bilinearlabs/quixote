@@ -1331,7 +1331,7 @@ mod tests {
                 event_signature: "event Test(uint256 value)",
                 input_value: DynSolValue::Uint(U256::from(12345u64), 256),
                 expected_name: "value",
-                expected_type: "VARINT",
+                expected_type: "BIGNUM",
                 expected_value: "12345",
             },
             // uint128
