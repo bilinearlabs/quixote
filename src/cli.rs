@@ -60,7 +60,7 @@ pub struct IndexingArgs {
     pub api_server: Option<String>,
     #[arg(
         long,
-        help = "Block range for the RPC requests.",
+        help = "Block range for the RPC requests. Applies to all collectors.",
         default_value_t = constants::DEFAULT_BLOCK_RANGE
     )]
     pub block_range: usize,
