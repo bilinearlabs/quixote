@@ -359,7 +359,8 @@ mod tests {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
         seed_fixture.block_range = 10;
-        let mut collector = EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -397,7 +398,8 @@ mod tests {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         // 10k throttles the RPC at the second request.
         seed_fixture.block_range = 10000;
-        let mut collector = EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
