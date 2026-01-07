@@ -66,8 +66,10 @@ impl IndexerConfiguration {
     pub fn from_args(args: IndexingArgs) -> Self {
         // If a config file is provided, it takes precedence for file-based fields.
         let file_config = if let Some(ref config_file) = args.config {
-            println!("Loading configuration from file: {}", config_file);
-            println!("CLI arguments for file-based fields will be ignored");
+            if args.verbosity >= 2 {
+                println!("Loading configuration from file: {}", config_file);
+                println!("CLI arguments for file-based fields will be ignored");
+            }
             match FileConfiguration::load(config_file) {
                 Ok(config) => config,
                 Err(e) => match e {
