@@ -9,23 +9,25 @@ use clap::Parser;
 #[command(author = "Bilinear Labs")]
 #[command(version = "0.1.0")]
 #[command(about = "Quixote")]
-#[command(long_about = "Ethereum event indexing tool")]
+#[command(long_about = "EVM-compatible event indexing tool")]
 pub struct IndexingArgs {
     #[arg(
         short,
         long,
-        help = "RPC host to index.
-            \nFormat: <chain_id>[:<username>:<password>]@<host>:<port>
-            \nExample for an RPC with basic auth => 1:user:pass@http://localhost:9822
-            \nExample for an authless RPC => 1@http://localhost:9822"
+        required_unless_present = "config",
+        help = "RPC URL to index.
+            \nFormat: <scheme>://[<username>:<password>@]<host>[:<port>]
+            \nExample for an RPC with basic auth => http://user:pass@localhost:8545
+            \nExample for an authless RPC => http://localhost:8545"
     )]
-    pub rpc_host: String,
+    pub rpc_host: Option<String>,
     #[arg(
         short,
         long,
+        required_unless_present = "config",
         help = "Contract to index.\nExample: 0x1234567890123456789012345678901234567890"
     )]
-    pub contract: String,
+    pub contract: Option<String>,
     #[arg(
         short,
         long,
@@ -58,7 +60,7 @@ pub struct IndexingArgs {
     pub api_server: Option<String>,
     #[arg(
         long,
-        help = "Block range for the RPC requests.",
+        help = "Block range for the RPC requests. Applies to all collectors.",
         default_value_t = constants::DEFAULT_BLOCK_RANGE
     )]
     pub block_range: usize,
@@ -89,4 +91,9 @@ pub struct IndexingArgs {
         default_value_t = false
     )]
     pub strict_mode: bool,
+    #[arg(
+        long,
+        help = "Path to the configuration file. When used, the command line arguments will be ignored."
+    )]
+    pub config: Option<String>,
 }

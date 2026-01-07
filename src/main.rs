@@ -1,9 +1,8 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use anyhow::{Context, Result};
-use clap::Parser;
 use quixote::{
-    cli::IndexingArgs,
+    configuration::IndexerConfiguration,
     error_codes,
     indexing_app::IndexingApp,
     streamlit_wrapper::{FrontendOptions, start_frontend},
@@ -14,16 +13,15 @@ use tracing_subscriber::{filter::Targets, fmt, prelude::*};
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse the command line arguments.
-    let args = IndexingArgs::parse();
-    // Setup the tracing subsystem.
-    setup_tracing(args.verbosity)?;
+    let config = IndexerConfiguration::parse();
 
-    let disable_frontend = args.disable_frontend;
-    let frontend_address = args.frontend_address.clone();
-    let frontend_port = args.frontend_port;
+    // Setup the tracing subsystem.
+    setup_tracing(config.verbosity)?;
 
     // Run the indexing app.
-    let app = IndexingApp::build_app(args).with_context(|| "Failed to build the indexing app")?;
+    let app = IndexingApp::build_app(&config)
+        .await
+        .with_context(|| "Failed to build the indexing app")?;
 
     let indexing_task = tokio::spawn(async move {
         if let Err(e) = app.run().await {
@@ -33,11 +31,11 @@ async fn main() -> Result<()> {
     });
 
     // Launch the Streamlit frontend if not disabled.
-    if !disable_frontend {
+    if !config.disable_frontend {
         tracing::info!("Launching frontend");
         let frontend_options = FrontendOptions {
-            url: frontend_address,
-            port: frontend_port,
+            url: config.frontend_address.clone(),
+            port: config.frontend_port,
             ..Default::default()
         };
 

@@ -2,20 +2,19 @@
 
 //! Runner module for the event collector.
 
-use crate::{CollectorSeed, RpcHost, TxLogChunk, constants::*, event_collector::EventCollector};
+use crate::{CollectorSeed, TxLogChunk, constants::*, event_collector::EventCollector};
 use alloy::{
     providers::Provider,
     providers::ProviderBuilder,
     rpc::client::RpcClient,
     transports::{
         TransportError,
-        http::reqwest::Url,
         layers::{RetryBackoffLayer, RetryPolicy},
     },
 };
 use anyhow::Result;
-use std::sync::Arc;
 use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, error, info};
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -165,29 +164,23 @@ fn extract_wait_seconds(error_msg: &str) -> Option<u64> {
 ///
 /// # Description
 ///
-/// This runner is responsible for spawning the event collector tasks for each RPC host. Each RPC host can serve
-/// data from a different blockchain. This way, we can monitor some event across multiple chains. However, this is
-/// not fully supported yet.
+/// This runner is responsible for spawning the event collector tasks for each seed. Each seed contains
+/// its own RPC URL and chain_id, allowing different seeds to connect to different chains.
 ///
 /// ## Resource assignment
 ///
-/// The best case scenario would be to assign one seed per RPC host. However having multiple RPC hosts is not always
-/// possible. Each seed is assigned to a producer task, this way, all the events that belong to the same seed are
-/// ensured to be synchronized up to the same block.
+/// Each seed is assigned to its own provider and producer task, ensuring all events that belong to the
+/// same seed are synchronized up to the same block. Each chain has its own buffer to maintain block ordering.
 pub struct EventCollectorRunner {
+    /// List of providers, one per seed, created from each seed's rpc_url.
     provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>>,
     seeds: Vec<CollectorSeed>,
-    producer_buffer: TxLogChunk,
-    default_block_range: usize,
+    /// Per-chain buffers: chain_id -> TxLogChunk
+    chain_buffers: HashMap<u64, TxLogChunk>,
 }
 
 impl EventCollectorRunner {
-    pub fn new(
-        host_list: &[RpcHost],
-        seeds: Vec<CollectorSeed>,
-        producer_buffer: TxLogChunk,
-        default_block_range: usize,
-    ) -> Result<Self> {
+    pub fn new(seeds: Vec<CollectorSeed>, chain_buffers: HashMap<u64, TxLogChunk>) -> Result<Self> {
         let always_retry_policy = AlwaysRetryPolicy::default();
 
         let retry_policy = RetryBackoffLayer::new_with_policy(
@@ -197,27 +190,26 @@ impl EventCollectorRunner {
             always_retry_policy,
         );
 
+        // Create a provider for each seed from its rpc_url (already validated)
         let mut provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>> = Vec::new();
-        for (idx, host) in host_list.iter().enumerate() {
-            let url: Url = host
-                .try_into()
-                .map_err(|e| anyhow::anyhow!("Failed to convert RPC host to URL: {}", e))?;
-
+        for (idx, seed) in seeds.iter().enumerate() {
             info!(
-                "Creating provider {} for RPC URL: {} (chain_id: {})",
-                idx, url, host.chain_id
+                "Creating provider {} for RPC URL: {} (chain_id: {:#x})",
+                idx, seed.rpc_url, seed.chain_id
             );
 
-            let provider = ProviderBuilder::new()
-                .connect_client(RpcClient::builder().layer(retry_policy.clone()).http(url));
+            let provider = ProviderBuilder::new().connect_client(
+                RpcClient::builder()
+                    .layer(retry_policy.clone())
+                    .http(seed.rpc_url.clone()),
+            );
             provider_list.push(Arc::new(provider));
         }
 
         Ok(Self {
             provider_list,
             seeds,
-            producer_buffer,
-            default_block_range,
+            chain_buffers,
         })
     }
 
@@ -230,37 +222,51 @@ impl EventCollectorRunner {
         }
 
         info!(
-            "Distributing {} seeds across {} RPC hosts",
+            "Starting {} collector tasks across {} chain(s)",
             self.seeds.len(),
-            self.provider_list.len()
+            self.chain_buffers.len()
         );
 
         // Collect all task handles
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-        // Distribute seeds across RPC hosts using round-robin
-        // If there are more seeds than RPC hosts, multiple seeds will use the same RPC host
-        for (seed_index, seed) in self.seeds.iter().enumerate() {
-            // Assign seed to RPC host using round-robin
-            let host_index = seed_index % self.provider_list.len();
-            let provider = self.provider_list[host_index].clone();
-            let producer_buffer = self.producer_buffer.clone();
+        // Each seed has its own provider (1:1 mapping)
+        for (seed_index, (seed, provider)) in
+            self.seeds.iter().zip(self.provider_list.iter()).enumerate()
+        {
+            let provider = provider.clone();
+
+            // Get the buffer for this seed's chain
+            let producer_buffer = match self.chain_buffers.get(&seed.chain_id) {
+                Some(buffer) => buffer.clone(),
+                None => {
+                    error!(
+                        "No buffer found for chain_id {:#x}. This is a bug.",
+                        seed.chain_id
+                    );
+                    continue;
+                }
+            };
+
             let seed = seed.clone();
-            let default_block_range = self.default_block_range;
 
             info!(
-                "Spawning collector for seed {} (contract: {}, start_block: {}) on RPC host {}",
-                seed_index, seed.contract_address, seed.start_block, host_index
+                "Spawning collector for seed {} (chain_id: {:#x}, contract: {}, start_block: {}, block_range: {})",
+                seed_index,
+                seed.chain_id,
+                seed.contract_address,
+                seed.start_block,
+                seed.block_range
             );
 
             let handle = tokio::spawn(async move {
                 let collector =
-                    EventCollector::new(provider, producer_buffer, &seed, default_block_range);
+                    EventCollector::new(provider, producer_buffer, &seed, seed.block_range);
 
                 if let Err(e) = collector.collect().await {
                     error!(
-                        "Collector for seed {} (contract: {}) failed: {}",
-                        seed_index, seed.contract_address, e
+                        "Collector for seed {} (chain_id: {:#x}, contract: {}) failed: {}",
+                        seed_index, seed.chain_id, seed.contract_address, e
                     );
                 }
             });
