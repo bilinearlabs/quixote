@@ -60,16 +60,15 @@ impl IndexingApp {
     ///
     /// # Description
     ///
-    /// This method creates one EventProcessor per unique chain_id. Each chain has its own
-    /// buffer channel, ensuring that block ordering is maintained within each chain.
+    /// This method creates one EventProcessor per seed (contract). Each contract has its own
+    /// buffer channel, ensuring that block ordering is maintained within each contract's event stream.
     pub async fn run(&self) -> Result<()> {
-        // Group seeds by chain_id to determine unique chains and their start blocks
-        let mut chain_info: HashMap<u64, u64> = HashMap::new(); // chain_id -> start_block
+        // Validate that all seeds for the same chain have the same start_block
+        let mut chain_start_blocks: HashMap<u64, u64> = HashMap::new(); // chain_id -> start_block
         for seed in &self.seeds {
-            chain_info
+            chain_start_blocks
                 .entry(seed.chain_id)
                 .and_modify(|existing_start| {
-                    // Validate that all seeds for the same chain have the same start_block
                     if *existing_start != seed.start_block {
                         error!(
                             "Chain {:#x}: Seeds have different start blocks ({} vs {}). Resuming from such DB is not supported yet.",
@@ -81,29 +80,35 @@ impl IndexingApp {
                 .or_insert(seed.start_block);
         }
 
-        info!("Found {} unique chain(s) to index", chain_info.len());
+        info!(
+            "Found {} contract(s) to index across {} chain(s)",
+            self.seeds.len(),
+            chain_start_blocks.len()
+        );
 
-        // Create per-chain buffers: chain_id -> (tx, rx)
+        // Create per-seed buffers: chain_id -> (tx, rx)
+        // Note: We still key by chain_id for EventCollectorRunner compatibility
         let mut chain_buffers: HashMap<u64, TxLogChunk> = HashMap::new();
         let mut processor_handles = Vec::new();
 
-        for (chain_id, start_block) in &chain_info {
+        for seed in &self.seeds {
             let (producer_buffer, consumer_buffer) =
                 mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
-            chain_buffers.insert(*chain_id, producer_buffer);
+            chain_buffers.insert(seed.chain_id, producer_buffer);
 
-            // Create an EventProcessor for this chain
+            // Create an EventProcessor for this seed (contract)
             let mut event_processor = EventProcessor::new(
-                *chain_id,
+                seed.chain_id,
+                seed.contract_address,
                 self.storage.clone(),
-                *start_block,
+                seed.start_block,
                 consumer_buffer,
                 self.cancellation_token.clone(),
             );
 
             info!(
-                "Starting EventProcessor for chain {:#x} from block {}",
-                chain_id, start_block
+                "Starting EventProcessor for chain {:#x}, contract {} from block {}",
+                seed.chain_id, seed.contract_address, seed.start_block
             );
 
             let handle = tokio::spawn(async move { event_processor.run().await });

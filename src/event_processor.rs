@@ -3,6 +3,7 @@
 //! Module for the event processor.
 
 use crate::{CancellationToken, RxLogChunk, storage::Storage};
+use alloy::primitives::Address;
 use alloy::rpc::types::Log;
 use anyhow::Result;
 use std::{
@@ -23,11 +24,14 @@ pub struct EventProcessor {
     start_block: u64,
     producer_buffer: RxLogChunk,
     cancellation_token: CancellationToken,
+    #[allow(dead_code)]
+    contract_address: Address,
 }
 
 impl EventProcessor {
     pub fn new(
         chain_id: u64,
+        contract_address: Address,
         storage: Arc<dyn Storage + Send + Sync>,
         start_block: u64,
         producer_buffer: RxLogChunk,
@@ -39,6 +43,7 @@ impl EventProcessor {
             start_block,
             producer_buffer,
             cancellation_token,
+            contract_address,
         }
     }
 
