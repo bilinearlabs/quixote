@@ -8,7 +8,7 @@ use crate::{
     storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
 };
 use anyhow::{Context, Result};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 use tokio::{signal::ctrl_c, sync::mpsc};
 use tracing::{error, info, warn};
 
@@ -60,58 +60,40 @@ impl IndexingApp {
     ///
     /// # Description
     ///
-    /// This method creates one EventProcessor per unique chain_id. Each chain has its own
-    /// buffer channel, ensuring that block ordering is maintained within each chain.
+    /// This method creates one EventProcessor per seed. Each seed is an isolated unit of work
+    /// with its own collector and processor, ensuring independent processing regardless of chain_id.
     pub async fn run(&self) -> Result<()> {
-        // Group seeds by chain_id to determine unique chains and their start blocks
-        let mut chain_info: HashMap<u64, u64> = HashMap::new(); // chain_id -> start_block
-        for seed in &self.seeds {
-            chain_info
-                .entry(seed.chain_id)
-                .and_modify(|existing_start| {
-                    // Validate that all seeds for the same chain have the same start_block
-                    if *existing_start != seed.start_block {
-                        error!(
-                            "Chain {:#x}: Seeds have different start blocks ({} vs {}). Resuming from such DB is not supported yet.",
-                            seed.chain_id, *existing_start, seed.start_block
-                        );
-                        std::process::exit(error_codes::ERROR_CODE_BAD_DB_STATE);
-                    }
-                })
-                .or_insert(seed.start_block);
-        }
+        info!("Starting {} indexing job(s)", self.seeds.len());
 
-        info!("Found {} unique chain(s) to index", chain_info.len());
-
-        // Create per-chain buffers: chain_id -> (tx, rx)
-        let mut chain_buffers: HashMap<u64, TxLogChunk> = HashMap::new();
+        // Create one buffer and one processor per seed
+        let mut seed_buffers: Vec<TxLogChunk> = Vec::new();
         let mut processor_handles = Vec::new();
 
-        for (chain_id, start_block) in &chain_info {
+        for (seed_index, seed) in self.seeds.iter().enumerate() {
             let (producer_buffer, consumer_buffer) =
                 mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
-            chain_buffers.insert(*chain_id, producer_buffer);
+            seed_buffers.push(producer_buffer);
 
-            // Create an EventProcessor for this chain
+            // Create an EventProcessor for this seed
             let mut event_processor = EventProcessor::new(
-                *chain_id,
+                seed.chain_id,
                 self.storage.clone(),
-                *start_block,
+                seed.start_block,
                 consumer_buffer,
                 self.cancellation_token.clone(),
             );
 
             info!(
-                "Starting EventProcessor for chain {:#x} from block {}",
-                chain_id, start_block
+                "Starting EventProcessor {} for chain {:#x}, contract {}, from block {}",
+                seed_index, seed.chain_id, seed.contract_address, seed.start_block
             );
 
             let handle = tokio::spawn(async move { event_processor.run().await });
             processor_handles.push(handle);
         }
 
-        // Create the event collector runner with per-chain buffers
-        let event_collector_runner = EventCollectorRunner::new(self.seeds.clone(), chain_buffers)?;
+        // Create the event collector runner with per-seed buffers
+        let event_collector_runner = EventCollectorRunner::new(self.seeds.clone(), seed_buffers)?;
 
         // Start the REST API server
         start_api_server(

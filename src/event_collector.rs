@@ -34,7 +34,6 @@ impl EventCollector {
         provider: Arc<dyn Provider + Send + Sync>,
         producer_buffer: TxLogChunk,
         seed: &CollectorSeed,
-        block_range: usize,
     ) -> Self {
         // Regex to capture the last two integers (block numbers) from messages like:
         // "error code -32602: query exceeds max results 20000, retry with the range 22382105-22382515"
@@ -49,7 +48,7 @@ impl EventCollector {
             sync_mode: seed.sync_mode,
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
-            default_block_range: block_range,
+            default_block_range: seed.block_range,
             block_range_hint_regex,
         }
     }
@@ -359,8 +358,7 @@ mod tests {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
         seed_fixture.block_range = 10;
-        let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+        let mut collector = EventCollector::new(provider_fixture, producer_buffer, &seed_fixture);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -398,8 +396,7 @@ mod tests {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         // 10k throttles the RPC at the second request.
         seed_fixture.block_range = 10000;
-        let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+        let mut collector = EventCollector::new(provider_fixture, producer_buffer, &seed_fixture);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -500,10 +497,11 @@ mod tests {
     /// Helper to run a collector for a single block and count events.
     async fn run_collector_and_count(
         provider: Arc<dyn Provider + Send + Sync + 'static>,
-        seed: CollectorSeed,
+        mut seed: CollectorSeed,
     ) -> usize {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
-        let collector = EventCollector::new(provider, producer_buffer, &seed, 10);
+        seed.block_range = 10;
+        let collector = EventCollector::new(provider, producer_buffer, &seed);
 
         let handle = tokio::spawn(async move {
             collector.collect().await.unwrap();
