@@ -104,7 +104,6 @@ impl EventCollector {
             );
 
             let remaining = finalized_block.saturating_sub(processed_to);
-
             if remaining == 0 {
                 // First time, we completed the backfill of the DB, let's inform the user.
                 if backfill_mode {
@@ -268,6 +267,8 @@ mod tests {
     //! The tests included in this module are meant to ensure that the fetching logic behaves as expected. Single
     //! [EventCollector] instances are launched for fetching some known block ranges whose results are compared
     //! against a known set of events.
+
+    use crate::metrics::MetricsConfig;
 
     use super::*;
     use alloy::{
@@ -526,7 +527,15 @@ mod tests {
         seed: CollectorSeed,
     ) -> usize {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
-        let collector = EventCollector::new(provider, producer_buffer, &seed, 10);
+
+        let metrics = MetricsHandle::new(&MetricsConfig {
+            enabled: false,
+            address: "127.0.0.1".to_string(),
+            port: 5054,
+            allow_origin: None,
+        })
+        .unwrap();
+        let collector = EventCollector::new(provider, producer_buffer, &seed, 10, metrics);
 
         let handle = tokio::spawn(async move {
             collector.collect().await.unwrap();
