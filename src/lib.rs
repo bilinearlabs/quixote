@@ -13,8 +13,10 @@ pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
+pub mod configuration;
 pub mod metrics;
 pub mod streamlit_wrapper;
+pub use configuration::IndexerConfiguration;
 
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
@@ -68,6 +70,10 @@ pub mod error_codes {
     pub const ERROR_CODE_WRONG_INPUT_ARGUMENTS: i32 = 4;
     /// Indexing failed.
     pub const ERROR_CODE_INDEXING_FAILED: i32 = 5;
+    /// Configuration file not found.
+    pub const ERROR_CODE_CONFIGURATION_FILE_NOT_FOUND: i32 = 6;
+    /// Failed to load configuration from file.
+    pub const ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE: i32 = 7;
 }
 
 /// Module with definitions related to the storage of the indexed data.
@@ -136,7 +142,6 @@ impl CancellationToken {
 /// Object that represents an RPC host.
 #[derive(Debug, Clone)]
 pub struct RpcHost {
-    pub chain_id: u64,
     pub url: String,
     pub port: u16,
     pub username: Option<SecretString>,
@@ -150,19 +155,25 @@ impl std::str::FromStr for RpcHost {
     ///
     /// # Description
     ///
-    /// The format of the RPC host URL is: <chain_id>[:<username>:<password>@]<url>
+    /// The format of the RPC host URL is: [<username>:<password>@]<url>
     /// where <url> can be either:
     /// - A full URL: http://host:port/path or https://host:port/path
     /// - A simple host:port format: host:port
-    fn from_str(url: &str) -> Result<Self, Self::Err> {
-        // Let's break down the input string in 2 parts: the initial data and the URL.
-        let parts = url.split('@').collect::<Vec<&str>>();
-
-        if parts.len() != 2 {
-            return Err(anyhow::anyhow!("Invalid RPC host URL: {}", url));
-        }
-
-        let url_part = parts[1];
+    ///
+    /// Examples:
+    /// - With auth: user:pass@http://localhost:8545
+    /// - Without auth: http://localhost:8545
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        // Check if there's an @ symbol (indicating credentials are present)
+        let (creds_part, url_part) = if let Some(at_pos) = input.rfind('@') {
+            // Split at the last @ to handle URLs that might contain @ in other places
+            let creds = &input[..at_pos];
+            let url = &input[at_pos + 1..];
+            (Some(creds), url)
+        } else {
+            // No credentials, the entire string is the URL
+            (None, input)
+        };
 
         // Check if the URL part is already a full URL (starts with http:// or https://)
         let (url, port) = if url_part.starts_with("http://") || url_part.starts_with("https://") {
@@ -198,21 +209,24 @@ impl std::str::FromStr for RpcHost {
             (raw_url[0].to_string(), port)
         };
 
-        // Time to process the initial data part.
-        let init_part = parts[0].split(':').collect::<Vec<&str>>();
-        let chain_id = init_part[0].parse::<u64>()?;
-
-        let (username, password) = if init_part.len() > 1 {
+        // Parse credentials if present
+        let (username, password) = if let Some(creds) = creds_part {
+            let cred_parts = creds.split(':').collect::<Vec<&str>>();
+            if cred_parts.len() != 2 {
+                return Err(anyhow::anyhow!(
+                    "Invalid credentials format. Expected username:password, got: {}",
+                    creds
+                ));
+            }
             (
-                Some(SecretString::from(init_part[1])),
-                Some(SecretString::from(init_part[2])),
+                Some(SecretString::from(cred_parts[0])),
+                Some(SecretString::from(cred_parts[1])),
             )
         } else {
             (None, None)
         };
 
         Ok(RpcHost {
-            chain_id,
             url,
             port,
             username,

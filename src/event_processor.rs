@@ -2,7 +2,7 @@
 
 //! Module for the event processor.
 
-use crate::{CancellationToken, RxLogChunk, storage::Storage};
+use crate::{CancellationToken, RxLogChunk, metrics::MetricsHandle, storage::Storage};
 use alloy::rpc::types::Log;
 use anyhow::Result;
 use std::{
@@ -13,32 +13,29 @@ use tokio::select;
 use tracing::{debug, error, info};
 
 pub struct EventProcessor {
+    chain_id: u64,
     storage: Arc<dyn Storage + Send + Sync>,
     start_block: u64,
     producer_buffer: RxLogChunk,
     cancellation_token: CancellationToken,
-    chain_id: u64,
-    contract_address: String,
-    metrics: crate::metrics::MetricsHandle,
+    metrics: MetricsHandle,
 }
 
 impl EventProcessor {
     pub fn new(
+        chain_id: u64,
         storage: Arc<dyn Storage + Send + Sync>,
         start_block: u64,
         producer_buffer: RxLogChunk,
         cancellation_token: CancellationToken,
-        chain_id: u64,
-        contract_address: String,
-        metrics: crate::metrics::MetricsHandle,
+        metrics: MetricsHandle,
     ) -> Self {
         Self {
+            chain_id,
             storage,
             start_block,
             producer_buffer,
             cancellation_token,
-            chain_id,
-            contract_address,
             metrics,
         }
     }
@@ -70,11 +67,6 @@ impl EventProcessor {
                                 // block.
                                 if ev.is_empty() {
                                     self.storage.synchronize_events(Some(last_processed))?;
-                                    self.metrics.record_indexed_block(
-                                        self.chain_id,
-                                        &self.contract_address,
-                                        last_processed,
-                                    );
                                     continue;
                                 }
 
@@ -92,12 +84,9 @@ impl EventProcessor {
                                 last_processed = end;
                                 *last_processed_shared.lock().unwrap() = last_processed;
 
-                            debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
-                                self.metrics.record_indexed_block(
-                                    self.chain_id,
-                                    &self.contract_address,
-                                    last_processed,
-                                );
+                                debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
+                                let contract_address = ev.first().unwrap().address().to_string();
+                                self.metrics.record_indexed_block(self.chain_id, &contract_address, last_processed);
                             }
                         }
                         None => {
@@ -105,11 +94,6 @@ impl EventProcessor {
                             info!("Event channel closed, all events processed");
                             // Ensure the database is in a consistent state.
                             self.storage.synchronize_events(Some(*last_processed_shared.lock().unwrap()))?;
-                            self.metrics.record_indexed_block(
-                                self.chain_id,
-                                &self.contract_address,
-                                *last_processed_shared.lock().unwrap(),
-                            );
                             return Ok(());
                         }
                     }

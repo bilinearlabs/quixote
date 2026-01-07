@@ -15,7 +15,7 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{Context, Result};
-use duckdb::{Connection, OptionalExt, params};
+use duckdb::{Connection, OptionalExt, params, types::ValueRef};
 use serde_json::{Map, Number, Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -664,98 +664,141 @@ impl DuckDBStorage {
     ///
     /// # Description
     ///
-    /// Tries conversions in order: Number (i64, u64, f64), Bool, String, Null.
+    /// Uses ValueRef to directly access the underlying value and convert to JSON.
+    /// Numeric types that can overflow JSON's number representation (like BIGNUM,
+    /// HugeInt, Decimal) are converted to strings to preserve precision.
     fn infer_value_type(row: &duckdb::Row, col_idx: usize) -> Result<Value> {
-        // Try Option<String>
-        if let Ok(opt_str) = row.get::<_, Option<String>>(col_idx) {
-            return match opt_str {
-                Some(s) => Ok(Value::String(s)),
-                None => Ok(Value::Null),
-            };
-        }
-
-        // Try Option<i64>
-        if let Ok(opt_val) = row.get::<_, Option<i64>>(col_idx) {
-            return match opt_val {
-                Some(val) => Ok(Value::Number(Number::from(val))),
-                None => Ok(Value::Null),
-            };
-        }
-
-        // Try Option<u64>
-        if let Ok(opt_val) = row.get::<_, Option<u64>>(col_idx) {
-            return match opt_val {
-                Some(val) => {
-                    // serde_json::Number doesn't support u64 directly, so we need to convert
-                    if let Some(num) = Number::from_f64(val as f64) {
-                        Ok(Value::Number(num))
-                    } else {
-                        // If conversion fails, use string representation
-                        Ok(Value::String(val.to_string()))
-                    }
+        // Use get_ref to access the raw ValueRef
+        // If get_ref fails (e.g., for unsupported types like BIGNUM),
+        // fall back to string extraction
+        let value_ref = match row.get_ref(col_idx) {
+            Ok(v) => v,
+            Err(_) => {
+                // Fallback: try to get as String for unsupported types (like BIGNUM)
+                if let Ok(s) = row.get::<_, String>(col_idx) {
+                    return Ok(Value::String(s));
                 }
-                None => Ok(Value::Null),
-            };
-        }
-
-        // Try Option<f64>
-        if let Ok(opt_val) = row.get::<_, Option<f64>>(col_idx) {
-            return match opt_val {
-                Some(val) => {
-                    if let Some(num) = Number::from_f64(val) {
-                        Ok(Value::Number(num))
-                    } else {
-                        // NaN or Infinity - represent as string
-                        Ok(Value::String(val.to_string()))
-                    }
-                }
-                None => Ok(Value::Null),
-            };
-        }
-
-        // Try Option<bool>
-        if let Ok(opt_val) = row.get::<_, Option<bool>>(col_idx) {
-            return match opt_val {
-                Some(val) => Ok(Value::Bool(val)),
-                None => Ok(Value::Null),
-            };
-        }
-
-        // Try non-optional types
-        // Try i64 (signed integer)
-        if let Ok(val) = row.get::<_, i64>(col_idx) {
-            return Ok(Value::Number(Number::from(val)));
-        }
-
-        // Try u64 (unsigned integer)
-        if let Ok(val) = row.get::<_, u64>(col_idx) {
-            // serde_json::Number doesn't support u64 directly, so we need to convert
-            if let Some(num) = Number::from_f64(val as f64) {
-                return Ok(Value::Number(num));
+                return Ok(Value::Null);
             }
-            // If conversion fails, fall through to string
+        };
+
+        match value_ref {
+            ValueRef::Null => Ok(Value::Null),
+            ValueRef::Boolean(b) => Ok(Value::Bool(b)),
+            ValueRef::TinyInt(i) => Ok(Value::Number(Number::from(i))),
+            ValueRef::SmallInt(i) => Ok(Value::Number(Number::from(i))),
+            ValueRef::Int(i) => Ok(Value::Number(Number::from(i))),
+            ValueRef::BigInt(i) => Ok(Value::Number(Number::from(i))),
+            ValueRef::HugeInt(i) => {
+                // HugeInt (i128) - convert to string to preserve precision
+                Ok(Value::String(i.to_string()))
+            }
+            ValueRef::UTinyInt(u) => Ok(Value::Number(Number::from(u))),
+            ValueRef::USmallInt(u) => Ok(Value::Number(Number::from(u))),
+            ValueRef::UInt(u) => Ok(Value::Number(Number::from(u))),
+            ValueRef::UBigInt(u) => {
+                // u64 is directly supported by serde_json::Number
+                Ok(Value::Number(Number::from(u)))
+            }
+            ValueRef::Float(f) => {
+                if let Some(num) = Number::from_f64(f as f64) {
+                    Ok(Value::Number(num))
+                } else {
+                    Ok(Value::String(f.to_string()))
+                }
+            }
+            ValueRef::Double(d) => {
+                if let Some(num) = Number::from_f64(d) {
+                    Ok(Value::Number(num))
+                } else {
+                    Ok(Value::String(d.to_string()))
+                }
+            }
+            ValueRef::Decimal(d) => {
+                // Decimal (used for BIGNUM) - convert to string to preserve precision
+                Ok(Value::String(d.to_string()))
+            }
+            ValueRef::Timestamp(_, ts) => Ok(Value::Number(Number::from(ts))),
+            ValueRef::Text(bytes) => {
+                let s = String::from_utf8_lossy(bytes);
+                Ok(Value::String(s.into_owned()))
+            }
+            ValueRef::Blob(_) => {
+                // For Blob types (including BIGNUM which is exposed as Blob),
+                // try to parse as BIGNUM first, otherwise hex encode
+                if let Ok(bytes) = row.get::<_, Vec<u8>>(col_idx) {
+                    // Try to parse as BIGNUM (format: [flag][is_negative][size][data...])
+                    if let Some(hex_str) = Self::try_parse_bignum_blob(&bytes) {
+                        Ok(Value::String(hex_str))
+                    } else {
+                        // Regular blob - hex encode
+                        Ok(Value::String(format!("0x{}", hex::encode(bytes))))
+                    }
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+            ValueRef::Date32(d) => Ok(Value::Number(Number::from(d))),
+            ValueRef::Time64(_, t) => Ok(Value::Number(Number::from(t))),
+            ValueRef::Interval {
+                months,
+                days,
+                nanos,
+            } => {
+                // Return interval as a JSON object
+                let mut map = Map::new();
+                map.insert("months".to_string(), Value::Number(Number::from(months)));
+                map.insert("days".to_string(), Value::Number(Number::from(days)));
+                map.insert("nanos".to_string(), Value::Number(Number::from(nanos)));
+                Ok(Value::Object(map))
+            }
+            // For complex types (List, Enum, Struct, Array, Map, Union),
+            // fall back to string representation via row.get
+            _ => {
+                // Try to get as String as last resort
+                if let Ok(s) = row.get::<_, String>(col_idx) {
+                    Ok(Value::String(s))
+                } else {
+                    Ok(Value::Null)
+                }
+            }
+        }
+    }
+
+    /// Tries to parse a blob as a DuckDB BIGNUM and convert to hex string.
+    ///
+    /// BIGNUM blob format: [flag][is_negative][size][data in big-endian]
+    /// Example: 0x800020ff...ff (flag=0x80, is_negative=0x00, size=0x20=32 bytes, data=ff...ff)
+    fn try_parse_bignum_blob(bytes: &[u8]) -> Option<String> {
+        // BIGNUM blobs have at least 3 bytes header
+        if bytes.len() < 3 {
+            return None;
         }
 
-        // Try f64 (floating point)
-        if let Ok(val) = row.get::<_, f64>(col_idx)
-            && let Some(num) = Number::from_f64(val)
-        {
-            return Ok(Value::Number(num));
-            // If conversion fails (NaN, Infinity), fall through to string
+        // Check for BIGNUM signature (flag byte is 0x80)
+        if bytes[0] != 0x80 {
+            return None;
         }
 
-        // Try bool
-        if let Ok(val) = row.get::<_, bool>(col_idx) {
-            return Ok(Value::Bool(val));
+        let is_negative = bytes[1] != 0;
+        let size = bytes[2] as usize;
+
+        // Validate that we have enough bytes for the data
+        if bytes.len() != 3 + size {
+            return None;
         }
 
-        // Try String (this should work for most remaining types)
-        if let Ok(val) = row.get::<_, String>(col_idx) {
-            return Ok(Value::String(val));
-        }
+        let data = &bytes[3..];
 
-        // If all else fails, return null
-        Ok(Value::Null)
+        // Data is already in big-endian format, just encode as hex
+        let hex_str = hex::encode(data);
+
+        // Handle negative numbers (rare for uint256, but supported by BIGNUM)
+        if is_negative && hex_str != "0" && hex_str != "00" {
+            Some(format!("-0x{}", hex_str))
+        } else {
+            Some(format!("0x{}", hex_str))
+        }
     }
 
     /// Gets column names from a query by using DESCRIBE on a subquery.
