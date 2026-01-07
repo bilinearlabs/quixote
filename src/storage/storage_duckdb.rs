@@ -69,7 +69,7 @@ impl Clone for DuckDBStorage {
 }
 
 impl Storage for DuckDBStorage {
-    fn add_events(&self, events: &[Log]) -> Result<()> {
+    fn add_events(&self, chain_id: u64, events: &[Log]) -> Result<()> {
         // Quick check to avoid unnecessary operations.
         if events.is_empty() {
             info!("No events for the given block range");
@@ -82,10 +82,10 @@ impl Storage for DuckDBStorage {
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         let tx = conn.transaction()?;
 
-        // First stage: insert the new blocks into the blocks table.
+        // First stage: insert the new blocks into the chain-specific blocks table.
         {
-            // Ensure unique blocks are added to the blocks table.
-            let mut blocks_appender = tx.appender("blocks")?;
+            let blocks_table = format!("blocks_{}", chain_id);
+            let mut blocks_appender = tx.appender(&blocks_table)?;
             let mut last_block_number = 0;
             for event in events {
                 if let Some(block_number) = event.block_number
@@ -122,6 +122,10 @@ impl Storage for DuckDBStorage {
             // Retrieve the event's signature to get the event's name provided the event's hash from the Log.
             let event_hash = log.topic0().unwrap().to_string();
 
+            // Build the key for the local cache: chain_id:short_hash
+            let short_hash = Self::short_hash(&event_hash);
+            let cache_key = format!("{}:{}", chain_id, short_hash);
+
             // Parse the received events (as hashes) into event descriptors using the local cache of known events.
             // Only known events by the indexer can be processed. Thus if the indexer is running in strict mode, the
             // indexing will stop if the event descriptor is not found.
@@ -131,17 +135,17 @@ impl Storage for DuckDBStorage {
                 .map_err(|_| {
                     anyhow::anyhow!("Failed to acquire read lock for the event descriptor")
                 })?
-                .get(&event_hash)
+                .get(&cache_key)
             {
                 Some(event) => event.clone(),
                 None => {
                     if self.strict_mode {
                         return Err(anyhow::anyhow!(
-                            "The event {event_hash} was received but the event descriptor was not found. You can either include the event in the command line arguments or run the indexer with the strict mode disabled."
+                            "The event {event_hash} on chain {chain_id:#x} was received but the event descriptor was not found. You can either include the event in the command line arguments or run the indexer with the strict mode disabled."
                         ));
                     } else {
                         warn!(
-                            "The event {event_hash} was received but the event descriptor was not found. This event will be ignored."
+                            "The event {event_hash} on chain {chain_id:#x} was received but the event descriptor was not found. This event will be ignored."
                         );
                         continue;
                     }
@@ -149,8 +153,10 @@ impl Storage for DuckDBStorage {
             };
 
             let table_name = format!(
-                "event_{}_{event_hash}",
-                event.name.as_str().to_ascii_lowercase()
+                "event_{}_{}_{}",
+                chain_id,
+                event.name.as_str().to_ascii_lowercase(),
+                Self::short_hash(&event_hash)
             );
             events_by_table
                 .entry(table_name)
@@ -164,18 +170,29 @@ impl Storage for DuckDBStorage {
                 continue;
             }
 
-            // Get event_hash from table name (remove "event_" prefix)
-            let event_hash = table_name.split("_").nth(2).unwrap().to_string();
+            // Get short_hash from table name: event_<chain_id>_<name>_<short_hash>
+            let short_hash = table_name.split("_").nth(3).unwrap();
+
+            // Get the full event hash from the first log in the table (for UPDATE statement)
+            let event_hash = table_events
+                .first()
+                .and_then(|log| log.topic0())
+                .map(|h| h.to_string())
+                .unwrap_or_default();
+
+            // Build the cache key: chain_id:short_hash
+            let cache_key = format!("{}:{}", chain_id, short_hash);
 
             // Get the parsed event from the event descriptors
             let parsed_event = self
                 .event_descriptors
                 .read()
                 .map_err(|_| anyhow::anyhow!("Failed to acquire read lock for the event descriptor"))?
-                .get(&event_hash)
+                .get(&cache_key)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Event descriptor not found for hash: {event_hash}. Ensure the event is registered before processing.",
+                        "Event descriptor not found for chain {:#x} hash: {event_hash}. Ensure the event is registered before processing.",
+                        chain_id
                     )
                 })?
                 .clone();
@@ -183,7 +200,7 @@ impl Storage for DuckDBStorage {
             let mut appender = tx.appender(&table_name)?;
 
             for log in table_events {
-                // Insert the always present fields
+                // Insert the always present fields (chain_id is encoded in table name)
                 let mut row_vals: Vec<String> = vec![
                     log.block_number.unwrap().to_string(),
                     log.transaction_hash.unwrap().to_string(),
@@ -208,8 +225,12 @@ impl Storage for DuckDBStorage {
                 ))?;
 
                 tx.execute(
-                    "UPDATE event_descriptor SET last_block = ?",
-                    [log.block_number.unwrap().to_string()],
+                    "UPDATE event_descriptor SET last_block = ? WHERE chain_id = ? AND event_hash = ?",
+                    [
+                        log.block_number.unwrap().to_string(),
+                        chain_id.to_string(),
+                        event_hash.clone(),
+                    ],
                 )?;
             }
 
@@ -229,16 +250,17 @@ impl Storage for DuckDBStorage {
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         let mut rows = conn.prepare(
-            "SELECT event_hash, event_signature, event_name, first_block, last_block FROM event_descriptor",
+            "SELECT chain_id, event_hash, event_signature, event_name, first_block, last_block FROM event_descriptor",
         )?;
         let mut events = rows
             .query_map([], |row| {
                 Ok(EventDescriptorDb {
-                    event_hash: row.get(0).optional()?,
-                    event_signature: row.get(1).optional()?,
-                    event_name: row.get(2).optional()?,
-                    first_block: row.get(3).optional()?,
-                    last_block: row.get(4).optional()?,
+                    chain_id: row.get(0).optional()?,
+                    event_hash: row.get(1).optional()?,
+                    event_signature: row.get(2).optional()?,
+                    event_name: row.get(3).optional()?,
+                    first_block: row.get(4).optional()?,
+                    last_block: row.get(5).optional()?,
                     event_count: None,
                 })
             })?
@@ -247,14 +269,17 @@ impl Storage for DuckDBStorage {
 
         // Now, let's populate the event count
         for event in events.iter_mut() {
+            let chain_id = event.chain_id.unwrap();
+            let short_hash = Self::short_hash(event.event_hash.as_ref().unwrap());
             let table_name = format!(
-                "event_{}_{}",
+                "event_{}_{}_{}",
+                chain_id,
                 event.event_name.as_ref().unwrap().to_ascii_lowercase(),
-                event.event_hash.as_ref().unwrap()
+                short_hash
             );
 
             let event_count: usize =
-                conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}",), [], |row| {
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}"), [], |row| {
                     row.get(0)
                 })?;
             event.event_count = Some(event_count);
@@ -264,39 +289,43 @@ impl Storage for DuckDBStorage {
     }
 
     #[inline]
-    fn last_block(&self, event: &Event) -> Result<u64> {
+    fn last_block(&self, chain_id: u64, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         Ok(conn.query_row(
-            "SELECT last_block FROM event_descriptor WHERE event_hash = ?",
-            [event.selector().to_string()],
+            "SELECT last_block FROM event_descriptor WHERE chain_id = ? AND event_hash = ?",
+            [chain_id.to_string(), event.selector().to_string()],
             |row| row.get(0),
         )?)
     }
 
     #[inline]
-    fn first_block(&self, event: &Event) -> Result<u64> {
+    fn first_block(&self, chain_id: u64, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         Ok(conn.query_row(
-            "SELECT first_block FROM event_descriptor WHERE event_hash = ?",
-            [event.selector().to_string()],
+            "SELECT first_block FROM event_descriptor WHERE chain_id = ? AND event_hash = ?",
+            [chain_id.to_string(), event.selector().to_string()],
             |row| row.get(0),
         )?)
     }
 
-    fn include_events(&self, events: &[Event]) -> Result<()> {
-        DuckDBStorage::create_event_schema(&self.conn, events)?;
+    fn include_events(&self, chain_id: u64, events: &[Event]) -> Result<()> {
+        DuckDBStorage::create_event_schema(&self.conn, chain_id, events)?;
         let mut event_descriptors = self.event_descriptors.write().map_err(|_| {
             anyhow::anyhow!("Failed to acquire write lock for the event descriptor")
         })?;
         // Populate the local cache of the indexed events.
+        // Key is chain_id:short_hash to support same event on different chains.
         for event in events {
-            event_descriptors.insert(event.selector().to_string(), event.clone());
+            let selector_str = event.selector().to_string();
+            let short_hash = Self::short_hash(&selector_str);
+            let key = format!("{}:{}", chain_id, short_hash);
+            event_descriptors.insert(key, event.clone());
         }
 
         Ok(())
@@ -314,7 +343,7 @@ impl Storage for DuckDBStorage {
         )?)
     }
 
-    fn event_index_status(&self, event: &Event) -> Result<Option<EventStatus>> {
+    fn event_index_status(&self, chain_id: u64, event: &Event) -> Result<Option<EventStatus>> {
         let conn = self
             .conn
             .lock()
@@ -322,8 +351,8 @@ impl Storage for DuckDBStorage {
 
         let Some((mut event_status, event_name)) = conn
             .query_row(
-                "SELECT \"event_name\", \"first_block\", \"last_block\" FROM event_descriptor WHERE event_hash = ?",
-                [event.selector().to_string()],
+                "SELECT \"event_name\", \"first_block\", \"last_block\" FROM event_descriptor WHERE chain_id = ? AND event_hash = ?",
+                [chain_id.to_string(), event.selector().to_string()],
                 |row| {
                     Ok((EventStatus {
                         hash: event.selector().to_string(),
@@ -337,12 +366,13 @@ impl Storage for DuckDBStorage {
             };
 
         if event_status.last_block != 0 {
-            // Get the event count
+            // Get the event count from the chain-specific table
             let event_count: usize = conn.query_row(
                 &format!(
-                    "SELECT COUNT(*) FROM event_{}_{}",
+                    "SELECT COUNT(*) FROM event_{}_{}_{}",
+                    chain_id,
                     event_name.to_ascii_lowercase(),
-                    event.selector()
+                    Self::short_hash(&event.selector().to_string())
                 ),
                 [],
                 |row| row.get(0),
@@ -354,8 +384,7 @@ impl Storage for DuckDBStorage {
         Ok(Some(event_status))
     }
 
-    // TODO: what if we run multiple -e tasks?
-    fn synchronize_events(&self, last_processed: Option<u64>) -> Result<()> {
+    fn synchronize_events(&self, chain_id: u64, last_processed: Option<u64>) -> Result<()> {
         let conn = self
             .conn
             .lock()
@@ -363,17 +392,20 @@ impl Storage for DuckDBStorage {
 
         if let Some(last_processed) = last_processed {
             conn.execute(
-                "UPDATE event_descriptor SET last_block = ?",
-                [last_processed.to_string()],
+                "UPDATE event_descriptor SET last_block = ? WHERE chain_id = ?",
+                [last_processed.to_string(), chain_id.to_string()],
             )?;
         } else {
             conn.execute(
-                "UPDATE event_descriptor SET last_block = (SELECT MAX(last_block) FROM event_descriptor)",
-                [],
+                "UPDATE event_descriptor SET last_block = (SELECT MAX(last_block) FROM event_descriptor WHERE chain_id = ?) WHERE chain_id = ?",
+                [chain_id.to_string(), chain_id.to_string()],
             )?;
         }
 
-        debug!("Events synchronized to the latest block");
+        debug!(
+            "Events synchronized to the latest block for chain {:#x}",
+            chain_id
+        );
 
         Ok(())
     }
@@ -447,16 +479,28 @@ impl Storage for DuckDBStorage {
 
         // First let's find out how many contracts are indexed.
         // For each event table, a contract is listed.
-        let mut statement = conn.prepare("SELECT event_hash, event_name FROM event_descriptor")?;
+        let mut statement =
+            conn.prepare("SELECT chain_id, event_hash, event_name FROM event_descriptor")?;
 
         let event_descriptors = statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, u64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
             .map(|r| r.unwrap())
-            .collect::<Vec<(String, String)>>();
+            .collect::<Vec<(u64, String, String)>>();
 
         let mut contracts = HashSet::new();
-        for (event_hash, event_name) in event_descriptors {
-            let table_name = format!("event_{}_{}", event_name.to_ascii_lowercase(), event_hash);
+        for (chain_id, event_hash, event_name) in event_descriptors {
+            let table_name = format!(
+                "event_{}_{}_{}",
+                chain_id,
+                event_name.to_ascii_lowercase(),
+                Self::short_hash(&event_hash)
+            );
 
             let mut statement = conn.prepare(&format!(
                 "SELECT DISTINCT contract_address FROM {table_name}"
@@ -481,6 +525,20 @@ impl Storage for DuckDBStorage {
 }
 
 impl DuckDBStorage {
+    /// Length of the short hash used in table names (5 hex characters).
+    const SHORT_HASH_LEN: usize = 5;
+
+    /// Returns a shortened version of an event hash for use in table names.
+    ///
+    /// Takes the first 5 hex characters after the "0x" prefix.
+    /// Example: "0xddf252ad..." -> "ddf25"
+    #[inline]
+    fn short_hash(full_hash: &str) -> &str {
+        // Skip "0x" prefix and take first 5 characters
+        let start = if full_hash.starts_with("0x") { 2 } else { 0 };
+        &full_hash[start..start + Self::SHORT_HASH_LEN]
+    }
+
     pub fn new() -> Result<DuckDBStorage> {
         Self::with_db(DUCKDB_FILE_PATH)
     }
@@ -543,6 +601,8 @@ impl DuckDBStorage {
     }
 
     fn create_db_base(conn: &Mutex<Connection>) -> Result<()> {
+        // Note: blocks tables are created per-chain dynamically (blocks_<chain_id>)
+        // Event tables are also created per-chain dynamically (event_<chain_id>_<name>_<hash>)
         let statement = format!(
             "
             BEGIN;
@@ -550,19 +610,14 @@ impl DuckDBStorage {
                 version VARCHAR NOT NULL,
                 PRIMARY KEY (version)
             );
-            CREATE TABLE IF NOT EXISTS blocks(
-                block_number UBIGINT NOT NULL,
-                block_hash VARCHAR(66) NOT NULL,
-                block_timestamp UBIGINT NOT NULL,
-                PRIMARY KEY (block_number)
-            );
             CREATE TABLE IF NOT EXISTS event_descriptor(
+                chain_id UBIGINT NOT NULL,
                 event_hash VARCHAR(66) NOT NULL,
                 event_signature VARCHAR(256) NOT NULL,
                 event_name VARCHAR(40) NOT NULL,
                 first_block UBIGINT,
                 last_block UBIGINT,
-                PRIMARY KEY (event_hash)
+                PRIMARY KEY (chain_id, event_hash)
             );
             COMMIT;"
         );
@@ -590,18 +645,45 @@ impl DuckDBStorage {
         Ok(())
     }
 
-    fn create_event_schema(conn: &Mutex<Connection>, events: &[Event]) -> Result<()> {
+    fn create_event_schema(
+        conn: &Mutex<Connection>,
+        chain_id: u64,
+        events: &[Event],
+    ) -> Result<()> {
+        // First, ensure the blocks table for this chain exists
+        {
+            let conn = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+            conn.execute(
+                &format!(
+                    "CREATE TABLE IF NOT EXISTS blocks_{chain_id}(
+                        block_number UBIGINT NOT NULL,
+                        block_hash VARCHAR(66) NOT NULL,
+                        block_timestamp UBIGINT NOT NULL,
+                        PRIMARY KEY (block_number)
+                    )"
+                ),
+                [],
+            )?;
+        }
+
         for event in events {
-            // These will be the name used to create the new table: event_<name>_<hash>.
-            let table_name = B256::from(event.selector()).to_string();
+            // Table name format: event_<chain_id>_<name>_<short_hash>
+            let event_hash = B256::from(event.selector()).to_string();
+            let short_hash = Self::short_hash(&event_hash);
             let event_name = event.name.as_str().to_ascii_lowercase();
 
-            debug!("Creating event schema for: {}", event.full_signature());
+            debug!(
+                "Creating event schema for chain {:#x}: {}",
+                chain_id,
+                event.full_signature()
+            );
 
-            // Now build the table definition
+            // Build the table definition (no chain_id column needed - it's in the table name)
             let mut statement = format!(
                 "
-                    CREATE TABLE IF NOT EXISTS event_{event_name}_{table_name}(
+                    CREATE TABLE IF NOT EXISTS event_{chain_id}_{event_name}_{short_hash}(
                         block_number UBIGINT NOT NULL,
                         transaction_hash VARCHAR NOT NULL,
                         log_index USMALLINT NOT NULL,
@@ -620,8 +702,11 @@ impl DuckDBStorage {
 
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
 
-            // Now, create an entry for such event in the event_descriptor table.
-            statement.push_str(&format!("INSERT INTO event_descriptor (event_hash, event_signature, event_name, first_block, last_block) VALUES ('{}', '{}', '{}', 0, 0) ON CONFLICT (event_hash) DO NOTHING;", event.selector(), event.full_signature(), event.name));
+            // Create an entry for this event in the event_descriptor table.
+            statement.push_str(&format!(
+                "INSERT INTO event_descriptor (chain_id, event_hash, event_signature, event_name, first_block, last_block) VALUES ({}, '{}', '{}', '{}', 0, 0) ON CONFLICT (chain_id, event_hash) DO NOTHING;",
+                chain_id, event.selector(), event.full_signature(), event.name
+            ));
 
             // Not a big deal to batch this SQL statement as it is executed once during the apps's lifetime.
             let conn = conn
@@ -648,14 +733,18 @@ impl DuckDBStorage {
     }
 
     #[inline]
-    pub fn set_first_block(&self, event: &Event, block_number: u64) -> Result<()> {
+    pub fn set_first_block(&self, chain_id: u64, event: &Event, block_number: u64) -> Result<()> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
         conn.execute(
-            "UPDATE event_descriptor SET first_block = ? WHERE event_hash = ?",
-            [block_number.to_string(), event.selector().to_string()],
+            "UPDATE event_descriptor SET first_block = ? WHERE chain_id = ? AND event_hash = ?",
+            [
+                block_number.to_string(),
+                chain_id.to_string(),
+                event.selector().to_string(),
+            ],
         )?;
         Ok(())
     }
@@ -1056,11 +1145,12 @@ mod tests {
     /// Given a storage and an event, returns the number of rows stored in the
     /// storage for that event. If the table doesnt exists, it returns 0.
     fn stored_count_for_event(storage: &DuckDBStorage, event: &Event) -> usize {
-        // Note: This logic is duplicated. Table name should be given by the storage.
+        // Table name format: event_<chain_id>_<name>_<short_hash>
         let table_name = format!(
-            "event_{}_{}",
+            "event_{}_{}_{}",
+            TEST_CHAIN_ID,
             event.name.as_str().to_ascii_lowercase(),
-            event.selector()
+            DuckDBStorage::short_hash(&event.selector().to_string())
         );
         let conn = storage
             .conn
@@ -1074,6 +1164,9 @@ mod tests {
         }
     }
 
+    /// Test chain ID used in all tests
+    const TEST_CHAIN_ID: u64 = 1;
+
     #[test]
     fn strict_mode_rejects_unknown_events() {
         let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
@@ -1083,12 +1176,15 @@ mod tests {
 
         // We register only the transfer event
         storage
-            .include_events(&[transfer_event()])
+            .include_events(TEST_CHAIN_ID, &[transfer_event()])
             .expect("failed to register transfer event");
 
         // But we try to add both transfer and approval events
         let err = storage
-            .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
+            .add_events(
+                TEST_CHAIN_ID,
+                &[get_5_approval_logs(), get_5_transfer_logs()].concat(),
+            )
             .expect_err("strict mode must error on unknown events");
 
         // It errors because the approval event is not registered
@@ -1121,12 +1217,15 @@ mod tests {
 
         // Register only the Transfer event
         storage
-            .include_events(&[transfer_event()])
+            .include_events(TEST_CHAIN_ID, &[transfer_event()])
             .expect("failed to register event");
 
         // We try to add both transfer and approval events
         storage
-            .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
+            .add_events(
+                TEST_CHAIN_ID,
+                &[get_5_approval_logs(), get_5_transfer_logs()].concat(),
+            )
             .expect("non-strict mode should skip unknown events without failing");
 
         // Transfer events were persisted (verified by querying the DB)
@@ -1153,12 +1252,15 @@ mod tests {
 
         // Register both events
         storage
-            .include_events(&[transfer_event(), approval_event()])
+            .include_events(TEST_CHAIN_ID, &[transfer_event(), approval_event()])
             .expect("failed to register events");
 
         // Insert both events
         storage
-            .add_events(&[get_5_approval_logs(), get_5_transfer_logs()].concat())
+            .add_events(
+                TEST_CHAIN_ID,
+                &[get_5_approval_logs(), get_5_transfer_logs()].concat(),
+            )
             .expect("strict mode should accept known events");
 
         // Transfer events are persisted
@@ -1190,9 +1292,10 @@ mod tests {
 
     fn event_table_name(event: &Event) -> String {
         format!(
-            "event_{}_{}",
+            "event_{}_{}_{}",
+            TEST_CHAIN_ID,
             event.name.as_str().to_ascii_lowercase(),
-            event.selector()
+            DuckDBStorage::short_hash(&event.selector().to_string())
         )
     }
 
@@ -1200,7 +1303,7 @@ mod tests {
         let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
         storage.set_strict_mode(true);
         storage
-            .include_events(events)
+            .include_events(TEST_CHAIN_ID, events)
             .expect("failed to register events");
         storage
     }
@@ -1234,7 +1337,7 @@ mod tests {
         .expect("failed to build erc721 log");
 
         storage
-            .add_events(&[log])
+            .add_events(TEST_CHAIN_ID, &[log])
             .expect("erc721 transfer should be accepted");
 
         let table = event_table_name(&erc721);
@@ -1284,7 +1387,7 @@ mod tests {
         .expect("failed to build erc20 log");
 
         storage
-            .add_events(&[log])
+            .add_events(TEST_CHAIN_ID, &[log])
             .expect("erc20 transfer should be accepted");
 
         let table = event_table_name(&erc20);
