@@ -10,6 +10,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, error};
 
+/// Type alias for event filter configuration.
+///
+/// Maps indexed parameter names to lists of filter values.
+/// - Keys represent parameter names (e.g., "from", "to").
+/// - Values are lists of hex-encoded values to match (OR condition within same key).
+/// - Multiple keys create AND conditions between them.
+pub type FilterMap = HashMap<String, Vec<String>>;
+
 /// Configuration as parsed from a file. Fields are optional to allow partial configs.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct FileConfiguration {
@@ -35,7 +43,7 @@ pub struct IndexJob {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventJob {
     pub full_signature: String,
-    pub filters: Option<HashMap<String, String>>,
+    pub filters: Option<FilterMap>,
 }
 
 /// Fully resolved configuration with all defaults applied.
@@ -265,5 +273,131 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert!(events[0].full_signature.contains("Transfer"));
         assert!(events[1].full_signature.contains("Approval"));
+    }
+
+    #[rstest]
+    fn from_args_with_events_creates_event_jobs_with_no_filters() {
+        let mut args = create_test_args(
+            Some("http://localhost:8545".to_string()),
+            Some(TEST_CONTRACT.to_string()),
+        );
+        args.event = Some(vec![
+            "Transfer(address indexed from, address indexed to, uint256 value)".to_string(),
+        ]);
+
+        let config = FileConfiguration::from_args(&args);
+
+        let events = config.index_jobs[0].events.as_ref().unwrap();
+        assert_eq!(events.len(), 1);
+        // Events created from CLI args should have no filters
+        assert!(
+            events[0].filters.is_none(),
+            "Events from CLI args should not have filters"
+        );
+    }
+
+    #[rstest]
+    fn event_job_deserializes_without_filters() {
+        let json = r#"{
+            "full_signature": "Transfer(address indexed from, address indexed to, uint256 value)"
+        }"#;
+
+        let event_job: EventJob = serde_json::from_str(json).expect("should deserialize");
+
+        assert_eq!(
+            event_job.full_signature,
+            "Transfer(address indexed from, address indexed to, uint256 value)"
+        );
+        assert!(event_job.filters.is_none());
+    }
+
+    #[rstest]
+    fn event_job_deserializes_with_single_filter() {
+        let json = r#"{
+            "full_signature": "Transfer(address indexed from, address indexed to, uint256 value)",
+            "filters": {
+                "from": ["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"]
+            }
+        }"#;
+
+        let event_job: EventJob = serde_json::from_str(json).expect("should deserialize");
+
+        assert_eq!(
+            event_job.full_signature,
+            "Transfer(address indexed from, address indexed to, uint256 value)"
+        );
+        let filters = event_job.filters.expect("filters should be present");
+        assert_eq!(filters.len(), 1);
+        assert!(filters.contains_key("from"));
+        assert_eq!(
+            filters.get("from").unwrap(),
+            &vec!["0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string()]
+        );
+    }
+
+    #[rstest]
+    fn event_job_deserializes_with_multiple_filters() {
+        let json = r#"{
+            "full_signature": "Transfer(address indexed from, address indexed to, uint256 value)",
+            "filters": {
+                "from": [
+                    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                    "0x1234567890123456789012345678901234567890"
+                ],
+                "to": ["0xDeadBeefDeadBeefDeadBeefDeadBeefDeadBeef"]
+            }
+        }"#;
+
+        let event_job: EventJob = serde_json::from_str(json).expect("should deserialize");
+
+        let filters = event_job.filters.expect("filters should be present");
+        assert_eq!(filters.len(), 2, "should have two filter keys");
+
+        // Verify 'from' filter has two addresses
+        let from_filter = filters.get("from").expect("from filter should exist");
+        assert_eq!(from_filter.len(), 2);
+        assert!(from_filter.contains(&"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string()));
+        assert!(from_filter.contains(&"0x1234567890123456789012345678901234567890".to_string()));
+
+        // Verify 'to' filter has one address
+        let to_filter = filters.get("to").expect("to filter should exist");
+        assert_eq!(to_filter.len(), 1);
+        assert!(to_filter.contains(&"0xDeadBeefDeadBeefDeadBeefDeadBeefDeadBeef".to_string()));
+    }
+
+    #[rstest]
+    fn file_configuration_deserializes_with_event_filters() {
+        let json = r#"{
+            "index_jobs": [{
+                "rpc_url": "http://localhost:8545",
+                "contract": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                "start_block": 1000,
+                "events": [
+                    {
+                        "full_signature": "Transfer(address indexed from, address indexed to, uint256 value)",
+                        "filters": {
+                            "from": ["0x1111111111111111111111111111111111111111"]
+                        }
+                    },
+                    {
+                        "full_signature": "Approval(address indexed owner, address indexed spender, uint256 value)"
+                    }
+                ]
+            }]
+        }"#;
+
+        let config: FileConfiguration = serde_json::from_str(json).expect("should deserialize");
+
+        assert_eq!(config.index_jobs.len(), 1);
+        let events = config.index_jobs[0].events.as_ref().unwrap();
+        assert_eq!(events.len(), 2);
+
+        // First event has filters
+        assert!(events[0].filters.is_some());
+        let filters = events[0].filters.as_ref().unwrap();
+        assert!(filters.contains_key("from"));
+
+        // Second event has no filters
+        assert!(events[1].filters.is_none());
     }
 }
