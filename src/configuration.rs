@@ -8,7 +8,6 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::{debug, error};
 
 /// Configuration as parsed from a file. Fields are optional to allow partial configs.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -67,28 +66,33 @@ impl IndexerConfiguration {
     pub fn from_args(args: IndexingArgs) -> Self {
         // If a config file is provided, it takes precedence for file-based fields.
         let file_config = if let Some(ref config_file) = args.config {
-            debug!("Loading configuration from file: {}", config_file);
-            debug!("CLI arguments for file-based fields will be ignored");
+            println!("Loading configuration from file: {}", config_file);
+            println!("CLI arguments for file-based fields will be ignored");
             match FileConfiguration::load(config_file) {
                 Ok(config) => config,
                 Err(e) => match e {
-                    ConfigError::NotFound(ref path) => {
-                        error!("Configuration file not found: {}", path);
-                        std::process::exit(error_codes::ERROR_CODE_CONFIGURATION_FILE_NOT_FOUND);
+                    ConfigError::NotFound(ref property) => {
+                        eprintln!(
+                            "\x1b[31merror:\x1b[0m Configuration file not found: {}",
+                            property
+                        );
+                        std::process::exit(
+                            error_codes::ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE,
+                        );
                     }
                     ConfigError::FileParse { ref uri, ref cause } => {
-                        error!(
-                            "Failed to parse configuration file: {}",
+                        eprintln!(
+                            "\x1b[31merror:\x1b[0m Failed to parse configuration file: {}",
                             uri.as_deref().unwrap_or(config_file)
                         );
-                        error!("Parse error: {}", cause);
+                        eprintln!("Parse error: {}", cause);
                         std::process::exit(
                             error_codes::ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE,
                         );
                     }
                     _ => {
-                        error!(
-                            "Failed to load configuration from file '{}': {}",
+                        eprintln!(
+                            "\x1b[31merror:\x1b[0m Failed to load configuration from file '{}': {}",
                             config_file, e
                         );
                         std::process::exit(
