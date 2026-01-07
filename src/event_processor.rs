@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::select;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, instrument};
 
 /// Processes events for a specific blockchain.
 ///
@@ -42,13 +42,14 @@ impl EventProcessor {
         }
     }
 
+    #[instrument(skip(self), fields(chain_id = %self.chain_id))]
     pub async fn run(&mut self) -> Result<()> {
         let mut cancellation_receiver = self.cancellation_token.subscribe();
         let mut last_processed = self.start_block.saturating_sub(1);
         let mut buffer: BTreeMap<u64, (u64, Vec<Log>)> = BTreeMap::new();
         let last_processed_shared = Mutex::new(last_processed);
 
-        debug!("EventProcessor started for chain {:#x}", self.chain_id);
+        debug!("EventProcessor started");
 
         loop {
             select! {
@@ -75,12 +76,12 @@ impl EventProcessor {
                                 }
 
                                 if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
-                                    error!("Chain {:#x}: Error adding events: {}", self.chain_id, e);
+                                    error!("Error adding events: {}", e);
                                     // Ensure the database is in a consistent state.
                                     self.storage.synchronize_events(self.chain_id, Some(last_processed))?;
                                     return Err(e);
                                 } else {
-                                    info!("Chain {:#x}: Stored events from blocks [{}-{}]", self.chain_id, last_processed + 1, end);
+                                    info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
                                 }
 
                                 // Update the cursor so that the next expected start is directly
@@ -88,12 +89,12 @@ impl EventProcessor {
                                 last_processed = end;
                                 *last_processed_shared.lock().unwrap() = last_processed;
 
-                                debug!("Chain {:#x}: Processed events from blocks [{}-{}]", self.chain_id, last_processed + 1, end);
+                                debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
                             }
                         }
                         None => {
                             // Channel closed, producer is done
-                            info!("Chain {:#x}: Event channel closed, all events processed", self.chain_id);
+                            info!("Event channel closed, all events processed");
                             // Ensure the database is in a consistent state.
                             self.storage.synchronize_events(self.chain_id, Some(*last_processed_shared.lock().unwrap()))?;
                             return Ok(());

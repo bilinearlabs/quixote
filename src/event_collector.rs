@@ -13,10 +13,11 @@ use anyhow::Result;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 #[derive(Clone)]
 pub struct EventCollector {
+    chain_id: u64,
     contract_address: Address,
     filter: Option<Filter>,
     start_block: u64,
@@ -39,6 +40,7 @@ impl EventCollector {
         let block_range_hint_regex = regex::Regex::new(r"(\d+)-(\d+)\s*$").unwrap();
 
         Self {
+            chain_id: seed.chain_id,
             contract_address: seed.contract_address,
             filter: seed.filter.clone(),
             start_block: seed.start_block,
@@ -51,6 +53,7 @@ impl EventCollector {
         }
     }
 
+    #[instrument(skip(self), fields(chain_id = %self.chain_id, contract_address = %self.contract_address))]
     pub async fn collect(&self) -> Result<()> {
         if self.check_sync_status().await? {
             error!(
@@ -134,10 +137,7 @@ impl EventCollector {
                         let chunk_end =
                             std::cmp::min(chunk_start + chunk_length - 1, finalized_block);
 
-                        info!(
-                            "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
-                            chunk_start, chunk_end, contract_address
-                        );
+                        info!("Fetching events for blocks [{chunk_start}-{chunk_end}]");
 
                         // Build the base filter for the get_Logs call. By default, all the events for a given smart
                         // contract are fetched.
@@ -154,6 +154,11 @@ impl EventCollector {
                         }
 
                         let events = provider.get_logs(&filter).await?;
+
+                        debug!(
+                            "Fetched {} events for blocks [{chunk_start}-{chunk_end}]",
+                            events.len()
+                        );
 
                         Ok::<_, anyhow::Error>(LogChunk {
                             start_block: chunk_start,
