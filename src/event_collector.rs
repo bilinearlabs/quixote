@@ -76,8 +76,6 @@ impl EventCollector {
         let mut successful_counter: u8 = 0;
         // Flag that indicates whether we are backfilling the database or fetching the finalized block.
         let mut backfill_mode = true;
-        // The percentage of the backfill that has been completed.
-        let mut backfill_percentage = 0.0;
 
         loop {
             // Check tha the RPC server is not syncing. If syncing, a raw exit is issued as we prefer to stop
@@ -108,21 +106,6 @@ impl EventCollector {
             );
 
             let remaining = finalized_block.saturating_sub(processed_to);
-
-            let start_block = self.start_block.saturating_sub(1);
-            let backfill_blocks = finalized_block.saturating_sub(start_block);
-            let new_backfill_percentage =
-                (backfill_blocks - remaining) as f64 / backfill_blocks as f64;
-            // Only update the backfill percentage if it is less than 1.0.
-            if backfill_percentage < 1.0 {
-                info!("Backfill percentage: {:?}", new_backfill_percentage);
-                self.metrics.record_backfill_percentage(
-                    self.chain_id,
-                    &self.contract_address_str,
-                    new_backfill_percentage,
-                );
-                backfill_percentage = new_backfill_percentage;
-            }
 
             if remaining == 0 {
                 // First time, we completed the backfill of the DB, let's inform the user.

@@ -13,7 +13,7 @@ use axum::{
     response::Response,
     routing::get,
 };
-use prometheus::{Encoder, GaugeVec, IntGaugeVec, Opts, Registry, TextEncoder};
+use prometheus::{Encoder, IntGaugeVec, Opts, Registry, TextEncoder};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::task::JoinHandle;
 
@@ -36,7 +36,6 @@ struct MetricsInner {
     registry: Registry,
     indexed_block: IntGaugeVec,
     chain_head_block: IntGaugeVec,
-    backfill_percentage: GaugeVec,
     allow_origin: Option<String>,
 }
 
@@ -76,21 +75,11 @@ impl MetricsHandle {
             .set(1);
         registry.register(Box::new(build_info.clone()))?;
 
-        let backfill_percentage = GaugeVec::new(
-            Opts::new(
-                "backfill_percentage",
-                "Percentage of the backfill that has been completed.",
-            ),
-            &["chain_id", "contract_address"],
-        )?;
-        registry.register(Box::new(backfill_percentage.clone()))?;
-
         Ok(Self {
             inner: Some(Arc::new(MetricsInner {
                 registry,
                 indexed_block,
                 chain_head_block,
-                backfill_percentage,
                 allow_origin: config.allow_origin.clone(),
             })),
         })
@@ -120,17 +109,6 @@ impl MetricsHandle {
                 .chain_head_block
                 .with_label_values(&[chain_id_str.as_str(), contract])
                 .set(block as i64);
-        }
-    }
-
-    #[inline]
-    pub fn record_backfill_percentage(&self, chain_id: u64, contract: &str, percentage: f64) {
-        if let Some(inner) = &self.inner {
-            let chain_id_str = chain_id.to_string();
-            inner
-                .backfill_percentage
-                .with_label_values(&[chain_id_str.as_str(), contract])
-                .set(percentage);
         }
     }
 
