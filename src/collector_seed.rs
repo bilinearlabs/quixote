@@ -62,6 +62,7 @@ impl CollectorSeed {
     /// block and returns a new CollectorSeed object.
     ///
     /// TODO: fully support filters
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         db_conn: &DuckDBStorage,
         chain_id: u64,
