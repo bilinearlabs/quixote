@@ -10,19 +10,20 @@
 //! i.e. they synchronized up to different blocks if the ABI mode is selected.
 
 use crate::{
-    configuration::IndexerConfiguration,
+    configuration::{FilterMap, IndexerConfiguration},
     constants,
     storage::{DuckDBStorage, Storage},
 };
 use alloy::{
     eips::BlockNumberOrTag,
     json_abi::{Event, JsonAbi},
-    primitives::Address,
+    primitives::{Address, B256},
     providers::{Provider, ProviderBuilder},
     rpc::{client::RpcClient, types::Filter},
     transports::http::reqwest::Url,
 };
 use anyhow::Result;
+use std::str::FromStr;
 use tracing::{debug, info};
 
 /// Object that represents a seed for a collecting job.
@@ -60,8 +61,6 @@ impl CollectorSeed {
     ///
     /// This function creates a new CollectorSeed object. It checks if the given events are synchronized up to the same
     /// block and returns a new CollectorSeed object.
-    ///
-    /// TODO: fully support filters
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         db_conn: &DuckDBStorage,
@@ -70,7 +69,7 @@ impl CollectorSeed {
         contract_address: Address,
         events: Vec<Event>,
         start_block: u64,
-        filter: Option<Filter>,
+        filter_config: Option<FilterMap>,
         block_range: usize,
     ) -> Result<Self> {
         // Ensure the given set of events are synchronized up to the same block.
@@ -84,6 +83,14 @@ impl CollectorSeed {
             stored_start_block
         };
 
+        // Build the filter from the configuration if provided.
+        // Filters require a single event to map parameter names to topic positions.
+        let filter = if let Some(event) = events.first() {
+            Self::build_filter_from_config(event, filter_config)?
+        } else {
+            None
+        };
+
         Ok(Self {
             chain_id,
             rpc_url,
@@ -94,6 +101,143 @@ impl CollectorSeed {
             filter,
             block_range,
         })
+    }
+
+    /// Builds a Filter from the configuration's filter map using the event definition.
+    ///
+    /// # Description
+    ///
+    /// Converts a FilterMap into an alloy Filter object containing only topic filters.
+    /// The contract address and event signature (topic0) are added later by the
+    /// event_collector module.
+    ///
+    /// Filter keys are matched against the event's indexed parameters by name:
+    /// - The first indexed parameter maps to topic1
+    /// - The second indexed parameter maps to topic2
+    /// - The third indexed parameter maps to topic3
+    ///
+    /// Values for the same key are ORed together (multiple values for same topic).
+    /// Different keys (topics) are ANDed together.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The event definition used to map parameter names to topic positions.
+    /// * `filter_config` - Optional map of filter configurations.
+    ///
+    /// # Returns
+    ///
+    /// An Option<Filter> that is Some if filters were provided, None otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a filter key doesn't match any indexed parameter of the event.
+    fn build_filter_from_config(
+        event: &Event,
+        filter_config: Option<FilterMap>,
+    ) -> Result<Option<Filter>> {
+        let filter_config = match filter_config {
+            Some(config) if !config.is_empty() => config,
+            _ => return Ok(None),
+        };
+
+        // Build a map of indexed parameter names to their topic positions (1-indexed).
+        // topic0 is reserved for the event signature.
+        let indexed_params: Vec<(&str, usize)> = event
+            .inputs
+            .iter()
+            .filter(|param| param.indexed)
+            .enumerate()
+            .map(|(idx, param)| (param.name.as_str(), idx + 1)) // +1 because topic0 is event signature
+            .collect();
+
+        let mut filter = Filter::new();
+
+        for (key, values) in filter_config.iter() {
+            if values.is_empty() {
+                continue;
+            }
+
+            // Find the topic position for this parameter name
+            let topic_position = indexed_params
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, pos)| *pos);
+
+            let topic_position = match topic_position {
+                Some(pos) => pos,
+                None => {
+                    // Check if it's a non-indexed parameter
+                    let is_non_indexed = event
+                        .inputs
+                        .iter()
+                        .any(|param| param.name == *key && !param.indexed);
+
+                    if is_non_indexed {
+                        return Err(anyhow::anyhow!(
+                            "Filter key '{}' refers to a non-indexed parameter in event '{}'. Only indexed parameters can be used as filters.",
+                            key,
+                            event.name
+                        ));
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "Filter key '{}' does not match any parameter in event '{}'. Available indexed parameters: [{}]",
+                            key,
+                            event.name,
+                            indexed_params
+                                .iter()
+                                .map(|(name, _)| *name)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+            };
+
+            // Convert string values to B256 (32-byte padded values).
+            // Addresses need to be left-padded to 32 bytes.
+            let topic_values: Vec<B256> = values
+                .iter()
+                .filter_map(|v| Self::parse_topic_value(v).ok())
+                .collect();
+
+            if topic_values.is_empty() {
+                continue;
+            }
+
+            // Set the topic at the correct position.
+            // Multiple values for the same topic position create an OR condition.
+            // The topics array is fixed-size [FilterSet<B256>; 4] where:
+            //   topics[0] = event signature (topic0)
+            //   topics[1] = first indexed param (topic1)
+            //   topics[2] = second indexed param (topic2)
+            //   topics[3] = third indexed param (topic3)
+            if topic_position < 4 {
+                filter.topics[topic_position] = topic_values.into();
+            }
+        }
+
+        Ok(Some(filter))
+    }
+
+    /// Parses a string value into a B256 topic value.
+    ///
+    /// # Description
+    ///
+    /// Handles hex strings (with or without 0x prefix) and pads them to 32 bytes.
+    /// Addresses (20 bytes) are left-padded with zeros to become 32 bytes.
+    fn parse_topic_value(value: &str) -> Result<B256> {
+        // Remove 0x prefix if present
+        let hex_str = value.strip_prefix("0x").unwrap_or(value);
+
+        // Pad to 64 hex characters (32 bytes) - left-pad for addresses
+        let padded = if hex_str.len() < 64 {
+            format!("{:0>64}", hex_str)
+        } else {
+            hex_str.to_string()
+        };
+
+        B256::from_str(&padded)
+            .map_err(|e| anyhow::anyhow!("Failed to parse topic value '{}': {}", value, e))
     }
 
     /// Ensure all the given events are synchronized up to the same block for a specific chain.
@@ -280,12 +424,18 @@ impl CollectorSeed {
 
             let filter = if coming_from_abi {
                 None
+            } else if events.len() > 1 {
+                return Err(anyhow::anyhow!(
+                    "Advanced filters are not supported when indexing multiple events at once. Declare each event as a different index job to use advanced filters."
+                ));
             } else {
-                Some(
-                    Filter::new()
-                        .address(contract_address)
-                        .event_signature(events.first().unwrap().selector()),
-                )
+                let event = events.first().unwrap();
+                let filter_config = job
+                    .events
+                    .as_ref()
+                    .and_then(|evts| evts.first())
+                    .and_then(|evt| evt.filters.clone());
+                Self::build_filter_from_config(event, filter_config)?
             };
 
             // Use job-specific block_range if set, otherwise fall back to default
@@ -335,7 +485,7 @@ impl CollectorSeed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configuration::{EventJob, IndexJob};
+    use crate::configuration::{EventJob, FilterMap, IndexJob};
     use alloy::json_abi::Event;
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
@@ -464,11 +614,43 @@ mod tests {
         }
     }
 
-    /// Test case 1: For an input config that defines a single event (Transfer),
-    /// build_seeds must create a single seed with a filter for its signature and the given contract.
+    /// Creates an IndexerConfiguration with a single event and explicit filters.
+    #[fixture]
+    fn config_single_event_with_filters() -> IndexerConfiguration {
+        let mut filters = FilterMap::new();
+        filters.insert(
+            "from".to_string(),
+            vec!["0x1111111111111111111111111111111111111111".to_string()],
+        );
+
+        IndexerConfiguration {
+            index_jobs: vec![IndexJob {
+                rpc_url: "http://localhost:8545".to_string(),
+                contract: TEST_CONTRACT_ADDRESS.to_string(),
+                start_block: Some(0),
+                block_range: Some(1000),
+                events: Some(vec![EventJob {
+                    full_signature: TRANSFER_EVENT_SIGNATURE.to_string(),
+                    filters: Some(filters),
+                }]),
+                abi_path: None,
+            }],
+            database_path: ":memory:".to_string(),
+            api_server_address: "127.0.0.1".to_string(),
+            api_server_port: 9720,
+            frontend_address: "127.0.0.1".to_string(),
+            frontend_port: 8501,
+            verbosity: 0,
+            disable_frontend: true,
+            strict_mode: false,
+        }
+    }
+
+    /// Test case 1: For an input config that defines a single event (Transfer) without explicit filters,
+    /// build_seeds must create a single seed without filter (filter is only set when explicitly configured).
     #[rstest]
     #[tokio::test]
-    async fn build_seeds_single_event_creates_one_seed_with_filter(
+    async fn build_seeds_single_event_without_filters_creates_seed_without_filter(
         test_db: DuckDBStorage,
         config_single_event: IndexerConfiguration,
     ) {
@@ -509,11 +691,43 @@ mod tests {
         assert_eq!(seed.events[0].name, transfer_event.name);
         assert_eq!(seed.events[0].selector(), transfer_event.selector());
 
-        // Verify that a filter is set (since it's a single event, not from ABI)
+        // No explicit filters provided → filter is None
+        assert!(
+            seed.filter.is_none(),
+            "Expected no filter when no filter config is provided"
+        );
+    }
+
+    /// Test case 1b: For an input config with explicit filters,
+    /// build_seeds must create a seed with the filter properly configured.
+    #[rstest]
+    #[tokio::test]
+    async fn build_seeds_single_event_with_filters_creates_seed_with_filter(
+        test_db: DuckDBStorage,
+        config_single_event_with_filters: IndexerConfiguration,
+    ) {
+        let seeds = CollectorSeed::build_seeds_with_chain_id_resolver(
+            &test_db,
+            &config_single_event_with_filters,
+            mock_chain_id_resolver,
+        )
+        .await
+        .expect("build_seeds should succeed");
+
+        assert_eq!(seeds.len(), 1);
+
+        let seed = &seeds[0];
+
+        // With explicit filters → filter should be set
         assert!(
             seed.filter.is_some(),
-            "Expected filter to be set for single event config"
+            "Expected filter to be set when filter config is provided"
         );
+
+        let filter = seed.filter.as_ref().unwrap();
+
+        // "from" is the first indexed parameter → should be in topic1
+        assert!(!filter.topics[1].is_empty(), "topic1 (from) should be set");
     }
 
     /// Test case 2: For an input config with an ABI file (USDC),
@@ -560,10 +774,10 @@ mod tests {
     }
 
     /// Test case 3: For an input config that defines 2 separate events (simulating -e used multiple times),
-    /// 2 seeds must be created, each with its own filter.
+    /// 2 seeds must be created. Without explicit filters, both seeds have no filter.
     #[rstest]
     #[tokio::test]
-    async fn build_seeds_two_events_creates_two_seeds_with_filters(
+    async fn build_seeds_two_events_creates_two_seeds_without_filters(
         test_db: DuckDBStorage,
         config_two_events: IndexerConfiguration,
     ) {
@@ -598,9 +812,10 @@ mod tests {
         );
         assert_eq!(first_seed.events[0].name, transfer_event.name);
         assert_eq!(first_seed.events[0].selector(), transfer_event.selector());
+        // No explicit filters → no filter
         assert!(
-            first_seed.filter.is_some(),
-            "First seed should have a filter"
+            first_seed.filter.is_none(),
+            "First seed should have no filter (no filter config provided)"
         );
 
         // Verify second seed (Approval event)
@@ -615,9 +830,181 @@ mod tests {
         );
         assert_eq!(second_seed.events[0].name, approval_event.name);
         assert_eq!(second_seed.events[0].selector(), approval_event.selector());
+        // No explicit filters → no filter
         assert!(
-            second_seed.filter.is_some(),
-            "Second seed should have a filter"
+            second_seed.filter.is_none(),
+            "Second seed should have no filter (no filter config provided)"
+        );
+    }
+
+    #[rstest]
+    fn parse_topic_value_handles_address_with_0x_prefix() {
+        let address = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+        let result = CollectorSeed::parse_topic_value(address).unwrap();
+
+        // Address should be left-padded to 32 bytes
+        let expected =
+            B256::from_str("000000000000000000000000A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn parse_topic_value_handles_address_without_0x_prefix() {
+        let address = "A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+        let result = CollectorSeed::parse_topic_value(address).unwrap();
+
+        // Address should be left-padded to 32 bytes
+        let expected =
+            B256::from_str("000000000000000000000000A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn parse_topic_value_handles_full_32_byte_value() {
+        let value = "0x000000000000000000000000A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+        let result = CollectorSeed::parse_topic_value(value).unwrap();
+
+        let expected =
+            B256::from_str("000000000000000000000000A0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+                .unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn build_filter_from_config_returns_none_when_no_filters() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+
+        let result = CollectorSeed::build_filter_from_config(&event, None).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[rstest]
+    fn build_filter_from_config_returns_none_for_empty_map() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+
+        let result =
+            CollectorSeed::build_filter_from_config(&event, Some(FilterMap::new())).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[rstest]
+    fn build_filter_from_config_maps_from_to_topic1() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+        let filter_address = "0x1234567890123456789012345678901234567890";
+
+        let mut filters = FilterMap::new();
+        filters.insert("from".to_string(), vec![filter_address.to_string()]);
+
+        let result = CollectorSeed::build_filter_from_config(&event, Some(filters)).unwrap();
+
+        assert!(result.is_some());
+        let filter = result.unwrap();
+
+        // Contract address and topic0 are NOT set here (added by event_collector)
+        assert!(filter.address.is_empty());
+        assert!(filter.topics[0].is_empty());
+
+        // "from" is the first indexed parameter → topic1
+        assert!(!filter.topics[1].is_empty());
+        // "to" was not specified → topic2 should be empty
+        assert!(filter.topics[2].is_empty());
+    }
+
+    #[rstest]
+    fn build_filter_from_config_maps_to_to_topic2() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+        let filter_address = "0x1234567890123456789012345678901234567890";
+
+        let mut filters = FilterMap::new();
+        filters.insert("to".to_string(), vec![filter_address.to_string()]);
+
+        let result = CollectorSeed::build_filter_from_config(&event, Some(filters)).unwrap();
+
+        let filter = result.unwrap();
+
+        // "from" was not specified → topic1 should be empty
+        assert!(filter.topics[1].is_empty());
+        // "to" is the second indexed parameter → topic2
+        assert!(!filter.topics[2].is_empty());
+    }
+
+    #[rstest]
+    fn build_filter_from_config_sets_multiple_values_for_same_topic() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+        let address1 = "0x1111111111111111111111111111111111111111";
+        let address2 = "0x2222222222222222222222222222222222222222";
+
+        let mut filters = FilterMap::new();
+        filters.insert(
+            "from".to_string(),
+            vec![address1.to_string(), address2.to_string()],
+        );
+
+        let result = CollectorSeed::build_filter_from_config(&event, Some(filters)).unwrap();
+
+        let filter = result.unwrap();
+
+        // topic1 should have both addresses (OR condition)
+        assert!(!filter.topics[1].is_empty());
+    }
+
+    #[rstest]
+    fn build_filter_from_config_sets_multiple_topics() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+        let from_address = "0x1111111111111111111111111111111111111111";
+        let to_address = "0x2222222222222222222222222222222222222222";
+
+        let mut filters = FilterMap::new();
+        filters.insert("from".to_string(), vec![from_address.to_string()]);
+        filters.insert("to".to_string(), vec![to_address.to_string()]);
+
+        let result = CollectorSeed::build_filter_from_config(&event, Some(filters)).unwrap();
+
+        let filter = result.unwrap();
+
+        // Both topic1 and topic2 should be set (AND condition between them)
+        assert!(!filter.topics[1].is_empty(), "topic1 should be set");
+        assert!(!filter.topics[2].is_empty(), "topic2 should be set");
+    }
+
+    #[rstest]
+    fn build_filter_from_config_rejects_non_indexed_parameter() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+
+        let mut filters = FilterMap::new();
+        // "value" is NOT indexed in the Transfer event
+        filters.insert("value".to_string(), vec!["0x1234".to_string()]);
+
+        let result = CollectorSeed::build_filter_from_config(&event, Some(filters));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("non-indexed"),
+            "Error should mention 'non-indexed': {}",
+            err
+        );
+    }
+
+    #[rstest]
+    fn build_filter_from_config_rejects_unknown_parameter() {
+        let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
+
+        let mut filters = FilterMap::new();
+        filters.insert("unknown_param".to_string(), vec!["0x1234".to_string()]);
+
+        let result = CollectorSeed::build_filter_from_config(&event, Some(filters));
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("does not match any parameter"),
+            "Error should mention parameter not found: {}",
+            err
         );
     }
 }

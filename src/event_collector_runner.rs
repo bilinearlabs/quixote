@@ -270,7 +270,13 @@ impl EventCollectorRunner {
 
             let metrics = self.metrics.clone();
             let handle = tokio::spawn(async move {
-                let collector = EventCollector::new(provider, producer_buffer, &seed, metrics);
+                let collector = EventCollector::new(
+                    provider,
+                    producer_buffer,
+                    &seed,
+                    seed.block_range,
+                    metrics,
+                );
 
                 if let Err(e) = collector.collect().await {
                     error!(
