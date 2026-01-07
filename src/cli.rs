@@ -15,9 +15,9 @@ pub struct IndexingArgs {
         short,
         long,
         required_unless_present = "config",
-        help = "RPC host to index.
-            \nFormat: [<username>:<password>@]<url>
-            \nExample for an RPC with basic auth => user:pass@http://localhost:8545
+        help = "RPC URL to index.
+            \nFormat: <scheme>://[<username>:<password>@]<host>[:<port>]
+            \nExample for an RPC with basic auth => http://user:pass@localhost:8545
             \nExample for an authless RPC => http://localhost:8545"
     )]
     pub rpc_host: Option<String>,
