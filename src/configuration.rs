@@ -2,8 +2,7 @@
 
 //! Module that handles the configuration of the application.
 
-use crate::{RpcHost, cli::IndexingArgs, constants, error_codes};
-use alloy::transports::http::reqwest::Url;
+use crate::{cli::IndexingArgs, constants, error_codes};
 use clap::Parser;
 use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
@@ -152,24 +151,8 @@ impl FileConfiguration {
                     .collect()
             });
 
-            // Parse the CLI rpc_host string and convert to a proper URL
-            let rpc_url = if let Some(ref rpc_host_str) = args.rpc_host {
-                let rpc_host: RpcHost = rpc_host_str.parse().unwrap_or_else(|e| {
-                    error!("Failed to parse RPC host '{}': {}", rpc_host_str, e);
-                    std::process::exit(
-                        error_codes::ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE,
-                    );
-                });
-                let url: Url = (&rpc_host).try_into().unwrap_or_else(|e| {
-                    error!("Failed to convert RPC host to URL: {}", e);
-                    std::process::exit(
-                        error_codes::ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE,
-                    );
-                });
-                url.to_string()
-            } else {
-                String::new()
-            };
+            // Use the RPC URL directly (standard URL format expected)
+            let rpc_url = args.rpc_host.clone().unwrap_or_default();
 
             vec![IndexJob {
                 rpc_url,
@@ -241,24 +224,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::with_credentials("user:pass@http://localhost:8545", "http://user:pass@localhost:8545/")]
-    #[case::without_credentials("http://localhost:8545", "http://localhost:8545/")]
-    #[case::with_credentials_host_port(
-        "user:pass@localhost:8545",
-        "http://user:pass@localhost:8545/"
-    )]
-    #[case::https_url("https://eth.example.com", "https://eth.example.com/")]
-    #[case::https_with_credentials(
-        "user:pass@https://eth.example.com",
-        "https://user:pass@eth.example.com/"
-    )]
-    fn from_args_parses_rpc_host_correctly(#[case] input: &str, #[case] expected_url: &str) {
+    #[case::with_credentials("http://user:pass@localhost:8545")]
+    #[case::without_credentials("http://localhost:8545")]
+    #[case::https_url("https://eth.example.com")]
+    #[case::https_with_credentials("https://user:pass@eth.example.com")]
+    fn from_args_uses_rpc_url_directly(#[case] input: &str) {
         let args = create_test_args(Some(input.to_string()), Some(TEST_CONTRACT.to_string()));
 
         let config = FileConfiguration::from_args(&args);
 
         assert_eq!(config.index_jobs.len(), 1);
-        assert_eq!(config.index_jobs[0].rpc_url, expected_url);
+        // URL is used directly without transformation
+        assert_eq!(config.index_jobs[0].rpc_url, input);
     }
 
     #[rstest]
