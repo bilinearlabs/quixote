@@ -16,8 +16,8 @@ use alloy::{
     },
 };
 use anyhow::Result;
+use std::sync::Arc;
 use std::time::Duration;
-use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, error, info};
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -172,23 +172,31 @@ fn extract_wait_seconds(error_msg: &str) -> Option<u64> {
 ///
 /// ## Resource assignment
 ///
-/// Each seed is assigned to its own provider and producer task, ensuring all events that belong to the
-/// same seed are synchronized up to the same block. Each chain has its own buffer to maintain block ordering.
+/// Each seed is assigned to its own provider, producer task, and buffer, ensuring complete isolation.
+/// Each seed is an independent unit of work with its own collector.
 pub struct EventCollectorRunner {
     /// List of providers, one per seed, created from each seed's rpc_url.
     provider_list: Vec<Arc<dyn Provider + Send + Sync + 'static>>,
     seeds: Vec<CollectorSeed>,
-    /// Per-chain buffers: chain_id -> TxLogChunk
-    chain_buffers: HashMap<u64, TxLogChunk>,
+    /// Per-seed buffers: one TxLogChunk per seed (same order as seeds)
+    seed_buffers: Vec<TxLogChunk>,
     metrics: MetricsHandle,
 }
 
 impl EventCollectorRunner {
     pub fn new(
         seeds: Vec<CollectorSeed>,
-        chain_buffers: HashMap<u64, TxLogChunk>,
+        seed_buffers: Vec<TxLogChunk>,
         metrics: MetricsHandle,
     ) -> Result<Self> {
+        if seeds.len() != seed_buffers.len() {
+            anyhow::bail!(
+                "Mismatch: {} seeds but {} buffers provided",
+                seeds.len(),
+                seed_buffers.len()
+            );
+        }
+
         let always_retry_policy = AlwaysRetryPolicy::default();
 
         let retry_policy = RetryBackoffLayer::new_with_policy(
@@ -217,7 +225,7 @@ impl EventCollectorRunner {
         Ok(Self {
             provider_list,
             seeds,
-            chain_buffers,
+            seed_buffers,
             metrics,
         })
     }
@@ -230,37 +238,25 @@ impl EventCollectorRunner {
             anyhow::bail!("Exiting app as no providers are available");
         }
 
-        info!(
-            "Starting {} collector tasks across {} chain(s)",
-            self.seeds.len(),
-            self.chain_buffers.len()
-        );
+        info!("Starting {} collector task(s)", self.seeds.len());
 
         // Collect all task handles
         let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-        // Each seed has its own provider (1:1 mapping)
-        for (seed_index, (seed, provider)) in
-            self.seeds.iter().zip(self.provider_list.iter()).enumerate()
+        // Each seed has its own provider and buffer (1:1:1 mapping)
+        for (seed_index, ((seed, provider), buffer)) in self
+            .seeds
+            .iter()
+            .zip(self.provider_list.iter())
+            .zip(self.seed_buffers.iter())
+            .enumerate()
         {
             let provider = provider.clone();
-
-            // Get the buffer for this seed's chain
-            let producer_buffer = match self.chain_buffers.get(&seed.chain_id) {
-                Some(buffer) => buffer.clone(),
-                None => {
-                    error!(
-                        "No buffer found for chain_id {:#x}. This is a bug.",
-                        seed.chain_id
-                    );
-                    continue;
-                }
-            };
-
+            let producer_buffer = buffer.clone();
             let seed = seed.clone();
 
             info!(
-                "Spawning collector for seed {} (chain_id: {:#x}, contract: {}, start_block: {}, block_range: {})",
+                "Spawning collector {} (chain_id: {:#x}, contract: {}, start_block: {}, block_range: {})",
                 seed_index,
                 seed.chain_id,
                 seed.contract_address,
@@ -270,17 +266,11 @@ impl EventCollectorRunner {
 
             let metrics = self.metrics.clone();
             let handle = tokio::spawn(async move {
-                let collector = EventCollector::new(
-                    provider,
-                    producer_buffer,
-                    &seed,
-                    seed.block_range,
-                    metrics,
-                );
+                let collector = EventCollector::new(provider, producer_buffer, &seed, metrics);
 
                 if let Err(e) = collector.collect().await {
                     error!(
-                        "Collector for seed {} (chain_id: {:#x}, contract: {}) failed: {}",
+                        "Collector {} (chain_id: {:#x}, contract: {}) failed: {}",
                         seed_index, seed.chain_id, seed.contract_address, e
                     );
                 }

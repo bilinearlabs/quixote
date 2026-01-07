@@ -75,15 +75,14 @@ impl EventProcessor {
                                 // block.
                                 if ev.is_empty() {
                                     self.storage.synchronize_events(self.chain_id, Some(last_processed))?;
-                                    continue;
-                                }
-
-                                if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
+                                } else if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
                                     error!("Error adding events: {}", e);
                                     // Ensure the database is in a consistent state.
                                     self.storage.synchronize_events(self.chain_id, Some(last_processed))?;
                                     return Err(e);
                                 } else {
+                                    // No need to synchronize the database here, as we have already done it within
+                                    // add_events.
                                     info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
                                 }
 

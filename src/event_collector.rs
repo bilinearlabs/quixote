@@ -35,7 +35,6 @@ impl EventCollector {
         provider: Arc<dyn Provider + Send + Sync>,
         producer_buffer: TxLogChunk,
         seed: &CollectorSeed,
-        block_range: usize,
         metrics: MetricsHandle,
     ) -> Self {
         // Regex to capture the last two integers (block numbers) from messages like:
@@ -51,7 +50,7 @@ impl EventCollector {
             sync_mode: seed.sync_mode,
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
-            default_block_range: block_range,
+            default_block_range: seed.block_range,
             block_range_hint_regex,
             metrics,
         }
@@ -372,13 +371,8 @@ mod tests {
         let metrics = crate::metrics::MetricsHandle::default();
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
         seed_fixture.block_range = 10;
-        let mut collector = EventCollector::new(
-            provider_fixture,
-            producer_buffer,
-            &seed_fixture,
-            10,
-            metrics,
-        );
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -417,13 +411,8 @@ mod tests {
         let metrics = crate::metrics::MetricsHandle::default();
         // 10k throttles the RPC at the second request.
         seed_fixture.block_range = 10000;
-        let mut collector = EventCollector::new(
-            provider_fixture,
-            producer_buffer,
-            &seed_fixture,
-            10,
-            metrics,
-        );
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -524,9 +513,10 @@ mod tests {
     /// Helper to run a collector for a single block and count events.
     async fn run_collector_and_count(
         provider: Arc<dyn Provider + Send + Sync + 'static>,
-        seed: CollectorSeed,
+        mut seed: CollectorSeed,
     ) -> usize {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
+        seed.block_range = 10;
 
         let metrics = MetricsHandle::new(&MetricsConfig {
             enabled: false,
@@ -535,7 +525,7 @@ mod tests {
             allow_origin: None,
         })
         .unwrap();
-        let collector = EventCollector::new(provider, producer_buffer, &seed, 10, metrics);
+        let collector = EventCollector::new(provider, producer_buffer, &seed, metrics);
 
         let handle = tokio::spawn(async move {
             collector.collect().await.unwrap();
