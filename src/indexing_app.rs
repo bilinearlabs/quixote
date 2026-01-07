@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
 use crate::{
-    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor,
+    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, TxLogChunk,
     api_rest::start_api_server,
     configuration::IndexerConfiguration,
     constants, error_codes,
@@ -9,8 +9,8 @@ use crate::{
     storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
 };
 use anyhow::{Context, Result};
-use std::sync::Arc;
-use tokio::{join, signal::ctrl_c, sync::mpsc};
+use std::{collections::HashMap, sync::Arc};
+use tokio::{signal::ctrl_c, sync::mpsc};
 use tracing::{error, info, warn};
 
 pub struct IndexingApp {
@@ -19,7 +19,6 @@ pub struct IndexingApp {
     pub storage_for_api: Arc<DuckDBStorageFactory>,
     pub cancellation_token: CancellationToken,
     pub seeds: Vec<CollectorSeed>,
-    pub default_block_range: usize,
     pub metrics_config: MetricsConfig,
     pub metrics: MetricsHandle,
 }
@@ -58,12 +57,6 @@ impl IndexingApp {
 
         let api_server_address =
             format!("{}:{}", config.api_server_address, config.api_server_port);
-        let default_block_range = config
-            .index_jobs
-            .first()
-            .unwrap()
-            .block_range
-            .unwrap_or(constants::DEFAULT_BLOCK_RANGE);
 
         Ok(Self {
             storage: Arc::new(storage),
@@ -71,19 +64,18 @@ impl IndexingApp {
             storage_for_api,
             cancellation_token,
             seeds,
-            default_block_range,
             metrics_config,
             metrics,
         })
     }
 
     /// Runs the indexing app.
+    ///
+    /// # Description
+    ///
+    /// This method creates one EventProcessor per unique chain_id. Each chain has its own
+    /// buffer channel, ensuring that block ordering is maintained within each chain.
     pub async fn run(&self) -> Result<()> {
-        // Buffer for the event collector and processor.
-        let (producer_buffer, consumer_buffer) = mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
-
-        let start_block = self.seeds.first().unwrap().start_block;
-
         if self.metrics.is_enabled() {
             let _ = self
                 .metrics
@@ -91,30 +83,57 @@ impl IndexingApp {
                 .await
                 .with_context(|| "Failed to start metrics server")?;
         }
+        // Group seeds by chain_id to determine unique chains and their start blocks
+        let mut chain_info: HashMap<u64, u64> = HashMap::new(); // chain_id -> start_block
+        for seed in &self.seeds {
+            chain_info
+                .entry(seed.chain_id)
+                .and_modify(|existing_start| {
+                    // Validate that all seeds for the same chain have the same start_block
+                    if *existing_start != seed.start_block {
+                        error!(
+                            "Chain {:#x}: Seeds have different start blocks ({} vs {}). Resuming from such DB is not supported yet.",
+                            seed.chain_id, *existing_start, seed.start_block
+                        );
+                        std::process::exit(error_codes::ERROR_CODE_BAD_DB_STATE);
+                    }
+                })
+                .or_insert(seed.start_block);
+        }
 
-        self.seeds.iter().for_each(|seed| {
-            if seed.start_block != start_block {
-                error!("Your DB contains events that are synchronized up to different blocks. Resuming from such DB is not supported yet.");
-                std::process::exit(error_codes::ERROR_CODE_BAD_DB_STATE);
-            }
-        });
+        info!("Found {} unique chain(s) to index", chain_info.len());
 
-        let event_collector_runner = EventCollectorRunner::new(
-            self.seeds.clone(),
-            producer_buffer,
-            self.default_block_range,
-            self.metrics.clone(),
-        )?;
+        // Create per-chain buffers: chain_id -> (tx, rx)
+        let mut chain_buffers: HashMap<u64, TxLogChunk> = HashMap::new();
+        let mut processor_handles = Vec::new();
 
-        let mut event_processor = EventProcessor::new(
-            // TODO remove once multichain is supported
-            self.seeds.first().unwrap().chain_id,
-            self.storage.clone(),
-            start_block,
-            consumer_buffer,
-            self.cancellation_token.clone(),
-            self.metrics.clone(),
-        );
+        for (chain_id, start_block) in &chain_info {
+            let (producer_buffer, consumer_buffer) =
+                mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
+            chain_buffers.insert(*chain_id, producer_buffer);
+
+            // Create an EventProcessor for this chain
+            let mut event_processor = EventProcessor::new(
+                *chain_id,
+                self.storage.clone(),
+                *start_block,
+                consumer_buffer,
+                self.cancellation_token.clone(),
+                self.metrics.clone(),
+            );
+
+            info!(
+                "Starting EventProcessor for chain {:#x} from block {}",
+                chain_id, start_block
+            );
+
+            let handle = tokio::spawn(async move { event_processor.run().await });
+            processor_handles.push(handle);
+        }
+
+        // Create the event collector runner with per-chain buffers
+        let event_collector_runner =
+            EventCollectorRunner::new(self.seeds.clone(), chain_buffers, self.metrics.clone())?;
 
         // Start the REST API server
         start_api_server(
@@ -127,9 +146,6 @@ impl IndexingApp {
 
         info!("Starting the indexing of events");
 
-        // Launch teh event processor
-        let processor_handle = tokio::spawn(async move { event_processor.run().await });
-
         // Launch the event collector runner
         #[allow(clippy::let_underscore_future)]
         let _ = tokio::spawn(async move { event_collector_runner.run().await });
@@ -137,8 +153,13 @@ impl IndexingApp {
         // Spawn a task that handles Ctrl+C and aborts the collector
         let ctrl_c_task = IndexingApp::spawn_ctrl_c_handler(self.cancellation_token.clone());
 
-        // Collector tasks can be safely killed without the token, so these will be dropped automatically.
-        let _ = join!(ctrl_c_task, processor_handle);
+        // Wait for Ctrl+C handler
+        ctrl_c_task.await?;
+
+        // Wait for all processors to finish
+        for handle in processor_handles {
+            let _ = handle.await;
+        }
 
         info!("Shutdown complete");
 

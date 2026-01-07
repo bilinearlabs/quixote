@@ -16,28 +16,51 @@ The tool expects a set of arguments that identify the RPC host from which the da
 ```raw
 Quixote
 
-Usage: quixote [OPTIONS] --rpc-host <RPC_HOST> --contract <CONTRACT>
+Usage: quixote [OPTIONS]
 
 Options:
-  -r, --rpc-host <RPC_HOST>        RPC host to index.
+  -r, --rpc-host <RPC_HOST>
+          RPC URL to index.
 
-                                   Format: <chain_id>[:<username>:<password>]@<host>:<port>
+          Format: <scheme>://[<username>:<password>@]<host>[:<port>]
 
-                                   Example for an RPC with basic auth => 1:user:pass@http://localhost:9822
+          Example for an RPC with basic auth => http://user:pass@localhost:8545
 
-                                   Example for an authless RPC => 1@http://localhost:9822
-  -c, --contract <CONTRACT>        Contract to index.
-                                   Example: 0x1234567890123456789012345678901234567890
-  -e, --event <EVENT>              Event to index as defined by the contract's ABI.
-                                   Example: Transfer(address indexed from, address indexed to, uint256 amount)
-  -s, --start-block <START_BLOCK>  Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.
-                                   Example => 28837711
-                                   Default: latest
-  -d, --database <DATABASE>        Path to the database file. Default: quixote_indexer.duckdb
-  -a, --abi-spec <ABI_SPEC>        Path for the ABI JSON spec of the indexed contract. When give, the entire set of events defined in the ABI will be indexed.
-  -j, --api-server <API_SERVER>    Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720
-  -h, --help                       Print help (see more with '--help')
-  -V, --version                    Print version
+          Example for an authless RPC => http://localhost:8545
+  -c, --contract <CONTRACT>
+          Contract to index.
+          Example: 0x1234567890123456789012345678901234567890
+  -e, --event <EVENT>
+          Event to index as defined by the contract's ABI.
+          Example: Transfer(address indexed from, address indexed to, uint256 amount)
+  -s, --start-block <START_BLOCK>
+          Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.
+          Example => 28837711
+          Default: 0
+  -d, --database <DATABASE>
+          Path to the database file. Default: etherduck_indexer.duckdb
+  -a, --abi-spec <ABI_SPEC>
+          Path for the ABI JSON spec of the indexed contract. When give, the entire set of events defined in the ABI will be indexed.
+  -j, --api-server <API_SERVER>
+          Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720
+      --block-range <BLOCK_RANGE>
+          Block range for the RPC requests. [default: 10000]
+  -v, --verbosity <VERBOSITY>
+          Verbosity level. 0 = WARN, 1 = INFO (default), 2 = DEBUG, 3 = TRACE [default: 1]
+      --disable-frontend
+          Disable the frontend application.
+      --frontend-address <FRONTEND_ADDRESS>
+          Frontend listening address [default: 127.0.0.1]
+      --frontend-port <FRONTEND_PORT>
+          Frontend listening port [default: 8501]
+      --strict-mode
+          Enable strict mode (stops the indexing when an event fails to be processed)
+      --config <CONFIG>
+          Path to the configuration file. When used, the command line arguments will be ignored.
+  -h, --help
+          Print help (see more with '--help')
+  -V, --version
+          Print version
 ```
 
 This way, an example of usage would be:
@@ -80,7 +103,6 @@ An example of a configuration file:
 
 ```yaml
 database_path: "quixote_indexer.duckdb"
-abi_spec: "abi.json"
 api_server_address: "127.0.0.1"
 api_server_port: 9720
 frontend_address: "127.0.0.1"

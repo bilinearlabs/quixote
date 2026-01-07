@@ -2,7 +2,7 @@
 
 //! Module for the event collector.
 
-use crate::{CollectorSeed, LogChunk, TxLogChunk, constants::*};
+use crate::{CollectorSeed, LogChunk, TxLogChunk, constants::*, metrics::MetricsHandle};
 use alloy::{
     eips::BlockNumberOrTag,
     primitives::Address,
@@ -13,10 +13,11 @@ use anyhow::Result;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 #[derive(Clone)]
 pub struct EventCollector {
+    chain_id: u64,
     contract_address: Address,
     filter: Option<Filter>,
     start_block: u64,
@@ -26,8 +27,7 @@ pub struct EventCollector {
     producer_buffer: TxLogChunk,
     default_block_range: usize,
     block_range_hint_regex: regex::Regex,
-    chain_id: u64,
-    metrics: crate::metrics::MetricsHandle,
+    metrics: MetricsHandle,
 }
 
 impl EventCollector {
@@ -35,14 +35,14 @@ impl EventCollector {
         provider: Arc<dyn Provider + Send + Sync>,
         producer_buffer: TxLogChunk,
         seed: &CollectorSeed,
-        default_block_range: usize,
-        metrics: crate::metrics::MetricsHandle,
+        metrics: MetricsHandle,
     ) -> Self {
         // Regex to capture the last two integers (block numbers) from messages like:
         // "error code -32602: query exceeds max results 20000, retry with the range 22382105-22382515"
         let block_range_hint_regex = regex::Regex::new(r"(\d+)-(\d+)\s*$").unwrap();
 
         Self {
+            chain_id: seed.chain_id,
             contract_address: seed.contract_address,
             filter: seed.filter.clone(),
             start_block: seed.start_block,
@@ -50,13 +50,13 @@ impl EventCollector {
             sync_mode: seed.sync_mode,
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
-            default_block_range,
+            default_block_range: seed.block_range,
             block_range_hint_regex,
-            chain_id: seed.chain_id,
             metrics,
         }
     }
 
+    #[instrument(skip(self), fields(chain_id = %self.chain_id, contract_address = %self.contract_address))]
     pub async fn collect(&self) -> Result<()> {
         if self.check_sync_status().await? {
             error!(
@@ -148,10 +148,7 @@ impl EventCollector {
                         let chunk_end =
                             std::cmp::min(chunk_start + chunk_length - 1, finalized_block);
 
-                        info!(
-                            "Fetching events for blocks [{:?}-{:?}] contract address: {:?}",
-                            chunk_start, chunk_end, contract_address
-                        );
+                        info!("Fetching events for blocks [{chunk_start}-{chunk_end}]");
 
                         // Build the base filter for the get_Logs call. By default, all the events for a given smart
                         // contract are fetched.
@@ -169,7 +166,10 @@ impl EventCollector {
 
                         let events = provider.get_logs(&filter).await?;
 
-                        info!("Events fetched: {:?}", events.len());
+                        debug!(
+                            "Fetched {} events for blocks [{chunk_start}-{chunk_end}]",
+                            events.len()
+                        );
 
                         Ok::<_, anyhow::Error>(LogChunk {
                             start_block: chunk_start,
@@ -269,7 +269,6 @@ mod tests {
     //! against a known set of events.
 
     use super::*;
-    use crate::RpcHost;
     use alloy::{
         json_abi::{Event, JsonAbi},
         providers::Provider,
@@ -291,8 +290,10 @@ mod tests {
     /// Target block for the short test.
     const TARGET_BLOCK_SHORT_TEST: u64 = 24022500;
 
+    /// Builds RPC URL from environment variables using standard URL format.
+    /// Format: http://user:pass@host:port
     #[fixture]
-    fn rpc_host_fixture() -> RpcHost {
+    fn rpc_url_fixture() -> Url {
         use std::env;
 
         // Get credentials and URL from environment variables
@@ -302,33 +303,27 @@ mod tests {
         let rpc_password =
             env::var("QUIXOTE_TEST_RPC_PASSWORD").expect("QUIXOTE_TEST_RPC_PASSWORD must be set");
 
-        let host_str = format!("{}:{}@{}", rpc_user, rpc_password, rpc_url);
-        host_str
-            .parse::<RpcHost>()
-            .expect("Failed to parse RPC host")
+        // Parse the base URL and inject credentials
+        let mut url = Url::parse(&rpc_url).expect("Failed to parse QUIXOTE_TEST_RPC as URL");
+        url.set_username(&rpc_user).expect("Failed to set username");
+        url.set_password(Some(&rpc_password))
+            .expect("Failed to set password");
+        url
     }
 
     #[fixture]
-    fn provider_fixture(rpc_host_fixture: RpcHost) -> Arc<dyn Provider + Send + Sync + 'static> {
-        let url: Url = (&rpc_host_fixture)
-            .try_into()
-            .expect("Failed to convert RPC host to URL");
-
-        Arc::new(ProviderBuilder::new().connect_client(RpcClient::builder().http(url)))
+    fn provider_fixture(rpc_url_fixture: Url) -> Arc<dyn Provider + Send + Sync + 'static> {
+        Arc::new(ProviderBuilder::new().connect_client(RpcClient::builder().http(rpc_url_fixture)))
     }
 
     /// Chain ID for Ethereum mainnet (used in integration tests).
     const TEST_CHAIN_ID: u64 = 1;
 
     #[fixture]
-    fn seed_fixture(usdc_events_fixture: Vec<Event>, rpc_host_fixture: RpcHost) -> CollectorSeed {
-        let rpc_url: Url = (&rpc_host_fixture)
-            .try_into()
-            .expect("Failed to convert RPC host to URL");
-
+    fn seed_fixture(usdc_events_fixture: Vec<Event>, rpc_url_fixture: Url) -> CollectorSeed {
         CollectorSeed {
             chain_id: TEST_CHAIN_ID,
-            rpc_url,
+            rpc_url: rpc_url_fixture,
             // USDC contract address
             contract_address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
                 .unwrap(),
@@ -336,6 +331,7 @@ mod tests {
             start_block: 24022000,
             sync_mode: BlockNumberOrTag::Latest,
             filter: None,
+            block_range: crate::constants::DEFAULT_BLOCK_RANGE,
         }
     }
 
@@ -353,18 +349,14 @@ mod tests {
     #[tokio::test]
     async fn check_transfer_events_for_a_block_range(
         provider_fixture: Arc<dyn Provider + Send + Sync + 'static>,
-        seed_fixture: CollectorSeed,
+        mut seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         let metrics = crate::metrics::MetricsHandle::default();
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
-        let mut collector = EventCollector::new(
-            provider_fixture,
-            producer_buffer,
-            &seed_fixture,
-            10,
-            metrics,
-        );
+        seed_fixture.block_range = 10;
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -397,18 +389,14 @@ mod tests {
     #[tokio::test]
     async fn simple_throttling_test(
         provider_fixture: Arc<dyn Provider + Send + Sync + 'static>,
-        seed_fixture: CollectorSeed,
+        mut seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         let metrics = crate::metrics::MetricsHandle::default();
         // 10k throttles the RPC at the second request.
-        let mut collector = EventCollector::new(
-            provider_fixture,
-            producer_buffer,
-            &seed_fixture,
-            10000,
-            metrics,
-        );
+        seed_fixture.block_range = 10000;
+        let mut collector =
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
