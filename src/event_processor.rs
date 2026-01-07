@@ -3,7 +3,7 @@
 //! Module for the event processor.
 
 use crate::{CancellationToken, RxLogChunk, metrics::MetricsHandle, storage::Storage};
-use alloy::rpc::types::Log;
+use alloy::{primitives::Address, rpc::types::Log};
 use anyhow::Result;
 use std::{
     collections::BTreeMap,
@@ -23,12 +23,14 @@ pub struct EventProcessor {
     start_block: u64,
     producer_buffer: RxLogChunk,
     cancellation_token: CancellationToken,
+    contract_address: Address,
     metrics: MetricsHandle,
 }
 
 impl EventProcessor {
     pub fn new(
         chain_id: u64,
+        contract_address: Address,
         storage: Arc<dyn Storage + Send + Sync>,
         start_block: u64,
         producer_buffer: RxLogChunk,
@@ -41,6 +43,7 @@ impl EventProcessor {
             start_block,
             producer_buffer,
             cancellation_token,
+            contract_address,
             metrics,
         }
     }
@@ -92,8 +95,7 @@ impl EventProcessor {
                                 *last_processed_shared.lock().unwrap() = last_processed;
 
                                 debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
-                                let contract_address = ev.first().unwrap().address().to_string();
-                                self.metrics.record_indexed_block(self.chain_id, &contract_address, last_processed);
+                                self.metrics.record_indexed_block(self.chain_id, &self.contract_address.to_string(), last_processed);
                             }
                         }
                         None => {

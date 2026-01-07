@@ -97,6 +97,7 @@ impl IndexingApp {
             // Create an EventProcessor for this seed
             let mut event_processor = EventProcessor::new(
                 seed.chain_id,
+                seed.contract_address,
                 self.storage.clone(),
                 seed.start_block,
                 consumer_buffer,
