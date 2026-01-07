@@ -73,7 +73,7 @@ impl IndexerConfiguration {
                 Err(e) => match e {
                     ConfigError::NotFound(ref property) => {
                         eprintln!(
-                            "\x1b[31merror:\x1b[0m Configuration file not found: {}",
+                            "\x1b[31merror:\x1b[0m Configuration property not found: {}",
                             property
                         );
                         std::process::exit(
