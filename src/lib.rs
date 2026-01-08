@@ -68,6 +68,8 @@ pub mod error_codes {
     pub const ERROR_CODE_CONFIGURATION_FILE_NOT_FOUND: i32 = 6;
     /// Failed to load configuration from file.
     pub const ERROR_CODE_FAILED_TO_LOAD_CONFIGURATION_FROM_FILE: i32 = 7;
+    /// RPC server is syncing.
+    pub const ERROR_CODE_RPC_SERVER_SYNCING: i32 = 8;
 }
 
 /// Module with definitions related to the storage of the indexed data.

@@ -2,7 +2,9 @@
 
 //! Module for the event collector.
 
-use crate::{CollectorSeed, LogChunk, TxLogChunk, constants::*, metrics::MetricsHandle};
+use crate::{
+    CollectorSeed, LogChunk, TxLogChunk, constants::*, error_codes, metrics::MetricsHandle,
+};
 use alloy::{
     eips::BlockNumberOrTag,
     primitives::Address,
@@ -62,7 +64,7 @@ impl EventCollector {
             error!(
                 "The RPC server is syncing, resume indexing when the syncing process is complete"
             );
-            std::process::exit(1);
+            std::process::exit(error_codes::ERROR_CODE_RPC_SERVER_SYNCING);
         }
 
         // The last stored block number in the DB.
@@ -82,7 +84,7 @@ impl EventCollector {
                 error!(
                     "The RPC server is syncing, resume indexing when the syncing process is complete"
                 );
-                std::process::exit(1);
+                std::process::exit(error_codes::ERROR_CODE_RPC_SERVER_SYNCING);
             }
 
             let provider = self.provider.clone();
@@ -227,15 +229,10 @@ impl EventCollector {
 
             // Reached this statement, we are sure that no errors happened in the series of RPC requests, thus we
             // can send the results to the consumer task for its storage in the DB.
-            stream::iter(rpc_results.into_iter().map(Ok::<LogChunk, anyhow::Error>))
-                .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |result| {
-                    let tx = producer_buffer.clone();
-                    async move {
-                        tx.send(result).await?;
-                        Ok(())
-                    }
-                })
-                .await?;
+            // Results are sent sequentially to preserve block order for the receiver.
+            for result in rpc_results {
+                producer_buffer.send(result).await?;
+            }
 
             // If we reach the threshold of successful chunks, we can restore the block range to the default value.
             if successful_counter == SUCCESSFUL_CHUNKS_THRESHOLD {
