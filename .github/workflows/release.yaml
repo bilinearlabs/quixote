@@ -29,7 +29,7 @@ jobs:
             archive: tar.gz
           # macOS Intel
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15
             archive: tar.gz
           # macOS Apple Silicon
           - target: aarch64-apple-darwin
@@ -97,7 +97,7 @@ jobs:
 
       - name: Upload to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ env.ARCHIVE_PATH }}
@@ -129,7 +129,7 @@ jobs:
           cat */*.sha256 > ../checksums-${{ steps.version.outputs.version }}.txt
 
       - name: Upload checksums to release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           files: checksums-${{ steps.version.outputs.version }}.txt
         env:
