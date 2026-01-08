@@ -5,6 +5,7 @@ use crate::{
     api_rest::start_api_server,
     configuration::IndexerConfiguration,
     constants, error_codes,
+    metrics::{MetricsConfig, MetricsHandle},
     storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
 };
 use anyhow::{Context, Result};
@@ -18,12 +19,22 @@ pub struct IndexingApp {
     pub storage_for_api: Arc<DuckDBStorageFactory>,
     pub cancellation_token: CancellationToken,
     pub seeds: Vec<CollectorSeed>,
+    pub metrics_config: MetricsConfig,
+    pub metrics: MetricsHandle,
 }
 
 impl IndexingApp {
     /// Builds a new instance of the indexing app using the configuration.
     pub async fn build_app(config: &IndexerConfiguration) -> Result<Self> {
         let cancellation_token = CancellationToken::default();
+
+        let metrics_config = MetricsConfig {
+            enabled: config.metrics,
+            address: config.metrics_address.clone(),
+            port: config.metrics_port,
+            allow_origin: config.metrics_allow_origin.clone(),
+        };
+        let metrics = MetricsHandle::new(&metrics_config)?;
 
         // Instantiate the DB handlers, for the consumer task and the API server.
         let (storage, storage_for_api) = {
@@ -53,6 +64,8 @@ impl IndexingApp {
             storage_for_api,
             cancellation_token,
             seeds,
+            metrics_config,
+            metrics,
         })
     }
 
@@ -63,6 +76,13 @@ impl IndexingApp {
     /// This method creates one EventProcessor per seed. Each seed is an isolated unit of work
     /// with its own collector and processor, ensuring independent processing regardless of chain_id.
     pub async fn run(&self) -> Result<()> {
+        if self.metrics.is_enabled() {
+            let _ = self
+                .metrics
+                .serve(self.metrics_config.clone())
+                .await
+                .with_context(|| "Failed to start metrics server")?;
+        }
         info!("Starting {} indexing job(s)", self.seeds.len());
 
         // Create one buffer and one processor per seed
@@ -77,10 +97,12 @@ impl IndexingApp {
             // Create an EventProcessor for this seed
             let mut event_processor = EventProcessor::new(
                 seed.chain_id,
+                seed.contract_address,
                 self.storage.clone(),
                 seed.start_block,
                 consumer_buffer,
                 self.cancellation_token.clone(),
+                self.metrics.clone(),
             );
 
             info!(
@@ -93,7 +115,8 @@ impl IndexingApp {
         }
 
         // Create the event collector runner with per-seed buffers
-        let event_collector_runner = EventCollectorRunner::new(self.seeds.clone(), seed_buffers)?;
+        let event_collector_runner =
+            EventCollectorRunner::new(self.seeds.clone(), seed_buffers, self.metrics.clone())?;
 
         // Start the REST API server
         start_api_server(

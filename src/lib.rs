@@ -14,6 +14,7 @@ pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;
 pub mod configuration;
+pub mod metrics;
 pub mod streamlit_wrapper;
 pub use configuration::IndexerConfiguration;
 pub mod telemetry;

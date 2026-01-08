@@ -2,7 +2,10 @@
 
 //! Runner module for the event collector.
 
-use crate::{CollectorSeed, TxLogChunk, constants::*, event_collector::EventCollector};
+use crate::{
+    CollectorSeed, TxLogChunk, constants::*, event_collector::EventCollector,
+    metrics::MetricsHandle,
+};
 use alloy::{
     providers::Provider,
     providers::ProviderBuilder,
@@ -177,10 +180,15 @@ pub struct EventCollectorRunner {
     seeds: Vec<CollectorSeed>,
     /// Per-seed buffers: one TxLogChunk per seed (same order as seeds)
     seed_buffers: Vec<TxLogChunk>,
+    metrics: MetricsHandle,
 }
 
 impl EventCollectorRunner {
-    pub fn new(seeds: Vec<CollectorSeed>, seed_buffers: Vec<TxLogChunk>) -> Result<Self> {
+    pub fn new(
+        seeds: Vec<CollectorSeed>,
+        seed_buffers: Vec<TxLogChunk>,
+        metrics: MetricsHandle,
+    ) -> Result<Self> {
         if seeds.len() != seed_buffers.len() {
             anyhow::bail!(
                 "Mismatch: {} seeds but {} buffers provided",
@@ -218,6 +226,7 @@ impl EventCollectorRunner {
             provider_list,
             seeds,
             seed_buffers,
+            metrics,
         })
     }
 
@@ -255,8 +264,9 @@ impl EventCollectorRunner {
                 seed.block_range
             );
 
+            let metrics = self.metrics.clone();
             let handle = tokio::spawn(async move {
-                let collector = EventCollector::new(provider, producer_buffer, &seed);
+                let collector = EventCollector::new(provider, producer_buffer, &seed, metrics);
 
                 if let Err(e) = collector.collect().await {
                     error!(

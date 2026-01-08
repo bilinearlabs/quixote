@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+  external_labels:
+    monitor: "quixote"
+
+remote_write:
+  - url: ${PROMETHEUS_REMOTE_URL}
+    basic_auth:
+      username: ${PROMETHEUS_USERNAME}
+      password: ${PROMETHEUS_PASSWORD}
+    write_relabel_configs:
+      - source_labels: [__name__]
+        regex: '^quixote.*'
+        action: keep
+
+scrape_configs:
+  - job_name: "quixote"
+    static_configs:
+      - targets: ["quixote:5054"]
+    metrics_path: /metrics

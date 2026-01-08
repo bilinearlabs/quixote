@@ -17,6 +17,7 @@ clap = { version = "4.5.51", features = ["derive"] }
 duckdb = { version = "1.4.2" }
 futures = "0.3.31"
 regex = "1.12.2"
+prometheus = { version = "0.13", default-features = false, features = ["process"] }
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.145"

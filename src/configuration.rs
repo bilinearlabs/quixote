@@ -58,6 +58,10 @@ pub struct IndexerConfiguration {
     pub verbosity: u8,
     pub disable_frontend: bool,
     pub strict_mode: bool,
+    pub metrics: bool,
+    pub metrics_address: String,
+    pub metrics_port: u16,
+    pub metrics_allow_origin: Option<String>,
 }
 
 impl IndexerConfiguration {
@@ -134,6 +138,10 @@ impl IndexerConfiguration {
             verbosity: args.verbosity,
             disable_frontend: args.disable_frontend,
             strict_mode: args.strict_mode,
+            metrics: args.metrics,
+            metrics_address: args.metrics_address,
+            metrics_port: args.metrics_port,
+            metrics_allow_origin: args.metrics_allow_origin,
         }
     }
 
@@ -236,6 +244,10 @@ mod tests {
             frontend_port: 8501,
             strict_mode: false,
             config: None,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 

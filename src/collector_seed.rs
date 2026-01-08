@@ -540,6 +540,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 
@@ -563,6 +567,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 
@@ -602,6 +610,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 
@@ -634,6 +646,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 
