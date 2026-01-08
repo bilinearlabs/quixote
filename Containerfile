@@ -6,9 +6,9 @@ FROM docker.io/rust:1.91.1-trixie AS builder
 ENV PATH="/root/miniconda3/bin:${PATH}"
 ARG PATH="/root/miniconda3/bin:${PATH}"
 
-# Install wget and unzip
+# Install wget
 RUN apt-get update && \
-    apt-get install -y wget unzip && \
+    apt-get install -y wget && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -42,28 +42,13 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 
 WORKDIR /app
 COPY . .
-RUN arch=$(uname -m) && \
-    if [ "$arch" = "x86_64" ]; then \
-      DUCK_URL="https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip"; \
-    elif [ "$arch" = "aarch64" ]; then \
-      DUCK_URL="https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-arm64.zip"; \
-    else \
-      echo "Unsupported architecture for DuckDB: $arch" && exit 1; \
-    fi && \
-    wget "$DUCK_URL" -O libduckdb.zip && \
-    unzip -o -q libduckdb.zip -d libduckdb && \
-    rm -f libduckdb.zip
-RUN DUCKDB_LIB_DIR=$PWD/libduckdb \
-    DUCKDB_INCLUDE_DIR=$PWD/libduckdb \
-    LD_LIBRARY_PATH=$PWD/libduckdb \
-    cargo build --release
+RUN cargo build --release
 
 # Runtime stage -------------
 
 FROM docker.io/debian:trixie-slim AS runtime
 WORKDIR /app
 COPY --from=builder /app/target/release/quixote quixote
-COPY --from=builder /app/libduckdb/libduckdb.so .
 COPY --from=builder /app/frontend/generic_dashboard.py frontend/generic_dashboard.py
 COPY --from=builder /app/quixote_frontend_env quixote_frontend_env
 
