@@ -1,6 +1,6 @@
 // Copyright (C) 2025 Bilinear Labs - All Rights Reserved
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use quixote::{
     configuration::IndexerConfiguration,
     error_codes,
@@ -8,7 +8,7 @@ use quixote::{
     streamlit_wrapper::{FrontendOptions, start_frontend},
     telemetry,
 };
-use tracing::error;
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,20 +19,21 @@ async fn main() -> Result<()> {
     telemetry::setup_tracing(config.verbosity)?;
 
     // Run the indexing app.
-    let app = IndexingApp::build_app(&config)
-        .await
-        .with_context(|| "Failed to build the indexing app")?;
+    let app = IndexingApp::build_app(&config).await.unwrap_or_else(|e| {
+        error!("Failed to build the indexing app: {e}");
+        std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
+    });
 
     let indexing_task = tokio::spawn(async move {
         if let Err(e) = app.run().await {
-            tracing::error!("Error running the indexing app: {:?}", e);
+            error!("Error running the indexing app: {e}");
             std::process::exit(error_codes::ERROR_CODE_INDEXING_FAILED);
         }
     });
 
     // Launch the Streamlit frontend if not disabled.
     if !config.disable_frontend {
-        tracing::info!("Launching frontend");
+        info!("Launching frontend");
         let frontend_options = FrontendOptions {
             url: config.frontend_address.clone(),
             port: config.frontend_port,
