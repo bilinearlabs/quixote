@@ -6,9 +6,9 @@ use quixote::{
     error_codes,
     indexing_app::IndexingApp,
     streamlit_wrapper::{FrontendOptions, start_frontend},
+    telemetry,
 };
-use tracing::{Level, error};
-use tracing_subscriber::{filter::Targets, fmt, prelude::*};
+use tracing::error;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
     let config = IndexerConfiguration::parse();
 
     // Setup the tracing subsystem.
-    setup_tracing(config.verbosity)?;
+    telemetry::setup_tracing(config.verbosity)?;
 
     // Run the indexing app.
     let app = IndexingApp::build_app(&config)
@@ -48,26 +48,6 @@ async fn main() -> Result<()> {
     }
 
     let _ = tokio::join!(indexing_task);
-
-    Ok(())
-}
-
-fn setup_tracing(verbosity: u8) -> Result<()> {
-    let tracing_level = match verbosity {
-        0 => Level::WARN,
-        1 => Level::INFO,
-        2 => Level::DEBUG,
-        _ => Level::TRACE,
-    };
-
-    tracing_subscriber::registry()
-        .with(fmt::layer().with_target(true).with_line_number(false))
-        .with(
-            Targets::new()
-                .with_target("quixote", tracing_level)
-                .with_target("streamlit", tracing_level),
-        )
-        .try_init()?;
 
     Ok(())
 }

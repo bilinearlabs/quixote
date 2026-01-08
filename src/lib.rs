@@ -16,6 +16,7 @@ pub use indexing_app::IndexingApp;
 pub mod configuration;
 pub mod streamlit_wrapper;
 pub use configuration::IndexerConfiguration;
+pub mod telemetry;
 
 use alloy::transports::http::reqwest::Url;
 use anyhow::Result;
