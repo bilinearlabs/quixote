@@ -418,16 +418,13 @@ impl CollectorSeed {
 
             // Register the events in the DB. If the events are already registered, the operation will be ignored.
             db_conn.include_events(chain_id, &events)?;
-            // Now, ensure all these events are synchronized up to the same block.
-            let start_block = Self::check_start_block(db_conn, chain_id, &events).await?;
+            // Ensure all events are synchronized up to the same block (consistency check).
+            Self::check_start_block(db_conn, chain_id, &events).await?;
 
-            // If the DB is empty, initialize the DB to start indexing from the given start block.
-            // Otherwise, resume from the last synchronized block.
-            let start_block = if start_block == 0 {
-                Self::set_start_block_for_events(db_conn, chain_id, &events, job.start_block)?
-            } else {
-                start_block
-            };
+            // Get the correct start block: either from the DB (last_block + 1) for resumption,
+            // or from the config for fresh indexing.
+            let start_block =
+                Self::set_start_block_for_events(db_conn, chain_id, &events, job.start_block)?;
 
             let filter = if coming_from_abi {
                 None

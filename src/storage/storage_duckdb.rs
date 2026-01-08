@@ -384,27 +384,59 @@ impl Storage for DuckDBStorage {
         Ok(Some(event_status))
     }
 
-    fn synchronize_events(&self, chain_id: u64, last_processed: Option<u64>) -> Result<()> {
+    fn synchronize_events(
+        &self,
+        chain_id: u64,
+        event_selectors: &[B256],
+        last_processed: Option<u64>,
+    ) -> Result<()> {
+        if event_selectors.is_empty() {
+            debug!(
+                "No event selectors provided for synchronize_events on chain {:#x}, skipping",
+                chain_id
+            );
+            return Ok(());
+        }
+
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
 
+        // Build the IN clause with placeholders for each event selector
+        let placeholders: Vec<&str> = event_selectors.iter().map(|_| "?").collect();
+        let in_clause = placeholders.join(", ");
+
         if let Some(last_processed) = last_processed {
-            conn.execute(
-                "UPDATE event_descriptor SET last_block = ? WHERE chain_id = ?",
-                [last_processed.to_string(), chain_id.to_string()],
-            )?;
+            let query = format!(
+                "UPDATE event_descriptor SET last_block = ? WHERE chain_id = ? AND event_hash IN ({})",
+                in_clause
+            );
+
+            // Build parameters: [last_processed, chain_id, selector1, selector2, ...]
+            let mut params: Vec<String> = vec![last_processed.to_string(), chain_id.to_string()];
+            params.extend(event_selectors.iter().map(|s| s.to_string()));
+
+            conn.execute(&query, duckdb::params_from_iter(params))?;
         } else {
-            conn.execute(
-                "UPDATE event_descriptor SET last_block = (SELECT MAX(last_block) FROM event_descriptor WHERE chain_id = ?) WHERE chain_id = ?",
-                [chain_id.to_string(), chain_id.to_string()],
-            )?;
+            // When no last_processed is given, use the max last_block among the specified events
+            let query = format!(
+                "UPDATE event_descriptor SET last_block = (SELECT MAX(last_block) FROM event_descriptor WHERE chain_id = ? AND event_hash IN ({})) WHERE chain_id = ? AND event_hash IN ({})",
+                in_clause, in_clause
+            );
+
+            // Build parameters: [chain_id, selectors..., chain_id, selectors...]
+            let mut params: Vec<String> = vec![chain_id.to_string()];
+            params.extend(event_selectors.iter().map(|s| s.to_string()));
+            params.push(chain_id.to_string());
+            params.extend(event_selectors.iter().map(|s| s.to_string()));
+
+            conn.execute(&query, duckdb::params_from_iter(params))?;
         }
 
         debug!(
-            "Events synchronized to the latest block for chain {:#x}",
-            chain_id
+            "Events synchronized up to block {}",
+            last_processed.unwrap_or_default()
         );
 
         Ok(())

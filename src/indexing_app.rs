@@ -94,6 +94,9 @@ impl IndexingApp {
                 mpsc::channel(constants::DEFAULT_INDEXING_BUFFER);
             seed_buffers.push(producer_buffer);
 
+            // Extract event selectors from the seed's events
+            let event_selectors: Vec<_> = seed.events.iter().map(|e| e.selector()).collect();
+
             // Create an EventProcessor for this seed
             let mut event_processor = EventProcessor::new(
                 seed.chain_id,
@@ -103,11 +106,16 @@ impl IndexingApp {
                 consumer_buffer,
                 self.cancellation_token.clone(),
                 self.metrics.clone(),
+                event_selectors,
             );
 
             info!(
-                "Starting EventProcessor {} for chain {:#x}, contract {}, from block {}",
-                seed_index, seed.chain_id, seed.contract_address, seed.start_block
+                "Starting EventProcessor {} for chain {:#x}, contract {}, from block {}, with {} event(s)",
+                seed_index,
+                seed.chain_id,
+                seed.contract_address,
+                seed.start_block,
+                seed.events.len()
             );
 
             let handle = tokio::spawn(async move { event_processor.run().await });

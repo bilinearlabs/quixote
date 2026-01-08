@@ -3,7 +3,10 @@
 //! Module for the event processor.
 
 use crate::{CancellationToken, RxLogChunk, metrics::MetricsHandle, storage::Storage};
-use alloy::{primitives::Address, rpc::types::Log};
+use alloy::{
+    primitives::{Address, B256},
+    rpc::types::Log,
+};
 use anyhow::Result;
 use std::{
     collections::BTreeMap,
@@ -25,9 +28,13 @@ pub struct EventProcessor {
     cancellation_token: CancellationToken,
     contract_address: Address,
     metrics: MetricsHandle,
+    /// The event selectors (topic0 hashes) that this processor handles.
+    /// Used to scope synchronize_events calls to only the events being processed.
+    event_selectors: Vec<B256>,
 }
 
 impl EventProcessor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
         contract_address: Address,
@@ -36,6 +43,7 @@ impl EventProcessor {
         producer_buffer: RxLogChunk,
         cancellation_token: CancellationToken,
         metrics: MetricsHandle,
+        event_selectors: Vec<B256>,
     ) -> Self {
         Self {
             chain_id,
@@ -45,6 +53,7 @@ impl EventProcessor {
             cancellation_token,
             contract_address,
             metrics,
+            event_selectors,
         }
     }
 
@@ -55,15 +64,22 @@ impl EventProcessor {
         let mut buffer: BTreeMap<u64, (u64, Vec<Log>)> = BTreeMap::new();
         let last_processed_shared = Mutex::new(last_processed);
 
-        debug!("EventProcessor started");
+        debug!(
+            "EventProcessor started for {} event(s)",
+            self.event_selectors.len()
+        );
 
         loop {
             select! {
                 _ = cancellation_receiver.recv() => {
-                    debug!("Chain {:#x}::Cancellation requested, shutting down gracefully...", self.chain_id);
+                    debug!("Cancellation requested, shutting down gracefully...");
                     // Sometimes, if no events are detected, the first block gets registered but the last block remains
                     // as 0. This is an invalid state.
-                    self.storage.synchronize_events(self.chain_id, Some(*last_processed_shared.lock().unwrap()))?;
+                    self.storage.synchronize_events(
+                        self.chain_id,
+                        &self.event_selectors,
+                        Some(*last_processed_shared.lock().unwrap()),
+                    )?;
                     return Ok(());
                 }
                 events = self.producer_buffer.recv() => {
@@ -77,11 +93,19 @@ impl EventProcessor {
                                 // If the chunk includes no events, just update that we have processed up to the last
                                 // block.
                                 if ev.is_empty() {
-                                    self.storage.synchronize_events(self.chain_id, Some(last_processed))?;
+                                    self.storage.synchronize_events(
+                                        self.chain_id,
+                                        &self.event_selectors,
+                                        Some(last_processed),
+                                    )?;
                                 } else if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
                                     error!("Error adding events: {}", e);
                                     // Ensure the database is in a consistent state.
-                                    self.storage.synchronize_events(self.chain_id, Some(last_processed))?;
+                                    self.storage.synchronize_events(
+                                        self.chain_id,
+                                        &self.event_selectors,
+                                        Some(last_processed),
+                                    )?;
                                     return Err(e);
                                 } else {
                                     // No need to synchronize the database here, as we have already done it within
@@ -102,7 +126,11 @@ impl EventProcessor {
                             // Channel closed, producer is done
                             info!("Event channel closed, all events processed");
                             // Ensure the database is in a consistent state.
-                            self.storage.synchronize_events(self.chain_id, Some(*last_processed_shared.lock().unwrap()))?;
+                            self.storage.synchronize_events(
+                                self.chain_id,
+                                &self.event_selectors,
+                                Some(*last_processed_shared.lock().unwrap()),
+                            )?;
                             return Ok(());
                         }
                     }
