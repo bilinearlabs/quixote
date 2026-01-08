@@ -21,11 +21,11 @@ Usage: quixote [OPTIONS]
 Options:
   -r, --rpc-host <RPC_HOST>
           RPC URL to index.
-                      
+
           Format: <scheme>://[<username>:<password>@]<host>[:<port>]
-                      
+
           Example for an RPC with basic auth => http://user:pass@localhost:8545
-                      
+
           Example for an authless RPC => http://localhost:8545
   -c, --contract <CONTRACT>
           Contract to index.
@@ -180,6 +180,30 @@ The indexer saves the synchronisation status for each indexed event in the DB. T
 Consider an initial indexing of 2 events of a smart contract's ABI. Later, you decide that you'd rather like to index the whole contract. This scenario is not supported, as the **ABI** mode requires all the included events to synchronize up to the same block. This check is not ensured when running in **event** mode, as each indexing task is launched asynchronously, and potentially to several RPC servers, which might ultimately end in having one indexing task going faster than the other.
 
 # Development
+
+## Building the Project
+
+Building the project requires dynamic linking to DuckDB to avoid compiling it from source. Follow these steps (adjust for your architecture):
+- Linux:
+```bash
+$ wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
+$ unzip libduckdb-linux-amd64.zip -d lib
+$ export DUCKDB_LIB_DIR=$PWD/lib
+$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+$ export LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
+$ cargo build
+```
+- macOS:
+```bash
+$ wget wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-osx-universal.zip
+$ unzip libduckdb-osx-universal.zip -d lib
+$ export DUCKDB_LIB_DIR=$PWD/lib
+$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
+$ export DYLD_FALLBACK_LIBRARY_PATH=$DUCKDB_LIB_DIR
+$ cargo build
+```
+
+The `lib` folder needs to be delivered along the binary when the indexer is distributed as a precompiled package. This way, it won't be necessary to specify the library path ahead of running the indexer.
 
 ## Testing
 

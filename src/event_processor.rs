@@ -2,8 +2,8 @@
 
 //! Module for the event processor.
 
-use crate::{CancellationToken, RxLogChunk, storage::Storage};
-use alloy::rpc::types::Log;
+use crate::{CancellationToken, RxLogChunk, metrics::MetricsHandle, storage::Storage};
+use alloy::{primitives::Address, rpc::types::Log};
 use anyhow::Result;
 use std::{
     collections::BTreeMap,
@@ -23,15 +23,19 @@ pub struct EventProcessor {
     start_block: u64,
     producer_buffer: RxLogChunk,
     cancellation_token: CancellationToken,
+    contract_address: Address,
+    metrics: MetricsHandle,
 }
 
 impl EventProcessor {
     pub fn new(
         chain_id: u64,
+        contract_address: Address,
         storage: Arc<dyn Storage + Send + Sync>,
         start_block: u64,
         producer_buffer: RxLogChunk,
         cancellation_token: CancellationToken,
+        metrics: MetricsHandle,
     ) -> Self {
         Self {
             chain_id,
@@ -39,6 +43,8 @@ impl EventProcessor {
             start_block,
             producer_buffer,
             cancellation_token,
+            contract_address,
+            metrics,
         }
     }
 
@@ -72,15 +78,14 @@ impl EventProcessor {
                                 // block.
                                 if ev.is_empty() {
                                     self.storage.synchronize_events(self.chain_id, Some(last_processed))?;
-                                    continue;
-                                }
-
-                                if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
+                                } else if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
                                     error!("Error adding events: {}", e);
                                     // Ensure the database is in a consistent state.
                                     self.storage.synchronize_events(self.chain_id, Some(last_processed))?;
                                     return Err(e);
                                 } else {
+                                    // No need to synchronize the database here, as we have already done it within
+                                    // add_events.
                                     info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
                                 }
 
@@ -90,6 +95,7 @@ impl EventProcessor {
                                 *last_processed_shared.lock().unwrap() = last_processed;
 
                                 debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
+                                self.metrics.record_indexed_block(self.chain_id, &self.contract_address.to_string(), last_processed);
                             }
                         }
                         None => {

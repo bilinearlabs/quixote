@@ -23,6 +23,7 @@ use alloy::{
     transports::http::reqwest::Url,
 };
 use anyhow::Result;
+use secrecy::ExposeSecret;
 use std::str::FromStr;
 use tracing::{debug, info};
 
@@ -364,11 +365,12 @@ impl CollectorSeed {
             // Parse and validate the RPC URL
             let rpc_url: Url = job
                 .rpc_url
+                .expose_secret()
                 .parse()
-                .map_err(|e| anyhow::anyhow!("Failed to parse RPC URL '{}': {}", job.rpc_url, e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to parse RPC URL: {}", e))?;
 
             // Fetch chain_id from the RPC
-            let chain_id = chain_id_resolver(job.rpc_url.clone()).await?;
+            let chain_id = chain_id_resolver(job.rpc_url.expose_secret().to_string()).await?;
 
             // Parse the contract address
             let contract_address = job.contract.parse::<Address>().map_err(|_| {
@@ -489,6 +491,7 @@ mod tests {
     use alloy::json_abi::Event;
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
+    use secrecy::SecretString;
 
     const TEST_CONTRACT_ADDRESS: &str = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
     const TEST_RPC_URL: &str = "http://localhost:8545/";
@@ -519,7 +522,7 @@ mod tests {
     fn config_single_event() -> IndexerConfiguration {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
-                rpc_url: "http://localhost:8545".to_string(),
+                rpc_url: SecretString::from("http://localhost:8545"),
                 contract: TEST_CONTRACT_ADDRESS.to_string(),
                 start_block: Some(0),
                 block_range: Some(1000),
@@ -537,6 +540,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 
@@ -545,7 +552,7 @@ mod tests {
     fn config_with_abi() -> IndexerConfiguration {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
-                rpc_url: "http://localhost:8545".to_string(),
+                rpc_url: SecretString::from("http://localhost:8545"),
                 contract: TEST_CONTRACT_ADDRESS.to_string(),
                 start_block: Some(0),
                 block_range: Some(1000),
@@ -560,6 +567,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 
@@ -569,7 +580,7 @@ mod tests {
         IndexerConfiguration {
             index_jobs: vec![
                 IndexJob {
-                    rpc_url: "http://localhost:8545".to_string(),
+                    rpc_url: SecretString::from("http://localhost:8545"),
                     contract: TEST_CONTRACT_ADDRESS.to_string(),
                     start_block: Some(0),
                     block_range: Some(1000),
@@ -580,7 +591,7 @@ mod tests {
                     abi_path: None,
                 },
                 IndexJob {
-                    rpc_url: "http://localhost:8545".to_string(),
+                    rpc_url: SecretString::from("http://localhost:8545"),
                     contract: TEST_CONTRACT_ADDRESS.to_string(),
                     start_block: Some(0),
                     block_range: Some(1000),
@@ -599,6 +610,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 
@@ -613,7 +628,7 @@ mod tests {
 
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
-                rpc_url: "http://localhost:8545".to_string(),
+                rpc_url: SecretString::from("http://localhost:8545"),
                 contract: TEST_CONTRACT_ADDRESS.to_string(),
                 start_block: Some(0),
                 block_range: Some(1000),
@@ -631,6 +646,10 @@ mod tests {
             verbosity: 0,
             disable_frontend: true,
             strict_mode: false,
+            metrics: false,
+            metrics_address: "127.0.0.1".to_string(),
+            metrics_port: 5054,
+            metrics_allow_origin: None,
         }
     }
 

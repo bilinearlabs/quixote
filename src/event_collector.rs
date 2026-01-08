@@ -2,7 +2,9 @@
 
 //! Module for the event collector.
 
-use crate::{CollectorSeed, LogChunk, TxLogChunk, constants::*};
+use crate::{
+    CollectorSeed, LogChunk, TxLogChunk, constants::*, error_codes, metrics::MetricsHandle,
+};
 use alloy::{
     eips::BlockNumberOrTag,
     primitives::Address,
@@ -27,6 +29,7 @@ pub struct EventCollector {
     producer_buffer: TxLogChunk,
     default_block_range: usize,
     block_range_hint_regex: regex::Regex,
+    metrics: MetricsHandle,
 }
 
 impl EventCollector {
@@ -34,7 +37,7 @@ impl EventCollector {
         provider: Arc<dyn Provider + Send + Sync>,
         producer_buffer: TxLogChunk,
         seed: &CollectorSeed,
-        block_range: usize,
+        metrics: MetricsHandle,
     ) -> Self {
         // Regex to capture the last two integers (block numbers) from messages like:
         // "error code -32602: query exceeds max results 20000, retry with the range 22382105-22382515"
@@ -49,8 +52,9 @@ impl EventCollector {
             sync_mode: seed.sync_mode,
             poll_interval: DEFAULT_POLL_INTERVAL,
             producer_buffer,
-            default_block_range: block_range,
+            default_block_range: seed.block_range,
             block_range_hint_regex,
+            metrics,
         }
     }
 
@@ -60,7 +64,7 @@ impl EventCollector {
             error!(
                 "The RPC server is syncing, resume indexing when the syncing process is complete"
             );
-            std::process::exit(1);
+            std::process::exit(error_codes::ERROR_CODE_RPC_SERVER_SYNCING);
         }
 
         // The last stored block number in the DB.
@@ -80,7 +84,7 @@ impl EventCollector {
                 error!(
                     "The RPC server is syncing, resume indexing when the syncing process is complete"
                 );
-                std::process::exit(1);
+                std::process::exit(error_codes::ERROR_CODE_RPC_SERVER_SYNCING);
             }
 
             let provider = self.provider.clone();
@@ -92,6 +96,13 @@ impl EventCollector {
                     return Err(anyhow::anyhow!("RPC connection error: {}", e));
                 }
             };
+
+            // Export the chain head so consumers can compare with the indexed progress.
+            self.metrics.record_chain_head_block(
+                self.chain_id,
+                &self.contract_address.to_string(),
+                finalized_block,
+            );
 
             let remaining = finalized_block.saturating_sub(processed_to);
             if remaining == 0 {
@@ -218,15 +229,10 @@ impl EventCollector {
 
             // Reached this statement, we are sure that no errors happened in the series of RPC requests, thus we
             // can send the results to the consumer task for its storage in the DB.
-            stream::iter(rpc_results.into_iter().map(Ok::<LogChunk, anyhow::Error>))
-                .try_for_each_concurrent(MAX_CONCURRENT_RPC_REQUESTS, |result| {
-                    let tx = producer_buffer.clone();
-                    async move {
-                        tx.send(result).await?;
-                        Ok(())
-                    }
-                })
-                .await?;
+            // Results are sent sequentially to preserve block order for the receiver.
+            for result in rpc_results {
+                producer_buffer.send(result).await?;
+            }
 
             // If we reach the threshold of successful chunks, we can restore the block range to the default value.
             if successful_counter == SUCCESSFUL_CHUNKS_THRESHOLD {
@@ -257,6 +263,8 @@ mod tests {
     //! The tests included in this module are meant to ensure that the fetching logic behaves as expected. Single
     //! [EventCollector] instances are launched for fetching some known block ranges whose results are compared
     //! against a known set of events.
+
+    use crate::metrics::MetricsConfig;
 
     use super::*;
     use alloy::{
@@ -357,10 +365,11 @@ mod tests {
         mut seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
+        let metrics = crate::metrics::MetricsHandle::default();
         // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
         seed_fixture.block_range = 10;
         let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -396,10 +405,11 @@ mod tests {
         mut seed_fixture: CollectorSeed,
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
+        let metrics = crate::metrics::MetricsHandle::default();
         // 10k throttles the RPC at the second request.
         seed_fixture.block_range = 10000;
         let mut collector =
-            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, 10);
+            EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
 
         let handle = tokio::spawn(async move {
@@ -500,10 +510,19 @@ mod tests {
     /// Helper to run a collector for a single block and count events.
     async fn run_collector_and_count(
         provider: Arc<dyn Provider + Send + Sync + 'static>,
-        seed: CollectorSeed,
+        mut seed: CollectorSeed,
     ) -> usize {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
-        let collector = EventCollector::new(provider, producer_buffer, &seed, 10);
+        seed.block_range = 10;
+
+        let metrics = MetricsHandle::new(&MetricsConfig {
+            enabled: false,
+            address: "127.0.0.1".to_string(),
+            port: 5054,
+            allow_origin: None,
+        })
+        .unwrap();
+        let collector = EventCollector::new(provider, producer_buffer, &seed, metrics);
 
         let handle = tokio::spawn(async move {
             collector.collect().await.unwrap();
