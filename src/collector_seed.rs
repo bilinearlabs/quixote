@@ -108,9 +108,9 @@ impl CollectorSeed {
     ///
     /// # Description
     ///
-    /// Converts a FilterMap into an alloy Filter object containing only topic filters.
-    /// The contract address and event signature (topic0) are added later by the
-    /// event_collector module.
+    /// Converts a FilterMap into an alloy Filter object containing topic filters.
+    /// The event signature (topic0) is always set to filter only the specified event.
+    /// Additional filters for indexed parameters (topic1-3) are added if provided.
     ///
     /// Filter keys are matched against the event's indexed parameters by name:
     /// - The first indexed parameter maps to topic1
@@ -123,11 +123,11 @@ impl CollectorSeed {
     /// # Arguments
     ///
     /// * `event` - The event definition used to map parameter names to topic positions.
-    /// * `filter_config` - Optional map of filter configurations.
+    /// * `filter_config` - Optional map of filter configurations for indexed parameters.
     ///
     /// # Returns
     ///
-    /// An Option<Filter> that is Some if filters were provided, None otherwise.
+    /// A Filter with topic0 (event signature) always set, plus any additional topic filters.
     ///
     /// # Errors
     ///
@@ -136,9 +136,16 @@ impl CollectorSeed {
         event: &Event,
         filter_config: Option<FilterMap>,
     ) -> Result<Option<Filter>> {
+        // Always create a filter - topic0 is always required for CLI mode
+        let mut filter = Filter::new();
+
+        // Set the event signature (topic0) - this is always required
+        filter.topics[0] = event.selector().into();
+
+        // If no additional filter config, return the filter with just topic0
         let filter_config = match filter_config {
             Some(config) if !config.is_empty() => config,
-            _ => return Ok(None),
+            _ => return Ok(Some(filter)),
         };
 
         // Build a map of indexed parameter names to their topic positions (1-indexed).
@@ -150,8 +157,6 @@ impl CollectorSeed {
             .enumerate()
             .map(|(idx, param)| (param.name.as_str(), idx + 1)) // +1 because topic0 is event signature
             .collect();
-
-        let mut filter = Filter::new();
 
         for (key, values) in filter_config.iter() {
             if values.is_empty() {
@@ -654,10 +659,10 @@ mod tests {
     }
 
     /// Test case 1: For an input config that defines a single event (Transfer) without explicit filters,
-    /// build_seeds must create a single seed without filter (filter is only set when explicitly configured).
+    /// build_seeds must create a single seed with filter containing only topic0 (event signature).
     #[rstest]
     #[tokio::test]
-    async fn build_seeds_single_event_without_filters_creates_seed_without_filter(
+    async fn build_seeds_single_event_without_filters_creates_seed_with_topic0(
         test_db: DuckDBStorage,
         config_single_event: IndexerConfiguration,
     ) {
@@ -698,11 +703,20 @@ mod tests {
         assert_eq!(seed.events[0].name, transfer_event.name);
         assert_eq!(seed.events[0].selector(), transfer_event.selector());
 
-        // No explicit filters provided → filter is None
+        // CLI mode (no ABI) should always have a filter with topic0 set to the event signature
         assert!(
-            seed.filter.is_none(),
-            "Expected no filter when no filter config is provided"
+            seed.filter.is_some(),
+            "Expected filter to be set with topic0 for CLI mode"
         );
+        let filter = seed.filter.as_ref().unwrap();
+        assert!(
+            !filter.topics[0].is_empty(),
+            "topic0 should contain the event signature"
+        );
+        // Other topics should be empty (no explicit filters)
+        assert!(filter.topics[1].is_empty());
+        assert!(filter.topics[2].is_empty());
+        assert!(filter.topics[3].is_empty());
     }
 
     /// Test case 1b: For an input config with explicit filters,
@@ -781,10 +795,10 @@ mod tests {
     }
 
     /// Test case 3: For an input config that defines 2 separate events (simulating -e used multiple times),
-    /// 2 seeds must be created. Without explicit filters, both seeds have no filter.
+    /// 2 seeds must be created. Each seed has a filter with topic0 set to its event signature.
     #[rstest]
     #[tokio::test]
-    async fn build_seeds_two_events_creates_two_seeds_without_filters(
+    async fn build_seeds_two_events_creates_two_seeds_with_topic0(
         test_db: DuckDBStorage,
         config_two_events: IndexerConfiguration,
     ) {
@@ -819,11 +833,17 @@ mod tests {
         );
         assert_eq!(first_seed.events[0].name, transfer_event.name);
         assert_eq!(first_seed.events[0].selector(), transfer_event.selector());
-        // No explicit filters → no filter
+        // CLI mode should have filter with topic0 set
         assert!(
-            first_seed.filter.is_none(),
-            "First seed should have no filter (no filter config provided)"
+            first_seed.filter.is_some(),
+            "First seed should have filter with topic0"
         );
+        let first_filter = first_seed.filter.as_ref().unwrap();
+        assert!(
+            !first_filter.topics[0].is_empty(),
+            "topic0 should be set for first seed"
+        );
+        assert!(first_filter.topics[1].is_empty());
 
         // Verify second seed (Approval event)
         let second_seed = &seeds[1];
@@ -837,11 +857,17 @@ mod tests {
         );
         assert_eq!(second_seed.events[0].name, approval_event.name);
         assert_eq!(second_seed.events[0].selector(), approval_event.selector());
-        // No explicit filters → no filter
+        // CLI mode should have filter with topic0 set
         assert!(
-            second_seed.filter.is_none(),
-            "Second seed should have no filter (no filter config provided)"
+            second_seed.filter.is_some(),
+            "Second seed should have filter with topic0"
         );
+        let second_filter = second_seed.filter.as_ref().unwrap();
+        assert!(
+            !second_filter.topics[0].is_empty(),
+            "topic0 should be set for second seed"
+        );
+        assert!(second_filter.topics[1].is_empty());
     }
 
     #[rstest]
@@ -880,22 +906,48 @@ mod tests {
     }
 
     #[rstest]
-    fn build_filter_from_config_returns_none_when_no_filters() {
+    fn build_filter_from_config_sets_topic0_when_no_filters() {
         let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
 
         let result = CollectorSeed::build_filter_from_config(&event, None).unwrap();
 
-        assert!(result.is_none());
+        // Should always return a filter with topic0 set
+        assert!(result.is_some());
+        let filter = result.unwrap();
+
+        // topic0 should be the event signature
+        assert!(
+            !filter.topics[0].is_empty(),
+            "topic0 should contain the event signature"
+        );
+
+        // Other topics should be empty
+        assert!(filter.topics[1].is_empty());
+        assert!(filter.topics[2].is_empty());
+        assert!(filter.topics[3].is_empty());
     }
 
     #[rstest]
-    fn build_filter_from_config_returns_none_for_empty_map() {
+    fn build_filter_from_config_sets_topic0_for_empty_map() {
         let event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
 
         let result =
             CollectorSeed::build_filter_from_config(&event, Some(FilterMap::new())).unwrap();
 
-        assert!(result.is_none());
+        // Should always return a filter with topic0 set
+        assert!(result.is_some());
+        let filter = result.unwrap();
+
+        // topic0 should be the event signature
+        assert!(
+            !filter.topics[0].is_empty(),
+            "topic0 should contain the event signature"
+        );
+
+        // Other topics should be empty
+        assert!(filter.topics[1].is_empty());
+        assert!(filter.topics[2].is_empty());
+        assert!(filter.topics[3].is_empty());
     }
 
     #[rstest]
@@ -911,9 +963,13 @@ mod tests {
         assert!(result.is_some());
         let filter = result.unwrap();
 
-        // Contract address and topic0 are NOT set here (added by event_collector)
+        // Contract address is NOT set here (added by event_collector)
         assert!(filter.address.is_empty());
-        assert!(filter.topics[0].is_empty());
+        // topic0 is always set to the event signature
+        assert!(
+            !filter.topics[0].is_empty(),
+            "topic0 should contain the event signature"
+        );
 
         // "from" is the first indexed parameter → topic1
         assert!(!filter.topics[1].is_empty());
