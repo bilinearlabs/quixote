@@ -1,4 +1,5 @@
-// Copyright (C) 2025 Bilinear Labs - All Rights Reserved
+// Copyright (c) 2026 Bilinear Labs
+// SPDX-License-Identifier: MIT
 
 //! Runner module for the event collector.
 
