@@ -1,200 +1,164 @@
-# Etherduck API - curl Examples
+# Quixote REST API
 
-This document provides curl examples for testing the Etherduck REST API endpoints.
+This document provides examples for using the Quixote REST API endpoints.
 
 ## Base URL
 
 The API runs on `http://localhost:9720` by default.
 
-## Endpoints
+---
 
-### 1. List Events
+## Endpoints Overview
 
-Get a list of all event descriptors in the database.
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/list_events` | GET | List all indexed event types |
+| `/list_contracts` | GET | List all indexed contracts |
+| `/db_schema` | GET | Get database schema |
+| `/raw_query` | POST | Execute a raw SQL query |
 
-**Endpoint:** `POST /list_events`
+---
 
-**Request Body:** Empty JSON object `{}` (or no body)
+## 1. List Events
+
+Returns all event descriptors indexed in the database along with their indexing status.
+
+**Endpoint:** `GET /list_events`
 
 **Example:**
 
 ```bash
-# With empty JSON body
-curl -X POST http://localhost:9720/list_events \
-  -H "Content-Type: application/json" \
-  -d '{}'
-
-# Or simply (some frameworks accept empty POST)
-curl -X POST http://localhost:9720/list_events \
-  -H "Content-Type: application/json"
+curl http://localhost:9720/list_events
 ```
 
-**Expected Response:**
+**Response:**
 
 ```json
 {
   "events": [
     {
-      "event_signature": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-      "event_name": "Transfer",
-      "event_type": "ERC20"
+      "chainId": 1,
+      "eventHash": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+      "eventSignature": "Transfer(address,address,uint256)",
+      "eventName": "Transfer",
+      "firstBlock": 23744000,
+      "lastBlock": 23780000,
+      "eventCount": 15420
     }
   ]
 }
 ```
 
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `chainId` | number | Chain ID of the indexed blockchain |
+| `eventHash` | string | Keccak256 hash of the event signature |
+| `eventSignature` | string | Full event signature |
+| `eventName` | string | Event name (e.g., "Transfer") |
+| `firstBlock` | number | First indexed block for this event |
+| `lastBlock` | number | Last indexed block for this event |
+| `eventCount` | number | Total number of indexed events |
+
 ---
 
-### 2. List Contracts
+## 2. List Contracts
 
-Get a list of all contracts in the database.
+Returns all contracts that have been indexed.
 
-**Endpoint:** `POST /list_contracts`
-
-**Request Body:** Empty JSON object `{}` (or no body)
+**Endpoint:** `GET /list_contracts`
 
 **Example:**
 
 ```bash
-curl -X POST http://localhost:9720/list_contracts \
-  -H "Content-Type: application/json" \
-  -d '{}'
+curl http://localhost:9720/list_contracts
 ```
 
-**Expected Response:**
+**Response:**
 
 ```json
 {
   "contracts": [
     {
-      "contract_address": "event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-      "contract_name": null
+      "contract_address": "0x57f1887a8BF19b14fC0dF6Fd9B2acc9Af147eA85"
     }
   ]
 }
 ```
 
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `contract_address` | string | Contract address (hex with 0x prefix) |
+
 ---
 
-### 3. Get Events
+## 3. Database Schema
 
-Retrieve events for a specific contract within a time range.
+Returns the database schema including all tables and their column definitions.
 
-**Endpoint:** `POST /get_events`
+**Endpoint:** `GET /db_schema`
 
-**Request Body:**
+**Example:**
+
+```bash
+curl http://localhost:9720/db_schema
+```
+
+**Response:**
 
 ```json
 {
-  "contract": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-  "start_time": "2024-01-01T00:00:00Z",
-  "end_time": "2024-01-02T00:00:00Z",
-  "event": "optional_event_string"
-}
-```
-
-**Parameters:**
-- `contract` (required): Contract address (hex string with 0x prefix)
-- `start_time` (required): Start time in RFC3339 format (ISO 8601)
-- `end_time` (optional): End time in RFC3339 format (ISO 8601). If not provided, uses current time
-- `event` (optional): Event identifier (currently not used in implementation)
-
-**Examples:**
-
-#### Get events for the last 24 hours
-
-```bash
-# Calculate timestamps (Unix timestamp approach)
-START_TIME=$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")
-END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-curl -X POST http://localhost:9720/get_events \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"contract\": \"0xdAC17F958D2ee523a2206206994597C13D831ec7\",
-    \"start_time\": \"$START_TIME\",
-    \"end_time\": \"$END_TIME\"
-  }"
-```
-
-#### Get events for the last 7 days (USDC contract)
-
-```bash
-START_TIME=$(date -u -d '7 days ago' +"%Y-%m-%dT%H:%M:%SZ")
-END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-curl -X POST http://localhost:9720/get_events \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"contract\": \"0xdAC17F958D2ee523a2206206994597C13D831ec7\",
-    \"start_time\": \"$START_TIME\",
-    \"end_time\": \"$END_TIME\"
-  }"
-```
-
-#### Get events for a specific date range
-
-```bash
-curl -X POST http://localhost:9720/get_events \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contract": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    "start_time": "2024-01-15T00:00:00Z",
-    "end_time": "2024-01-16T00:00:00Z"
-  }'
-```
-
-#### Get events without end_time (uses current time)
-
-```bash
-curl -X POST http://localhost:9720/get_events \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contract": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    "start_time": "2024-01-15T00:00:00Z"
-  }'
-```
-
-#### Get events for the last 5 minutes
-
-```bash
-START_TIME=$(date -u -d '5 minutes ago' +"%Y-%m-%dT%H:%M:%SZ")
-END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-curl -X POST http://localhost:9720/get_events \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"contract\": \"0xdAC17F958D2ee523a2206206994597C13D831ec7\",
-    \"start_time\": \"$START_TIME\",
-    \"end_time\": \"$END_TIME\"
-  }"
-```
-
-**Expected Response:**
-
-```json
-{
-  "events": [
+  "schema": [
     {
-      "block_number": 12345678,
-      "transaction_hash": "0xabc123...",
-      "log_index": 0,
-      "contract_address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-      "topic0": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
-      "topic1": "0x0000000000000000000000001234567890123456789012345678901234567890",
-      "topic2": "0x0000000000000000000000000987654321098765432109876543210987654321",
-      "topic3": null,
-      "block_timestamp": "2024-01-15T12:34:56Z"
+      "blocks_1": {
+        "block_hash": "VARCHAR",
+        "block_number": "UBIGINT",
+        "block_timestamp": "UBIGINT"
+      }
+    },
+    {
+      "event_1_transfer_ddf25": {
+        "block_number": "UBIGINT",
+        "contract_address": "VARCHAR",
+        "from": "VARCHAR",
+        "log_index": "USMALLINT",
+        "to": "VARCHAR",
+        "tokenId": "BIGNUM",
+        "transaction_hash": "VARCHAR"
+      }
+    },
+    {
+      "event_descriptor": {
+        "chain_id": "UBIGINT",
+        "event_hash": "VARCHAR",
+        "event_name": "VARCHAR",
+        "event_signature": "VARCHAR",
+        "first_block": "UBIGINT",
+        "last_block": "UBIGINT"
+      }
     }
   ]
 }
 ```
 
+This endpoint is useful for discovering the structure of event tables dynamically.
+
+**Table Naming Conventions:**
+
+- `blocks_<chain_id>` — Block data per chain (e.g., `blocks_1` for Ethereum mainnet)
+- `event_<chain_id>_<event_name>_<hash_prefix>` — Event data (e.g., `event_1_transfer_ddf25`)
+- `event_descriptor` — Registry of all indexed event types
+
+> 💡 The `hash_prefix` is the first 5 hex characters of the event's keccak256 hash — for example, `ddf25` comes from `0xddf252ad...`
+
 ---
 
-### 4. Raw Query
+## 4. Raw Query
 
-Execute a raw SQL query against the database.
+Execute a raw SQL SELECT query against the database.
 
 **Endpoint:** `POST /raw_query`
 
@@ -207,57 +171,56 @@ Execute a raw SQL query against the database.
 ```
 
 **Parameters:**
-- `query` (required): SQL SELECT query string
 
-**Examples:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | string | Yes | SQL SELECT query to execute |
 
-#### Simple SELECT query
+> ⚠️ **Note:** Only `SELECT` queries are supported. Other SQL operations (INSERT, UPDATE, DELETE, etc.) will be rejected.
+
+### Examples
+
+#### Query blocks table
+
+```bash
+curl -X POST http://localhost:9720/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT * FROM blocks_1 ORDER BY block_number DESC LIMIT 5"}'
+```
+
+#### Count events
+
+```bash
+curl -X POST http://localhost:9720/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT COUNT(*) as total FROM event_1_transfer_ddf25"}'
+```
+
+#### Query with filtering
 
 ```bash
 curl -X POST http://localhost:9720/raw_query \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "SELECT * FROM blocks LIMIT 10"
+    "query": "SELECT block_number, block_timestamp FROM blocks_1 WHERE block_number > 23780000 ORDER BY block_number DESC LIMIT 5"
   }'
 ```
 
-#### Query with WHERE clause
+#### Get top receivers (Transfer events)
 
 ```bash
 curl -X POST http://localhost:9720/raw_query \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "SELECT block_number, block_timestamp FROM blocks WHERE block_number > 23780000 ORDER BY block_number DESC LIMIT 5"
+    "query": "SELECT \"to\", COUNT(*) as transfer_count FROM event_1_transfer_ddf25 GROUP BY \"to\" ORDER BY transfer_count DESC LIMIT 10"
   }'
 ```
 
-#### Query event tables
-
-```bash
-curl -X POST http://localhost:9720/raw_query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "SELECT COUNT(*) as total_events FROM event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-  }'
-```
-
-**Expected Response:**
-
-The response format depends on the query result. It will be a JSON object with a `result` field containing the query results:
+**Response:**
 
 ```json
 {
-  "result": {
-    "error": "Empty result from the query"
-  }
-}
-```
-
-Or when the query returns data (once fully implemented):
-
-```json
-{
-  "result": [
+  "query_result": [
     {
       "block_number": 23783860,
       "block_hash": "0x...",
@@ -266,8 +229,6 @@ Or when the query returns data (once fully implemented):
   ]
 }
 ```
-
-**Note:** Currently, the implementation returns an error message. The actual query execution will be implemented in a future update.
 
 ---
 
@@ -281,98 +242,85 @@ All endpoints return errors in the following format:
 }
 ```
 
-**Common HTTP Status Codes:**
-- `200 OK`: Success
-- `400 Bad Request`: Invalid request parameters (e.g., invalid contract address or timestamp format)
-- `500 Internal Server Error`: Server-side error (e.g., database connection issue)
+**HTTP Status Codes:**
 
-**Example Error Response:**
+| Code | Description |
+|------|-------------|
+| `200 OK` | Success |
+| `400 Bad Request` | Invalid request (e.g., non-SELECT query) |
+| `500 Internal Server Error` | Server error (e.g., database connection issue) |
+
+**Example error (non-SELECT query):**
 
 ```bash
-# Invalid contract address
-curl -X POST http://localhost:9720/get_events \
+curl -X POST http://localhost:9720/raw_query \
   -H "Content-Type: application/json" \
-  -d '{
-    "contract": "invalid_address",
-    "start_time": "2024-01-15T00:00:00Z"
-  }'
+  -d '{"query": "DELETE FROM blocks"}'
 ```
 
 Response:
 ```json
 {
-  "error": "Invalid contract address: ..."
+  "error": "Only SELECT queries are supported."
 }
 ```
 
 ---
 
-## Pretty-printing JSON Responses
+## Pretty-printing Responses
 
-To make the responses more readable, pipe through `jq`:
+Use `jq` for formatted output:
 
 ```bash
-curl -X POST http://localhost:9720/list_events \
-  -H "Content-Type: application/json" \
-  -d '{}' | jq '.'
+curl http://localhost:9720/list_events | jq '.'
 ```
 
-Or use Python:
+Or Python:
 
 ```bash
-curl -X POST http://localhost:9720/list_events \
-  -H "Content-Type: application/json" \
-  -d '{}' | python3 -m json.tool
+curl http://localhost:9720/list_events | python3 -m json.tool
 ```
 
 ---
 
 ## Testing Script
 
-Here's a simple bash script to test all endpoints:
+A simple bash script to test all endpoints:
 
 ```bash
 #!/bin/bash
 
 API_URL="http://localhost:9720"
 
-echo "=== Testing List Events ==="
-curl -X POST $API_URL/list_events \
-  -H "Content-Type: application/json" \
-  -d '{}' | jq '.'
+echo "=== List Events ==="
+curl -s "$API_URL/list_events" | jq '.'
 
-echo -e "\n=== Testing List Contracts ==="
-curl -X POST $API_URL/list_contracts \
-  -H "Content-Type: application/json" \
-  -d '{}' | jq '.'
+echo -e "\n=== List Contracts ==="
+curl -s "$API_URL/list_contracts" | jq '.'
 
-echo -e "\n=== Testing Get Events (Last 24 hours) ==="
-START_TIME=$(date -u -d '24 hours ago' +"%Y-%m-%dT%H:%M:%SZ")
-END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo -e "\n=== Database Schema ==="
+curl -s "$API_URL/db_schema" | jq '.'
 
-curl -X POST $API_URL/get_events \
+echo -e "\n=== Raw Query (blocks) ==="
+curl -s -X POST "$API_URL/raw_query" \
   -H "Content-Type: application/json" \
-  -d "{
-    \"contract\": \"0xdAC17F958D2ee523a2206206994597C13D831ec7\",
-    \"start_time\": \"$START_TIME\",
-    \"end_time\": \"$END_TIME\"
-  }" | jq '.'
+  -d '{"query": "SELECT * FROM blocks_1 LIMIT 5"}' | jq '.'
 
-echo -e "\n=== Testing Raw Query ==="
-curl -X POST $API_URL/raw_query \
+echo -e "\n=== Raw Query (indexing progress) ==="
+curl -s -X POST "$API_URL/raw_query" \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "SELECT * FROM blocks LIMIT 5"
-  }' | jq '.'
+  -d '{"query": "SELECT * FROM quixote_info"}' | jq '.'
 ```
 
-Save this as `test_api.sh`, make it executable (`chmod +x test_api.sh`), and run it.
+Save as `test_api.sh`, make executable (`chmod +x test_api.sh`), and run.
 
 ---
 
 ## Notes
 
-- All timestamps must be in RFC3339 format (ISO 8601): `YYYY-MM-DDTHH:MM:SSZ`
-- Contract addresses must be valid hex strings with `0x` prefix
-- The API server must be running before making requests
-- All endpoints use POST method and expect JSON content type
+- GET endpoints don't require a request body
+- POST endpoints expect `Content-Type: application/json`
+- Table names include chain ID (e.g., `blocks_1` for chain 1)
+- Event tables follow the pattern `event_<chain_id>_<event_name>_<hash_prefix>`
+- Use `/db_schema` to discover available tables and their columns
+- Reserved SQL keywords used as column names (like `from`, `to`) need quoting in queries

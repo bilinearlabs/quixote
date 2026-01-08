@@ -1,105 +1,155 @@
-# Rust-based Indexing Tool That Indexes EVM Events
+<p align="center">
+  <img src="assets/quixote-icon.png" alt="Quixote" width="120"/>
+</p>
 
-Simple command line tool that allows indexing events of a blockchain.
+<h1 align="center">Quixote</h1>
 
-## Supported Features
+<p align="center">
+  <img src="https://img.shields.io/github/actions/workflow/status/bilinearlabs/quixote/ci.yaml?style=for-the-badge&logo=github&label=BUILD" alt="Build Status"/>
+  <img src="https://img.shields.io/github/license/bilinearlabs/quixote?style=for-the-badge" alt="License"/>
+  <a href="https://discord.gg/Et8BTnVBZS"><img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"/></a>
+  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
+  <img src="https://img.shields.io/badge/DuckDB-FFF000?style=for-the-badge&logo=duckdb&logoColor=black" alt="DuckDB"/>
+</p>
 
-- Storage of the indexed data in a data base.
-- Support for DuckDB as main storage.
-- Support for indexing ERC20 Transfer events.
+<p align="center">
+  <strong>Blazing-fast blockchain event indexing, powered by Rust and DuckDB</strong>
+</p>
 
+<p align="center">
+  <em>Index any EVM chain. Query with SQL. Visualize instantly.</em>
+</p>
 
-## How To Use The Tool
+---
 
-The tool expects a set of arguments that identify the RPC host from which the data is going to be pulled, along the target event for the indexing and the contract address.
+## 🚀 Why Quixote?
 
-```raw
-Quixote
+**Quixote** is a lightweight event indexer for EVM-compatible blockchains. Built in Rust with DuckDB as its storage engine, it focuses on doing one thing well: getting blockchain events into a queryable database as fast as possible.
 
+| Feature | Quixote |
+|---------|---------|
+| ⚡ **Performance** | Rust-native with async I/O and multiple RPC support |
+| 💰 **RPC Cost Control** | Configurable block range to optimize RPC calls and reduce costs |
+| 🦆 **Storage** | DuckDB — the fastest analytical database for local queries |
+| 🔄 **Resume Support** | Automatically continues from the last synced block |
+| 🌐 **Multi-chain** | Works with any EVM-compatible blockchain |
+| 📊 **Built-in Dashboard** | Streamlit-powered frontend included out of the box |
+| 🔌 **REST API** | Query your indexed data programmatically |
+| 📈 **Prometheus Metrics** | Production-ready observability built-in |
+| 🎯 **Event Filtering** | Filter events at the source — index only what you need |
+
+---
+
+## ✨ Features at a Glance
+
+### 🎯 Precision Indexing
+Index specific events or entire contract ABIs. Filter by address, topic, or any indexed parameter. No more indexing data you don't need.
+
+### 🦆 DuckDB-Powered Analytics
+Your indexed events live in a DuckDB database — run complex analytical queries at lightning speed. Export to Parquet, join with other data sources, or power your dashboards.
+
+### 📊 Instant Visualization
+Launch `quixote` and immediately access a beautiful Streamlit dashboard at `http://localhost:8501`. No setup required.
+
+### 🔌 Developer-Friendly API
+A REST API runs alongside your indexer for programmatic access. List events, query contracts, or execute raw SQL — all via simple HTTP endpoints.
+
+### 🔄 Resilient by Design
+Network hiccups? RPC rate limits? Quixote handles it all with intelligent exponential backoff and automatic retry logic. Your indexing job will survive anything.
+
+### 💰 RPC Cost Control
+Using a paid RPC provider? The `--block-range` parameter lets you control how many blocks are fetched per request. Tune it to match your provider's limits and pricing — fetch more blocks per call to reduce total requests, or dial it down to stay within rate limits. Every RPC call counts when you're paying per request.
+
+---
+
+## 📦 Quick Start
+
+### One-Liner to Start Indexing
+
+```bash
+quixote -r https://eth.llamarpc.com \
+    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
+    -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
+    -s 23744000
+    --block_range 10
+```
+
+That's it! You're now indexing USDT Transfer events on Ethereum mainnet. 🎉
+
+### What Just Happened?
+
+1. **Connected** to an Ethereum RPC endpoint
+2. **Started indexing** Transfer events from block 23,744,000
+3. **Stored** events in a local DuckDB database
+4. **Launched** a REST API at `http://localhost:9720`
+5. **Opened** a dashboard at `http://localhost:8501`
+
+---
+
+## 🛠️ Installation
+
+### Pre-built Binaries
+
+Download the latest release for your platform from our [Releases page](https://github.com/bilinearlabs/quixote/releases).
+
+### Build from Source
+
+Building requires linking against DuckDB. Here's how:
+
+```bash
+cargo build --release
+```
+
+---
+
+## 📖 Usage
+
+### Command Line Interface
+
+```
 Usage: quixote [OPTIONS]
 
 Options:
-  -r, --rpc-host <RPC_HOST>
-          RPC URL to index.
-
-          Format: <scheme>://[<username>:<password>@]<host>[:<port>]
-
-          Example for an RPC with basic auth => http://user:pass@localhost:8545
-
-          Example for an authless RPC => http://localhost:8545
-  -c, --contract <CONTRACT>
-          Contract to index.
-          Example: 0x1234567890123456789012345678901234567890
-  -e, --event <EVENT>
-          Event to index as defined by the contract's ABI.
-          Example: Transfer(address indexed from, address indexed to, uint256 amount)
-  -s, --start-block <START_BLOCK>
-          Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.
-          Example => 28837711
-          Default: 0
-  -d, --database <DATABASE>
-          Path to the database file. Default: etherduck_indexer.duckdb
-  -a, --abi-spec <ABI_SPEC>
-          Path for the ABI JSON spec of the indexed contract. When give, the entire set of events defined in the ABI will be indexed.
-  -j, --api-server <API_SERVER>
-          Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720
-      --block-range <BLOCK_RANGE>
-          Block range for the RPC requests. [default: 10000]
-  -v, --verbosity <VERBOSITY>
-          Verbosity level. 0 = WARN, 1 = INFO (default), 2 = DEBUG, 3 = TRACE [default: 1]
-      --disable-frontend
-          Disable the frontend application.
-      --frontend-address <FRONTEND_ADDRESS>
-          Frontend listening address [default: 127.0.0.1]
-      --frontend-port <FRONTEND_PORT>
-          Frontend listening port [default: 8501]
-      --strict-mode
-          Enable strict mode (stops the indexing when an event fails to be processed)
-      --config <CONFIG>
-          Path to the configuration file. When used, the command line arguments will be ignored.
-  -h, --help
-          Print help (see more with '--help')
-  -V, --version
-          Print version
+  -r, --rpc-host <RPC_HOST>          RPC URL to index (supports basic auth)
+  -c, --contract <CONTRACT>          Contract address to index
+  -e, --event <EVENT>                Event signature(s) to index (can be repeated)
+  -a, --abi-spec <ABI_SPEC>          Path to ABI JSON (indexes all events)
+  -s, --start-block <START_BLOCK>    Starting block number [default: 0]
+  -d, --database <DATABASE>          Database file path [default: quixote_indexer.duckdb]
+  -j, --api-server <API_SERVER>      API server address [default: 127.0.0.1:9720]
+      --block-range <BLOCK_RANGE>    Blocks per RPC request [default: 10000]
+  -v, --verbosity <VERBOSITY>        Log level: 0=WARN, 1=INFO, 2=DEBUG, 3=TRACE
+      --disable-frontend             Don't launch the dashboard
+      --strict-mode                  Stop on first processing error
+      --config <CONFIG>              Path to YAML configuration file
+  -h, --help                         Print help
+  -V, --version                      Print version
 ```
 
-This way, an example of usage would be:
+### Examples
+
+#### Index Multiple Events
 
 ```bash
-$ quixote -r 1@https://eth.llamarpc.com \
-    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
-    -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
-    -s 23744000
-```
-
-To increase the verbosity level up to _debug_, the environment variable `RUST_LOG` shall be used:
-
-```bash
-$ quixote -r 1@https://eth.llamarpc.com \
-    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
-    -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
-    -s 23744000
-```
-
-Another example for indexing Transfer and Approval events:
-
-```bash
-$ quixote -r 1@https://eth.llamarpc.com \
+quixote -r https://eth.llamarpc.com \
     -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
     -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
     -e "Approval(address indexed owner, address indexed spender, uint256 value)" \
     -s 23744000
 ```
 
-The previous call would launch an instance of the tool for indexing ERC20 Transfer events in the Ethereum Mainnet blockchain for the Tether USD smartcontract, starting from the block $23.744.000$. It will use an RPC from [chainlist](https://chainlist.org). Though using an RPC from the **chainlist** is not advised for long-term indexing.
+#### Index from ABI
 
-The event needs to be fully defined to properly index the events for the chosen smartcontract. **Take the definition from the contract's ABI.**.
+```bash
+quixote -r https://eth.llamarpc.com \
+    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
+    -a ./usdt_abi.json \
+    -s 23744000
+```
 
-### Using a Configuration File
+#### Using a Configuration File
 
-To include some advanced features such as filtering, a configuration file shall be used instead of the CLI arguments. The configuration file is a YAML file that contains definitions for _indexing jobs_. Pass the configuration file to the app using the CLI argument `--config <path to config file>`.
-
-An example of a configuration file:
+For advanced use cases like event filtering or multi-job indexing, use a YAML config:
 
 ```yaml
 database_path: "quixote_indexer.duckdb"
@@ -107,8 +157,9 @@ api_server_address: "127.0.0.1"
 api_server_port: 9720
 frontend_address: "127.0.0.1"
 frontend_port: 8501
+
 index_jobs:
-  - rpc_url: "https://eth.somerpc.com"
+  - rpc_url: "https://eth.llamarpc.com"
     contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
     events:
       - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
@@ -116,117 +167,149 @@ index_jobs:
           from: "0x12347F958D2ee523a2206206994597C13D831ec7"
       - full_signature: "Approval(address indexed owner, address indexed spender, uint256 value)"
 
-  - rpc_url: "https://eth.andanotherone.com"
-    contract: "0x112200958D2ee523a2206206994597C13D831000"
+  - rpc_url: "https://polygon-rpc.com"
+    contract: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     events:
-      - full_signature: "Approval(address indexed owner, address indexed spender, uint256 value)"
+      - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
 ```
 
-### Embedded Frontend
+```bash
+quixote --config quixote_config.yaml
+```
 
-The indexer launches a frontend along the main indexer service, which is available at `http://127.0.0.1:8501`.
+---
 
-## Data Base Schema
+## 🔌 REST API
 
-The data base includes this schema:
+The built-in REST API makes it easy to query your indexed data programmatically.
 
-### Table *blocks*
+| Endpoint | Description |
+|----------|-------------|
+| `POST /list_events` | List all indexed event types |
+| `POST /list_contracts` | List all indexed contracts |
+| `POST /get_events` | Query events by contract and time range |
+| `POST /raw_query` | Execute raw SQL queries |
 
-This table is a record of the indexed blocks. The first and latest indexed blocks can be easily retrieved from a metadata table, though:
+### Quick Example
+
+```bash
+# List all indexed events
+curl -X POST http://localhost:9720/list_events -H "Content-Type: application/json" | jq
+
+# Query events for a specific time range
+curl -X POST http://localhost:9720/get_events \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contract": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+    "start_time": "2024-01-15T00:00:00Z",
+    "end_time": "2024-01-16T00:00:00Z"
+  }' | jq
+```
+
+📚 See [API_EXAMPLES.md](./API_EXAMPLES.md) for comprehensive documentation.
+
+---
+
+## 🗄️ Database Schema
+
+Quixote uses DuckDB with a dynamic schema that adapts to your indexed events.
+
+### Core Tables
+
+| Table | Description |
+|-------|-------------|
+| `quixote_info` | Metadata about indexed blocks |
+| `blocks_<chain_id>` | Record of all indexed blocks with timestamps |
+| `event_descriptor` | Registry of indexed event types |
+| `event_<chain_id>_<event_name>_<hash_prefix>` | One table per event type |
+
+> 💡 The `hash_prefix` is the first 5 hex characters of the event's keccak256 hash — for example, `ddf25` comes from `0xddf252ad...`
+
+### Query Your Data
 
 ```sql
-SELECT first_block, last_block FROM quixote_info;
+-- Check indexing progress
+SELECT * FROM event_descriptor;
+
+-- Count transfers (chain 1 = Ethereum mainnet)
+SELECT COUNT(*) FROM event_1_transfer_ddf25;
+
+-- Top receivers
+SELECT "to", COUNT(*) as transfers
+FROM event_1_transfer_ddf25
+GROUP BY "to"
+ORDER BY transfers DESC
+LIMIT 10;
 ```
 
-The table *blocks* includes these fields:
-- *block_number* (String) (PK)
-- *block_hash* (Unsigned)
-- *block_timestamp* (Unsigned)
+> 💡 DuckDB only allows one process at a time. To query the database directly, stop the indexer first — or use the REST API while indexing.
 
-### Table *event_descriptor*
+---
 
-This table is a record of the indexed events by type. This table shall be used to properly parse the content from each event entry from the *event_X* tables. Includes these fields:
+## 📈 Monitoring
 
-- *event_hash* (String) (PK)
-- *event_signature* (String)
-- *event_name* (String)
-
-### Tables *event_<hash>*
-
-Each indexed event makes use of a table in the DB named using the event's hash of its full signature. For instance, for the event `Transfer(address indexed from, address indexed to, uint256 amount)` the table in the DB would be named *event_0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef*.
-
-These tables are dynamic, which means there's no fix schema, and it is rather based on the event's content. Usually, a table of this type includes:
-
-- *block_number* (String) (PK)
-- *transaction_hash* (String) (PK)
-- *log_index* (Unsiged) (PK)
-- *contract_address* (String)
-
-Aside from that, an event might include up to 3 indexed topics (fields *topic_{0,1,2}*) and several non-indexed topics.
-
-# Indexing Modes
-
-The tool distinguish two modes of operation:
-
-- The **ABI** mode, in which the user specifies a JSON file with the definition of the ABI of some smart contract.
-- The **event** mode, in which the user specifies one or many single events using their canonical definition.
-
-Both modes are excluding: the **event** mode takes precedence over the **ABI** mode when both `-a` and `-e` are used in the command line interface.
-
-# Resuming a Previous Indexing
-
-The indexer saves the synchronisation status for each indexed event in the DB. This way, if the indexer stops for any reason, it can resume indexing from the last synchronised block. There's a limitation, though. If the DB contains data from a previous **event** operation mode, it won't be able to resume indexing in **ABI** mode.
-
-Consider an initial indexing of 2 events of a smart contract's ABI. Later, you decide that you'd rather like to index the whole contract. This scenario is not supported, as the **ABI** mode requires all the included events to synchronize up to the same block. This check is not ensured when running in **event** mode, as each indexing task is launched asynchronously, and potentially to several RPC servers, which might ultimately end in having one indexing task going faster than the other.
-
-# Development
-
-## Building the Project
-
-Building the project requires dynamic linking to DuckDB to avoid compiling it from source. Follow these steps (adjust for your architecture):
-- Linux:
-```bash
-$ wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
-$ unzip libduckdb-linux-amd64.zip -d lib
-$ export DUCKDB_LIB_DIR=$PWD/lib
-$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
-$ export LD_LIBRARY_PATH=$DUCKDB_LIB_DIR
-$ cargo build
-```
-- macOS:
-```bash
-$ wget wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-osx-universal.zip
-$ unzip libduckdb-osx-universal.zip -d lib
-$ export DUCKDB_LIB_DIR=$PWD/lib
-$ export DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR
-$ export DYLD_FALLBACK_LIBRARY_PATH=$DUCKDB_LIB_DIR
-$ cargo build
-```
-
-The `lib` folder needs to be delivered along the binary when the indexer is distributed as a precompiled package. This way, it won't be necessary to specify the library path ahead of running the indexer.
-
-## Testing
-
-In order to run some of the included tests, a connection to a powerful RPC server is required. The connection is handled via environment variables. You'll need to populate the following variables before running the tests:
+Quixote exposes Prometheus metrics for production deployments.
 
 ```bash
-$ export QUIXOTE_TEST_RPC=<http://myserver.com:8765>
-$ export QUIXOTE_TEST_RPC_USER=<user>
-$ export QUIXOTE_TEST_RPC_PASSWORD=<password>
+quixote --metrics --metrics-address 0.0.0.0 --metrics-port 9090 ...
 ```
 
-Then simply run `cargo test`.
+---
 
-## How To Package the Frontend
-
-The included frontend runs as a Python application that is called within the main indexer service. To ease running the embedded Python script, a complete environment that includes the Python interpreter along all the needed dependencies is delivered. This way, users of the app won't need to struggle with their local Python installation nor dependencies.
-
-The only requirement to build the environment package is [Conda](https://docs.conda.io/en/latest/). Having **Conda** installed using any of its flavours, the following steps will generate the package to run the frontend:
+## 🧪 Testing
 
 ```bash
-$ conda create -n quixote_frontend_env python=3.11 streamlit pyarrow -y
-$ conda install -c conda-forge conda-pack -y
-$ conda pack -n quixote_frontend_env -o quixote_frontend_env.tar.gz
+export QUIXOTE_TEST_RPC=<your-rpc-url>
+export QUIXOTE_TEST_RPC_USER=<optional-user>
+export QUIXOTE_TEST_RPC_PASSWORD=<optional-password>
+cargo test
 ```
 
-The compressed package can be distributed so end users only need to extract it to run the full application.
+> 💡 Some tests require a connection to an RPC.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Whether it's bug reports, feature requests, or pull requests — we'd love to hear from you.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## 📄 License
+
+This project is open source and available under the [MIT License](LICENSE).
+
+---
+
+## 🏢 About Bilinear Labs
+
+**Quixote** is built and maintained by [Bilinear Labs](https://www.bilinearlabs.io), a team passionate about building high-performance infrastructure for the decentralized web.
+
+We specialize in:
+- 🔗 **Blockchain Infrastructure** — Indexers, RPCs, and data pipelines
+- 🦀 **Rust Development** — Performance-critical systems and tooling
+- 📊 **Data Engineering** — Real-time analytics and event processing
+
+**Interested in working together?** [Get in touch](https://www.bilinearlabs.io) or [join our Discord](https://discord.gg/Et8BTnVBZS)!
+
+---
+
+<p align="center">
+  <strong>Built with ❤️ by <a href="https://www.bilinearlabs.io">Bilinear Labs</a></strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/bilinearlabs/quixote">⭐ Star us on GitHub</a> •
+  <a href="https://discord.gg/Et8BTnVBZS">💬 Join our Discord</a> •
+  <a href="https://www.bilinearlabs.io">🌐 Visit our website</a>
+</p>
+
+<p align="center">
+  <sub>Icon by <a href="https://www.flaticon.com/free-icons/don-quixote" title="don quixote icons">Eucalyp - Flaticon</a></sub>
+</p>
