@@ -5,6 +5,7 @@
 use crate::{cli::IndexingArgs, constants, error_codes};
 use clap::Parser;
 use config::{Config, ConfigError, Environment, File};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -18,7 +19,7 @@ use std::path::Path;
 pub type FilterMap = HashMap<String, Vec<String>>;
 
 /// Configuration as parsed from a file. Fields are optional to allow partial configs.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct FileConfiguration {
     #[serde(default)]
     pub index_jobs: Vec<IndexJob>,
@@ -29,9 +30,9 @@ pub struct FileConfiguration {
     pub frontend_port: Option<u16>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct IndexJob {
-    pub rpc_url: String,
+    pub rpc_url: SecretString,
     pub contract: String,
     pub start_block: Option<u64>,
     pub block_range: Option<usize>,
@@ -174,7 +175,7 @@ impl FileConfiguration {
             });
 
             // Use the RPC URL directly (standard URL format expected)
-            let rpc_url = args.rpc_host.clone().unwrap_or_default();
+            let rpc_url = SecretString::from(args.rpc_host.clone().unwrap_or_default());
 
             vec![IndexJob {
                 rpc_url,
@@ -222,6 +223,7 @@ mod tests {
     use crate::cli::IndexingArgs;
     use crate::constants::DEFAULT_BLOCK_RANGE;
     use rstest::rstest;
+    use secrecy::ExposeSecret;
 
     const TEST_CONTRACT: &str = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
 
@@ -261,7 +263,7 @@ mod tests {
 
         assert_eq!(config.index_jobs.len(), 1);
         // URL is used directly without transformation
-        assert_eq!(config.index_jobs[0].rpc_url, input);
+        assert_eq!(config.index_jobs[0].rpc_url.expose_secret(), input);
     }
 
     #[rstest]
