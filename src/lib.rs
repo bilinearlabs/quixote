@@ -47,8 +47,6 @@ pub mod constants {
     pub const DUCKDB_BASE_TABLE_NAME: &str = "quixote_info";
     /// Value to choose between using filters or not on eth_getLogs.
     pub const DEFAULT_USE_FILTERS_THRESHOLD: usize = 3;
-    /// Reduced block range threshold: multiply the default block range by this value to get the threshold.
-    pub const DEFAULT_REDUCED_BLOCK_RANGE_THRESHOLD: usize = 2;
     /// Multiplier for the chunk size.
     pub const CHUNK_MULTIPLIER: u64 = 5;
     /// Threshold for the number of successful chunks to restore the block range to the default value.
