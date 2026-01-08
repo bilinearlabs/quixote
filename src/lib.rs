@@ -156,8 +156,8 @@ impl std::str::FromStr for RpcHost {
     ///
     /// # Description
     ///
-    /// The format of the RPC host URL is: [<username>:<password>@]<url>
-    /// where <url> can be either:
+    /// The format of the RPC host URL is: `[<username>:<password>@]<url>`
+    /// where `<url>` can be either:
     /// - A full URL: http://host:port/path or https://host:port/path
     /// - A simple host:port format: host:port
     ///
