@@ -40,8 +40,8 @@ jobs:
     needs: fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2.8.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt clippy
@@ -53,8 +53,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2.8.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt clippy
@@ -63,24 +63,16 @@ jobs:
 
   # Comprehensive test with all features
   test:
-    name: Test & Coverage
+    name: Test
     needs: clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2.8.2
       - uses: dtolnay/rust-toolchain@stable
-      - name: Download DuckDB library
-        run: |
-          wget https://github.com/duckdb/duckdb/releases/download/v1.4.2/libduckdb-linux-amd64.zip \
-            -O libduckdb.zip \
-            && unzip -o -q libduckdb.zip -d libduckdb
-      - name: Tests with all features
+      - name: Tests
         run: |
           QUIXOTE_TEST_RPC=${{ secrets.QUIXOTE_TEST_RPC }} \
           QUIXOTE_TEST_RPC_USER=${{ secrets.QUIXOTE_TEST_RPC_USER }} \
           QUIXOTE_TEST_RPC_PASSWORD=${{ secrets.QUIXOTE_TEST_RPC_PASSWORD }} \
-          DUCKDB_LIB_DIR=$PWD/libduckdb \
-          DUCKDB_INCLUDE_DIR=$DUCKDB_LIB_DIR \
-          LD_LIBRARY_PATH=$DUCKDB_LIB_DIR \
           cargo test
