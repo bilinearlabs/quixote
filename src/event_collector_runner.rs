@@ -269,10 +269,17 @@ impl EventCollectorRunner {
                 let collector = EventCollector::new(provider, producer_buffer, &seed, metrics);
 
                 if let Err(e) = collector.collect().await {
-                    error!(
-                        "Collector {} (chain_id: {:#x}, contract: {}) failed: {}",
-                        seed_index, seed.chain_id, seed.contract_address, e
-                    );
+                    if e.to_string().contains("channel closed") {
+                        info!(
+                            "Collector {} (chain_id: {:#x}, contract: {}) channel closed",
+                            seed_index, seed.chain_id, seed.contract_address
+                        );
+                    } else {
+                        error!(
+                            "Collector {} (chain_id: {:#x}, contract: {}) failed: {}",
+                            seed_index, seed.chain_id, seed.contract_address, e
+                        );
+                    }
                 }
             });
 

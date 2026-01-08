@@ -48,7 +48,7 @@ impl EventProcessor {
         }
     }
 
-    #[instrument(skip(self), fields(chain_id = %self.chain_id))]
+    #[instrument(name="event_processor", skip(self), fields(chain_id = %self.chain_id))]
     pub async fn run(&mut self) -> Result<()> {
         let mut cancellation_receiver = self.cancellation_token.subscribe();
         let mut last_processed = self.start_block.saturating_sub(1);

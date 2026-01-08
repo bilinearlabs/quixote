@@ -58,7 +58,7 @@ impl EventCollector {
         }
     }
 
-    #[instrument(skip(self), fields(chain_id = %self.chain_id, contract_address = %self.contract_address))]
+    #[instrument(name="event_collector", skip(self), fields(chain_id = %self.chain_id, contract_address = %self.contract_address))]
     pub async fn collect(&self) -> Result<()> {
         if self.check_sync_status().await? {
             error!(
