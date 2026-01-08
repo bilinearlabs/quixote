@@ -1,17 +1,11 @@
 services:
   quixote:
     image: ${QUIXOTE_IMAGE}
+    volumes:
+      - ./config.yaml:/config.yaml:ro
     command:
-      - -r
-      - ${RPC_CONFIG}
-      - -c
-      - 0x57f1887a8bf19b14fc0df6fd9b2acc9af147ea85
-      - -e
-      - Transfer(address indexed from, address indexed to, uint256 indexed tokenId)
-      - -s
-      - "23890166"
-      - --api-server
-      - "0.0.0.0:9720"
+      - --config
+      - "/config.yaml"
       - --metrics
       - --metrics-address
       - 0.0.0.0
