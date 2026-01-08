@@ -50,7 +50,7 @@ impl MetricsHandle {
         let indexed_block = IntGaugeVec::new(
             Opts::new(
                 "indexed_block",
-                "Latest block that has been indexed for a contract.",
+                "Latest block that has been indexed for a contract in a specific chain.",
             ),
             &["chain_id", "contract_address"],
         )?;
@@ -59,7 +59,7 @@ impl MetricsHandle {
         let chain_head_block = IntGaugeVec::new(
             Opts::new(
                 "chain_head_block",
-                "Latest block reported by the RPC node for a chain/contract.",
+                "Latest block reported by the RPC node for a specific chain. Reported by contract.",
             ),
             &["chain_id", "contract_address"],
         )?;

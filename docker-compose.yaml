@@ -25,17 +25,30 @@ services:
       - "5054:5054"
       - "9720:9720"
 
+  prom-config-init:
+    image: alpine:3.19
+    volumes:
+      - ./monitoring/prometheus/prometheus-config.yml:/template.yml:ro
+      - prom_config:/config
+    env_file:
+      - .env
+    command: >
+      sh -c "apk add --no-cache gettext &&
+             envsubst < /template.yml > /config/prometheus.yml"
+
   prom-agent:
     image: prom/prometheus:v2.43.1
     volumes:
-      - ./monitoring/prometheus/prometheus-config.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_config:/etc/prometheus:ro
       - prometheus_data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
     depends_on:
-      - quixote
+      prom-config-init:
+        condition: service_completed_successfully
     ports:
       - 127.0.0.1:9090:9090
 
 volumes:
   prometheus_data:
+  prom_config:
