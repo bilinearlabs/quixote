@@ -1,0 +1,136 @@
+# Release workflow
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.1.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: quixote
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          # macOS Intel
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          # macOS Apple Silicon
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2.8.2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            VERSION="${{ inputs.tag }}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Package binary (Unix)
+        run: |
+          cd target/${{ matrix.target }}/release
+          ARCHIVE_NAME="${{ env.BINARY_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}"
+
+          # Create archive directory
+          mkdir -p "${ARCHIVE_NAME}"
+          cp ${{ env.BINARY_NAME }} "${ARCHIVE_NAME}/"
+
+          # Copy additional files from repo root
+          cp ${{ github.workspace }}/README.md "${ARCHIVE_NAME}/" || true
+          cp ${{ github.workspace }}/LICENSE "${ARCHIVE_NAME}/" || true
+
+          # Create tarball
+          tar -czvf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
+
+          # Generate SHA256
+          shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+
+          echo "ARCHIVE_PATH=target/${{ matrix.target }}/release/${ARCHIVE_NAME}.tar.gz" >> $GITHUB_ENV
+          echo "SHA256_PATH=target/${{ matrix.target }}/release/${ARCHIVE_NAME}.tar.gz.sha256" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: |
+            ${{ env.ARCHIVE_PATH }}
+            ${{ env.SHA256_PATH }}
+          retention-days: 7
+
+      - name: Upload to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ env.ARCHIVE_PATH }}
+            ${{ env.SHA256_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Create a unified checksums file for the release
+  checksums:
+    name: Generate checksums
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Merge checksums
+        run: |
+          cd artifacts
+          cat */*.sha256 > ../checksums-${{ steps.version.outputs.version }}.txt
+
+      - name: Upload checksums to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: checksums-${{ steps.version.outputs.version }}.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
