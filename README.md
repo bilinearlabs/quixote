@@ -269,6 +269,38 @@ cargo test
 
 ---
 
+## 🎨 Frontend Development
+
+The embedded dashboard is a [Streamlit](https://streamlit.io/) application located at `frontend/generic_dashboard.py`. The Rust binary spawns the frontend using a bundled Python environment.
+
+### Setup
+
+> ⚠️ Python 3.11 or lower is required (Streamlit compatibility).
+
+To develop the frontend, first create the bundled Python environment using [Conda](https://docs.conda.io/en/latest/):
+
+```bash
+conda create --prefix=./quixote_frontend_env python=3.11 streamlit pyarrow -y
+```
+
+### Running
+
+The frontend is launched automatically by Quixote. Simply run the indexer and access the dashboard at `http://localhost:8501`:
+
+```bash
+quixote -r <rpc-url> -c <contract> -e <event> ...
+```
+
+Edit `frontend/generic_dashboard.py` and restart Quixote to see your changes.
+
+To run without the frontend (e.g., for headless deployments):
+
+```bash
+quixote --disable-frontend ...
+```
+
+---
+
 ## 🤝 Contributing
 
 We welcome contributions! Whether it's bug reports, feature requests, or pull requests — we'd love to hear from you.
