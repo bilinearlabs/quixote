@@ -341,7 +341,3 @@ We specialize in:
   <a href="https://discord.gg/Et8BTnVBZS">💬 Join our Discord</a> •
   <a href="https://www.bilinearlabs.io">🌐 Visit our website</a>
 </p>
-
-<p align="center">
-  <sub>Icon by <a href="https://www.flaticon.com/free-icons/don-quixote" title="don quixote icons">Eucalyp - Flaticon</a></sub>
-</p>
