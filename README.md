@@ -68,18 +68,18 @@ Using a paid RPC provider? The `--block-range` parameter lets you control how ma
 
 ```bash
 quixote -r https://eth.llamarpc.com \
-    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
-    -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
+    -c 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
+    -e "Blacklisted(address indexed address)" \
     -s 23744000
     --block_range 10
 ```
 
-That's it! You're now indexing USDT Transfer events on Ethereum mainnet. 🎉
+That's it! You're now indexing USDC Blacklist events on Ethereum mainnet. 🎉
 
 ### What Just Happened?
 
 1. **Connected** to an Ethereum RPC endpoint
-2. **Started indexing** Transfer events from block 23,744,000
+2. **Started indexing** Blacklisted events from block 23,744,000
 3. **Stored** events in a local DuckDB database
 4. **Launched** a REST API at `http://localhost:9720`
 5. **Opened** a dashboard at `http://localhost:8501`
