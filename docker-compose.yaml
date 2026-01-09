@@ -3,6 +3,8 @@ services:
     image: ${QUIXOTE_IMAGE}
     volumes:
       - ./config.yaml:/config.yaml:ro
+      - ./db:/db
+      - ./frontend/generic_dashboard.py:/app/frontend/generic_dashboard.py:ro
     command:
       - --config
       - "/config.yaml"
@@ -17,6 +19,7 @@ services:
       - .env
     ports:
       - "5054:5054"
+      - "8501:8501"
       - "9720:9720"
 
   prom-config-init:
