@@ -12,7 +12,7 @@ use crate::{
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
     json_abi::Event,
-    primitives::B256,
+    primitives::{B256, U256},
     rpc::types::Log,
 };
 use anyhow::{Context, Result};
@@ -916,7 +916,7 @@ impl DuckDBStorage {
         }
     }
 
-    /// Tries to parse a blob as a DuckDB BIGNUM and convert to hex string.
+    /// Tries to parse a blob as a DuckDB BIGNUM and convert to decimal string.
     ///
     /// BIGNUM blob format: [flag][is_negative][size][data in big-endian]
     /// Example: 0x800020ff...ff (flag=0x80, is_negative=0x00, size=0x20=32 bytes, data=ff...ff)
@@ -941,14 +941,17 @@ impl DuckDBStorage {
 
         let data = &bytes[3..];
 
-        // Data is already in big-endian format, just encode as hex
+        // Convert to hex string, then parse as U256 to get decimal representation
         let hex_str = hex::encode(data);
+        let decimal_str = U256::from_str_radix(&hex_str, 16)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| format!("0x{}", hex_str)); // Fallback to hex if parsing fails
 
         // Handle negative numbers (rare for uint256, but supported by BIGNUM)
-        if is_negative && hex_str != "0" && hex_str != "00" {
-            Some(format!("-0x{}", hex_str))
+        if is_negative && decimal_str != "0" {
+            Some(format!("-{}", decimal_str))
         } else {
-            Some(format!("0x{}", hex_str))
+            Some(decimal_str)
         }
     }
 
