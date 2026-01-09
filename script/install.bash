@@ -21,6 +21,9 @@ BINARY_NAME="quixote"
 GITHUB_API="https://api.github.com"
 GITHUB_RELEASES="https://github.com/${REPO}/releases"
 
+# Data directory for frontend and assets
+DATA_DIR_NAME=".quixote"
+
 # Colors for output (disabled if not a terminal)
 if [[ -t 1 ]]; then
     RED='\033[0;31m'
@@ -102,6 +105,31 @@ determine_install_dir() {
     if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
         warn "${INSTALL_DIR} is not in your PATH"
         warn "Add it to your shell profile: export PATH=\"\$PATH:${INSTALL_DIR}\""
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data Directory Selection (for frontend and assets)
+# ─────────────────────────────────────────────────────────────────────────────
+
+determine_data_dir() {
+    # If running as root, use system-wide path
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+        DATA_DIR="/usr/local/share/${BINARY_NAME}"
+    else
+        # For regular users, use ~/.quixote (XDG compliant would be ~/.local/share/quixote)
+        DATA_DIR="${HOME}/${DATA_DIR_NAME}"
+    fi
+
+    # Create directory if it doesn't exist
+    if [[ ! -d "${DATA_DIR}" ]]; then
+        info "Creating data directory: ${DATA_DIR}"
+        mkdir -p "${DATA_DIR}"
+    fi
+
+    # Verify the directory is writable
+    if [[ ! -w "${DATA_DIR}" ]]; then
+        die "Cannot write to ${DATA_DIR}. Try running with sudo or choose a different location."
     fi
 }
 
@@ -189,6 +217,28 @@ download_and_install() {
     mv "${binary_path}" "${INSTALL_DIR}/${BINARY_NAME}"
 
     success "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Find and install frontend files
+    local archive_dir
+    archive_dir=$(find "${temp_dir}" -maxdepth 1 -type d -name "${BINARY_NAME}-*" | head -1)
+
+    if [[ -n "${archive_dir}" ]]; then
+        # Install frontend directory
+        if [[ -d "${archive_dir}/frontend" ]]; then
+            info "Installing frontend..."
+            mkdir -p "${DATA_DIR}/frontend"
+            cp -r "${archive_dir}/frontend/"* "${DATA_DIR}/frontend/"
+            success "Installed frontend to ${DATA_DIR}/frontend/"
+        fi
+
+        # Install assets directory
+        if [[ -d "${archive_dir}/assets" ]]; then
+            info "Installing assets..."
+            mkdir -p "${DATA_DIR}/assets"
+            cp -r "${archive_dir}/assets/"* "${DATA_DIR}/assets/"
+            success "Installed assets to ${DATA_DIR}/assets/"
+        fi
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +267,10 @@ main() {
     # Determine installation directory
     determine_install_dir
     info "Installation directory: ${INSTALL_DIR}"
+
+    # Determine data directory for frontend and assets
+    determine_data_dir
+    info "Data directory: ${DATA_DIR}"
 
     # Determine target version
     if [[ -n "${requested_version}" ]]; then
@@ -250,6 +304,14 @@ main() {
     echo ""
     if "${INSTALL_DIR}/${BINARY_NAME}" --version &>/dev/null; then
         success "Installation complete!"
+        echo ""
+        echo -e "  ${BOLD}Configuration${RESET}"
+        echo ""
+        echo -e "  To enable the frontend dashboard, set the QUIXOTE_HOME environment variable:"
+        echo ""
+        echo -e "    ${YELLOW}export QUIXOTE_HOME=\"${DATA_DIR}\"${RESET}"
+        echo ""
+        echo -e "  Add this to your shell profile (~/.bashrc, ~/.zshrc, etc.) to persist it."
         echo ""
         echo -e "  ${BOLD}Run '${BINARY_NAME} --help' to get started${RESET}"
         echo ""
