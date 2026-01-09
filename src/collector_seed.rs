@@ -468,7 +468,24 @@ impl CollectorSeed {
 
                 if events.len() > 1 && has_advanced_filters {
                     return Err(anyhow::anyhow!(
-                        "Advanced filters are not supported when indexing multiple events at once. Declare each event as a different index job to use advanced filters."
+                        "Configuration error: Advanced filters (e.g., 'from', 'to') cannot be used when multiple events are defined in the same index job.\n\n\
+                        You have {} events with filters in contract '{}'.\n\n\
+                        Solution: Split each event into its own index_job entry. For example:\n\n\
+                        index_jobs:\n  \
+                          - rpc_url: \"...\"\n    \
+                            contract: \"{}\"\n    \
+                            events:\n      \
+                              - full_signature: \"Event1(...)\"\n        \
+                                filters:\n          \
+                                  from: [\"0x...\"]\n  \
+                          - rpc_url: \"...\"\n    \
+                            contract: \"{}\"\n    \
+                            events:\n      \
+                              - full_signature: \"Event2(...)\"",
+                        events.len(),
+                        job.contract,
+                        job.contract,
+                        job.contract
                     ));
                 }
 
