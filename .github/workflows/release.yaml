@@ -80,6 +80,13 @@ jobs:
           cp ${{ github.workspace }}/README.md "${ARCHIVE_NAME}/" || true
           cp ${{ github.workspace }}/LICENSE "${ARCHIVE_NAME}/" || true
 
+          # Copy frontend files (Python dashboard and assets)
+          mkdir -p "${ARCHIVE_NAME}/frontend"
+          cp ${{ github.workspace }}/frontend/generic_dashboard.py "${ARCHIVE_NAME}/frontend/"
+
+          mkdir -p "${ARCHIVE_NAME}/assets"
+          cp ${{ github.workspace }}/assets/quixote-icon.png "${ARCHIVE_NAME}/assets/"
+
           # Create tarball
           tar -czvf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
 
