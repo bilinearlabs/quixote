@@ -19,6 +19,56 @@ async fn main() -> Result<()> {
     // Setup the tracing subsystem.
     telemetry::setup_tracing(config.verbosity)?;
 
+    info!(
+        "Starting Quixote indexer by Bilinear Labs - version {}",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    println!();
+    println!(
+        "  ╭──────────────────────────────────────────────────────────────────────────────────╮"
+    );
+    println!(
+        "  │  Don Quijote de la Mancha · Segunda parte · Capítulo XLII                        │"
+    );
+    println!(
+        "  │  \"De los consejos que dio don Quijote a Sancho Panza antes que fuese             │"
+    );
+    println!(
+        "  │   a gobernar la ínsula\"                                                          │"
+    );
+    println!(
+        "  ├──────────────────────────────────────────────────────────────────────────────────┤"
+    );
+    println!(
+        "  │                                                                                  │"
+    );
+    println!(
+        "  │  \"Haz gala, Sancho, de la humildad de tu linaje, y no te desprecies de decir     │"
+    );
+    println!(
+        "  │   que vienes de labradores, porque viendo que no te corres, ninguno se pondrá    │"
+    );
+    println!(
+        "  │   a correrte, y préciate más de ser humilde virtuoso que pecador soberbio.       │"
+    );
+    println!(
+        "  │   Inumerables son aquellos que de baja estirpe nacidos, han subido a la suma     │"
+    );
+    println!(
+        "  │   dignidad pontificia e imperatoria; y desta verdad te pudiera traer tantos      │"
+    );
+    println!(
+        "  │   ejemplos, que te cansaran.\"                                                    │"
+    );
+    println!(
+        "  │                                                                                  │"
+    );
+    println!(
+        "  ╰──────────────────────────────────────────────────────────────────────────────────╯"
+    );
+    println!();
+
     // Run the indexing app.
     let app = IndexingApp::build_app(&config).await.unwrap_or_else(|e| {
         error!("Failed to build the indexing app: {e}");
