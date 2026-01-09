@@ -226,6 +226,35 @@ impl CollectorSeed {
         Ok(Some(filter))
     }
 
+    /// Builds a Filter for multiple events using their selectors as topic0.
+    ///
+    /// # Description
+    ///
+    /// Creates a filter where topic0 contains all event selectors (OR condition).
+    /// This allows fetching logs for any of the specified events in a single RPC call.
+    /// No advanced parameter filters (topic1-3) are supported with multiple events.
+    ///
+    /// # Arguments
+    ///
+    /// * `events` - The event definitions. All selectors will be included in topic0.
+    ///
+    /// # Returns
+    ///
+    /// A Filter with topic0 containing all event selectors, or None if events is empty.
+    fn build_multi_event_filter(events: &[Event]) -> Option<Filter> {
+        if events.is_empty() {
+            return None;
+        }
+
+        let mut filter = Filter::new();
+
+        // Set topic0 with all event selectors (OR condition)
+        let selectors: Vec<B256> = events.iter().map(|e| e.selector()).collect();
+        filter.topics[0] = selectors.into();
+
+        Some(filter)
+    }
+
     /// Parses a string value into a B256 topic value.
     ///
     /// # Description
@@ -429,18 +458,33 @@ impl CollectorSeed {
 
             let filter = if coming_from_abi {
                 None
-            } else if events.len() > 1 {
-                return Err(anyhow::anyhow!(
-                    "Advanced filters are not supported when indexing multiple events at once. Declare each event as a different index job to use advanced filters."
-                ));
             } else {
-                let event = events.first().unwrap();
-                let filter_config = job
+                // Check if any event has advanced filters defined
+                let has_advanced_filters = job
                     .events
                     .as_ref()
-                    .and_then(|evts| evts.first())
-                    .and_then(|evt| evt.filters.clone());
-                Self::build_filter_from_config(event, filter_config)?
+                    .map(|evts| evts.iter().any(|evt| evt.filters.is_some()))
+                    .unwrap_or(false);
+
+                if events.len() > 1 && has_advanced_filters {
+                    return Err(anyhow::anyhow!(
+                        "Advanced filters are not supported when indexing multiple events at once. Declare each event as a different index job to use advanced filters."
+                    ));
+                }
+
+                if events.len() > 1 {
+                    // Multiple events: set topic0 with all selectors (OR condition), no advanced filters
+                    Self::build_multi_event_filter(&events)
+                } else {
+                    // Single event: can use advanced filters
+                    let event = events.first().unwrap();
+                    let filter_config = job
+                        .events
+                        .as_ref()
+                        .and_then(|evts| evts.first())
+                        .and_then(|evt| evt.filters.clone());
+                    Self::build_filter_from_config(event, filter_config)?
+                }
             };
 
             // Use job-specific block_range if set, otherwise fall back to default
