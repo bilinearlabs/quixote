@@ -47,6 +47,8 @@ pub mod constants {
     pub const DUCKDB_SCHEMA_VERSION: &str = "0.1.0";
     /// Base table name for the DuckDB database.
     pub const DUCKDB_BASE_TABLE_NAME: &str = "quixote_info";
+    /// Batch size for bulk INSERT operations in DuckDB.
+    pub const DUCKDB_BATCH_INSERT_SIZE: usize = 500;
     /// Value to choose between using filters or not on eth_getLogs.
     pub const DEFAULT_USE_FILTERS_THRESHOLD: usize = 3;
     /// Multiplier for the chunk size.

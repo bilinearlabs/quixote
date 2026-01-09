@@ -16,7 +16,7 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{Context, Result};
-use duckdb::{Connection, OptionalExt, params, types::ValueRef};
+use duckdb::{Connection, OptionalExt, types::ValueRef};
 use serde_json::{Map, Number, Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -84,26 +84,55 @@ impl Storage for DuckDBStorage {
         let tx = conn.transaction()?;
 
         // First stage: insert the new blocks into the chain-specific blocks table.
+        // Use INSERT ... ON CONFLICT DO NOTHING to ignore duplicates without aborting the transaction.
+        // Batch multiple rows into a single INSERT for better performance.
         {
-            let blocks_table = format!("blocks_{}", chain_id);
-            let mut blocks_appender = tx.appender(&blocks_table)?;
+            // Collect unique blocks first
+            let mut blocks_to_insert: Vec<(String, String, String)> = Vec::new();
             let mut last_block_number = 0;
             for event in events {
                 if let Some(block_number) = event.block_number
                     && block_number != last_block_number
                 {
-                    blocks_appender.append_row(params![
+                    blocks_to_insert.push((
                         block_number.to_string(),
                         event.block_hash.unwrap().to_string(),
-                        event.block_timestamp.unwrap_or_default().to_string()
-                    ])?;
+                        event.block_timestamp.unwrap_or_default().to_string(),
+                    ));
                     last_block_number = block_number;
-                } else {
-                    continue;
                 }
             }
 
-            blocks_appender.flush()?;
+            // Batch insert in chunks for better performance
+            let blocks_table = format!("blocks_{}", chain_id);
+
+            for chunk in blocks_to_insert.chunks(DUCKDB_BATCH_INSERT_SIZE) {
+                if chunk.is_empty() {
+                    continue;
+                }
+
+                // Build VALUES clause: (?, ?, ?), (?, ?, ?), ...
+                let values_placeholders: Vec<&str> = chunk.iter().map(|_| "(?, ?, ?)").collect();
+                let insert_sql = format!(
+                    "INSERT INTO {} (block_number, block_hash, block_timestamp) VALUES {} ON CONFLICT DO NOTHING",
+                    blocks_table,
+                    values_placeholders.join(", ")
+                );
+
+                // Flatten parameters
+                let params: Vec<&dyn duckdb::ToSql> = chunk
+                    .iter()
+                    .flat_map(|(bn, bh, bt)| {
+                        vec![
+                            bn as &dyn duckdb::ToSql,
+                            bh as &dyn duckdb::ToSql,
+                            bt as &dyn duckdb::ToSql,
+                        ]
+                    })
+                    .collect();
+
+                tx.execute(&insert_sql, params.as_slice())?;
+            }
         }
 
         // Second stage: insert the new events into the event_X table.
