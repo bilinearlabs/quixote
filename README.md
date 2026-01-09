@@ -70,8 +70,8 @@ Using a paid RPC provider? The `--block-range` parameter lets you control how ma
 quixote -r https://eth.llamarpc.com \
     -c 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
     -e "Blacklisted(address indexed address)" \
-    -s 23744000
-    --block_range 10
+    -s 23744000 \
+    --block-range 10
 ```
 
 That's it! You're now indexing USDC Blacklist events on Ethereum mainnet. 🎉
