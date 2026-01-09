@@ -56,6 +56,56 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Setup Miniconda and create frontend environment
+        run: |
+          # Determine the correct Miniconda installer URL based on OS and architecture
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu)
+              MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+              ;;
+            aarch64-unknown-linux-gnu)
+              MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh"
+              ;;
+            x86_64-apple-darwin)
+              MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh"
+              ;;
+            aarch64-apple-darwin)
+              MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-arm64.sh"
+              ;;
+            *)
+              echo "Unsupported target: ${{ matrix.target }}"
+              exit 1
+              ;;
+          esac
+
+          echo "Downloading Miniconda from: ${MINICONDA_URL}"
+          curl -fsSL "${MINICONDA_URL}" -o miniconda.sh
+          bash miniconda.sh -b -p ${{ github.workspace }}/miniconda3
+          rm miniconda.sh
+
+          # Add conda to PATH
+          export PATH="${{ github.workspace }}/miniconda3/bin:$PATH"
+
+          # Accept conda TOS and create the frontend environment
+          conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main || true
+          conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r || true
+
+          conda create --prefix=${{ github.workspace }}/quixote_frontend_env python=3.11 streamlit pyarrow -y
+
+          # Clean up to reduce size
+          conda clean --all --force-pkgs-dirs -y
+          find ${{ github.workspace }}/quixote_frontend_env -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find ${{ github.workspace }}/quixote_frontend_env -type f -name "*.pyc" -delete 2>/dev/null || true
+          find ${{ github.workspace }}/quixote_frontend_env -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+          find ${{ github.workspace }}/quixote_frontend_env -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
+          rm -rf ${{ github.workspace }}/quixote_frontend_env/conda-meta
+          rm -rf ${{ github.workspace }}/quixote_frontend_env/lib/python3.11/site-packages/pip 2>/dev/null || true
+          rm -rf ${{ github.workspace }}/quixote_frontend_env/lib/python3.11/site-packages/setuptools 2>/dev/null || true
+
+          # Show final size
+          echo "Frontend environment size:"
+          du -sh ${{ github.workspace }}/quixote_frontend_env
+
       - name: Determine version
         id: version
         run: |
@@ -87,6 +137,9 @@ jobs:
           mkdir -p "${ARCHIVE_NAME}/assets"
           cp ${{ github.workspace }}/assets/quixote-icon.png "${ARCHIVE_NAME}/assets/"
 
+          # Copy the conda frontend environment
+          cp -r ${{ github.workspace }}/quixote_frontend_env "${ARCHIVE_NAME}/quixote_frontend_env"
+
           # Create tarball
           tar -czvf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
 
@@ -106,9 +159,9 @@ jobs:
           retention-days: 7
 
       - name: Upload to release
-        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.version }}
           files: |
             ${{ env.ARCHIVE_PATH }}
             ${{ env.SHA256_PATH }}
@@ -120,7 +173,6 @@ jobs:
     name: Generate checksums
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v6
@@ -130,7 +182,11 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+          else
+            VERSION="${{ inputs.tag }}"
+          fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Merge checksums
@@ -141,6 +197,7 @@ jobs:
       - name: Upload checksums to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.version }}
           files: checksums-${{ steps.version.outputs.version }}.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

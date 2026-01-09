@@ -186,7 +186,8 @@ download_and_install() {
 
     # Download and verify checksum
     info "Verifying checksum..."
-    if curl -sSfL "${checksum_url}" -o "${temp_dir}/${archive_name}.sha256" 2>/dev/null; then
+    local curl_error
+    if curl_error=$(curl -sSfL "${checksum_url}" -o "${temp_dir}/${archive_name}.sha256" 2>&1); then
         cd "${temp_dir}"
         if command -v sha256sum &>/dev/null; then
             sha256sum -c "${archive_name}.sha256" --quiet || die "Checksum verification failed!"
@@ -196,8 +197,11 @@ download_and_install() {
             warn "No checksum tool available, skipping verification"
         fi
         cd - >/dev/null
+        success "Checksum verified"
     else
         warn "Checksum file not available, skipping verification"
+        warn "URL: ${checksum_url}"
+        [[ -n "${curl_error}" ]] && warn "Error: ${curl_error}"
     fi
 
     # Extract archive
@@ -237,6 +241,17 @@ download_and_install() {
             mkdir -p "${DATA_DIR}/assets"
             cp -r "${archive_dir}/assets/"* "${DATA_DIR}/assets/"
             success "Installed assets to ${DATA_DIR}/assets/"
+        fi
+
+        # Install conda frontend environment
+        if [[ -d "${archive_dir}/quixote_frontend_env" ]]; then
+            info "Installing Python frontend environment (this may take a moment)..."
+            # Remove old environment if exists
+            rm -rf "${DATA_DIR}/quixote_frontend_env"
+            cp -r "${archive_dir}/quixote_frontend_env" "${DATA_DIR}/quixote_frontend_env"
+            success "Installed frontend environment to ${DATA_DIR}/quixote_frontend_env/"
+        else
+            warn "Frontend environment not found in archive - dashboard will not work"
         fi
     fi
 }
