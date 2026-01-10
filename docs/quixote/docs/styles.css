@@ -1,0 +1,77 @@
+@import "tailwindcss" important;
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+[data-layout="landing"] .vocs_Button_button {
+  border-radius: 4px !important;
+  height: 36px !important;
+  padding: 0 16px !important;
+}
+
+[data-layout="landing"] .vocs_Content {
+  position: inherit;
+}
+
+#home-install {
+  height: 380px;
+}
+
+#home-install .vocs_CodeGroup {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+}
+
+#home-install .vocs_Tabs_content {
+  flex: 1;
+  position: relative;
+}
+
+#home-install .vocs_Tabs_content > * {
+  position: absolute;
+  inset: 0;
+}
+
+#home-install .vocs_Code {
+  font-size: 20px;
+  line-height: 1.8;
+}
+
+#home-install pre {
+  padding: 24px !important;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.border-accent {
+  border: 1px solid var(--vocs-color_borderAccent) !important;
+}
+
+/* Increase article text sizes */
+article.vocs_Content {
+  font-size: 1.15rem;
+  line-height: 1.8;
+}
+
+article.vocs_Content h2 {
+  font-size: 2rem !important;
+  margin-top: 2.5rem !important;
+}
+
+article.vocs_Content h3 {
+  font-size: 1.5rem !important;
+}
+
+article.vocs_Content li {
+  font-size: 1.15rem;
+  line-height: 1.8;
+}
+
+article.vocs_Content code {
+  font-size: 1rem;
+}
+
+article.vocs_Content pre {
+  font-size: 1rem !important;
+}
+

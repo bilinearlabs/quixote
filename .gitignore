@@ -3,3 +3,4 @@
 *.duckdb.wal
 quixote_frontend_env/*
 .env
+**node_modules**
