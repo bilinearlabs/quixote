@@ -2,6 +2,10 @@
   <img src="assets/quixote-icon.png" alt="quixote" width="120"/>
 </p>
 
+<p align="center">
+  <strong>From the blockchain to your database. Index RWAs, Stablecoins, and Digital Assets.</strong>
+</p>
+
 # quixote
 
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/bilinearlabs/quixote/ci.yaml?style=flat-square)
@@ -10,11 +14,7 @@
 ![Duckdb](https://img.shields.io/badge/DuckDB-FFF000?style=flat-square&logo=duckdb&logoColor=black)
 [![Join our Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white&style=flat-square)](https://discord.gg/Et8BTnVBZS)
 
-<p align="center">
-  <strong>From the blockchain to your database. Index RWAs, Stablecoins, and Digital Assets.</strong>
-</p>
 
----
 
 ## What is quixote?
 
