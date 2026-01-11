@@ -21,7 +21,6 @@ Index and query on-chain data from stablecoins, RWAs, DeFi protocols, or any ass
 
 Just point it at an RPC, specify the events you care about, and start querying your data with SQL.
 
----
 
 ## Quickstart
 
