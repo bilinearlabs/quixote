@@ -10,12 +10,14 @@ curl -fsSL https://quixote.bilinearlabs.io/install | bash -s
 
 Then index all existing pools in Uniswap V4:
 
-```
+```bash
 quixote -r https://gateway.tenderly.co/public/mainnet \
   -c 0x000000000004444c5dc75cB358380D2e3dE08A90 \
   -e "Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)" \
   -s 21688329
 ```
+
+
 
 ## Install
 
