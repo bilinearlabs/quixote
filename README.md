@@ -15,9 +15,6 @@
 [![Join our Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white&style=flat-square)](https://discord.gg/Et8BTnVBZS)
 
 
-
-## What is quixote?
-
 **quixote** is a lightweight, high-performance EVM event indexer built in Rust. It lets you capture, store, and query blockchain events with minimal setup. Get it up and running in two commands.
 
 Index and query on-chain data from stablecoins, RWAs, DeFi protocols, or any asset on EVM-compatible blockchains.
