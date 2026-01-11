@@ -1,1 +1,31 @@
 # Configuration File
+
+For advanced use cases like event filtering or multi-job indexing, use a YAML config:
+
+```yaml
+database_path: "quixote_indexer.duckdb"
+api_server_address: "127.0.0.1"
+api_server_port: 9720
+frontend_address: "127.0.0.1"
+frontend_port: 8501
+
+index_jobs:
+  - rpc_url: "https://eth.llamarpc.com"
+    contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    events:
+      - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
+        filters:
+          from: "0x12347F958D2ee523a2206206994597C13D831ec7"
+      - full_signature: "Approval(address indexed owner, address indexed spender, uint256 value)"
+
+  - rpc_url: "https://polygon-rpc.com"
+    contract: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    events:
+      - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
+```
+
+And run as follows:
+
+```bash
+quixote --config quixote_config.yaml
+```

@@ -1,3 +1,84 @@
 # Examples
 
-This is an example page.
+Note: Use your own RPC endpoint. Some of these examples may not work with free public RPCs, as they may contain a large numbers of events and quixote will generate a high volume of requests.
+
+The following examples show how to use different `quixote` features:
+* Index a single event starting from a given block.
+* Index multiple events.
+* Use a configuration file indexing multiple RPCs.
+* Use filter for indexed topics.
+* Index events from from the signature or the abi.
+
+## 💵 USDC Transfers
+
+Index all USDC stablecoin mint and burn events on Ethereum mainnet.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48 \
+  -e "Mint(address indexed minter, address indexed to, uint256 amount)" \
+  -e "Burn(address indexed burner, uint256 amount)" \
+  -s 6082465
+```
+
+
+## 🏦 Securitize BUIDL Fund
+
+Track BlackRock's tokenized treasury fund (BUIDL) transfers.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x7712c34205737192402172409a8F7ccef8aA2AEc \
+  -e "Transfer(address indexed from, address indexed to, uint256 value)" \
+  -s 19343293
+```
+
+## 🦄 Index Uniswap V4 Swaps
+
+Index all Uniswap V4 pool creations and all swaps for the ETH/USDC pair.
+
+```yaml
+# place this into a config.yaml file
+index_jobs:
+  - rpc_url: "https://gateway.tenderly.co/public/mainnet"
+    contract: "0x000000000004444c5dc75cB358380D2e3dE08A90"
+    start_block: 21688329
+    events:
+      - full_signature: "Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)"
+
+  - rpc_url: "https://gateway.tenderly.co/public/mainnet"
+    contract: "0x000000000004444c5dc75cB358380D2e3dE08A90"
+    start_block: 21688329
+    events:
+      - full_signature: "Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"
+        filters:
+          id:
+            - "0x21c67e77068de97969ba93d4aab21826d33ca12bb9f565d8496e8fda8a82ca27"
+```
+
+```bash
+quixote --config config.yaml
+```
+
+## 🪙 Ethereum Deposit Contract
+
+Indexes the Ethereum deposit contract, where an event is emitted every time someone deposits a validator to join the proof-of-stake network.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x00000000219ab540356cBB839Cbe05303d7705Fa \
+  -e "DepositEvent(bytes pubkey, bytes withdrawal_credentials, bytes amount, bytes signature, bytes index)" \
+  -s 11052984
+```
+
+## 🟣 Polygon Agglayer
+
+Index bridges between Ethereum mainnet and Polygon's Agglayer.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x2a3dd3eb832af982ec71669e178424b10dca2ede \
+  -e "ClaimEvent(uint256 globalIndex, uint32 originNetwork, address originAddress, address destinationAddress, uint256 amount)" \
+  -e "BridgeEvent (uint8 leafType, uint32 originNetwork, address originAddress, uint32 destinationNetwork, address destinationAddress, uint256 amount, bytes metadata, uint32 depositCount)" \
+  -s 16896718
+```
