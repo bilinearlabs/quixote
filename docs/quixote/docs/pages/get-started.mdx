@@ -1,0 +1,68 @@
+# Get started
+
+You can get started with quixote in two simple steps.
+
+First install it.
+
+```bash
+curl -fsSL https://quixote.bilinearlabs.io/install | bash -s
+```
+
+Then index all existing pools in Uniswap V4:
+
+```
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x000000000004444c5dc75cB358380D2e3dE08A90 \
+  -e "Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)" \
+  -s 21688329
+```
+
+## Install
+
+### Pre-built Binaries
+
+In a single command you can install it as follows.
+
+```bash
+curl -fsSL https://quixote.bilinearlabs.io/install | bash -s
+```
+
+See our [releases page](https://github.com/bilinearlabs/quixote/releases).
+
+### Build from Source
+
+```bash
+cargo build --release
+```
+
+### Run from docker
+
+Every release is pushed as a docker image.
+
+```bash
+docker pull ghcr.io/bilinearlabs/quixote:0.1.0
+```
+
+
+
+## Command Line Interface
+
+```
+Usage: quixote [OPTIONS]
+
+Options:
+  -r, --rpc-host <RPC_HOST>          RPC URL to index (supports basic auth)
+  -c, --contract <CONTRACT>          Contract address to index
+  -e, --event <EVENT>                Event signature(s) to index (can be repeated)
+  -a, --abi-spec <ABI_SPEC>          Path to ABI JSON (indexes all events)
+  -s, --start-block <START_BLOCK>    Starting block number [default: 0]
+  -d, --database <DATABASE>          Database file path [default: quixote_indexer.duckdb]
+  -j, --api-server <API_SERVER>      API server address [default: 127.0.0.1:9720]
+      --block-range <BLOCK_RANGE>    Blocks per RPC request [default: 10000]
+  -v, --verbosity <VERBOSITY>        Log level: 0=WARN, 1=INFO, 2=DEBUG, 3=TRACE
+      --disable-frontend             Don't launch the dashboard
+      --strict-mode                  Stop on first processing error
+      --config <CONFIG>              Path to YAML configuration file
+  -h, --help                         Print help
+  -V, --version                      Print version
+```

@@ -1,0 +1,113 @@
+# Data Integrity
+
+Data integrity is the top priority of `quixote`. We have taken extensive measures to ensure that the indexed data accurately represents what is stored on the blockchain. You can verify this yourself as follows.
+
+Let's say you are indexing USDC on Ethereum mainnet. You can do so with the following configuration.
+Note that this may take several hours and dozens of GB of disk space, as USDC is a very popular smart contract.
+We have chosen this contract because it contains hundreds of millions of events, making it a perfect candidate to demonstrate that `quixote` represents the data correctly.
+
+```
+// file usdc.json
+// TODO: Add USDC ABI
+```
+
+```bash
+TODO: Add quixote command to index USDC
+TODO: quixote --abi ...
+```
+
+Some smart contracts, like ERC20 tokens and USDC in particular, emit events while also modifying their internal state.
+For example:
+* Every time tokens are burned (-) or minted (+), the `totalSupply` state variable is updated. See `Burn` and `Mint` events.
+* Every time tokens are transferred, the `balance` of each involved account is updated. See `Transfer` events.
+
+This means we can use the indexed events to reconstruct the contract state.
+If the reconstructed state matches the on-chain state, we can be confident that the indexed events are correct.
+Let's look at some examples of how to reconstruct state for ERC20 tokens using USDC indexed events.
+
+## Reconstruct `totalSupply` with Mint/Burn Events
+
+The `totalSupply` of any ERC20 token (USDC in this case) is simply the total amount minted minus the amount burned.
+This value is stored directly in the contract's storage and can be queried as follows.
+At the time of writing, the value is `52402156962778090`. This serves as our ground truth, since it was obtained directly from the blockchain.
+
+```bash
+cast call \
+  0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
+  "totalSupply()" \
+  --block finalized \
+  --rpc-url https://gateway.tenderly.co/public/mainnet \
+  | cast --to-dec
+```
+
+Now let's try to reconstruct this state using the data indexed by `quixote`.
+We simply sum all mint events, which gives us `586649044690017105`.
+
+
+```bash
+curl -X POST http://your_indexer_url_with_usdc:9720/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT SUM(amount) AS total FROM event_1_mint_ab853"}'
+```
+
+We do the same for all burn events, which gives us `534246887727239015`.
+```bash
+curl -X POST http://your_indexer_url_with_usdc:9720/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "SELECT SUM(amount) AS total FROM event_1_burn_cc16f"}'
+```
+
+Doing the math:
+```
+586649044690017105 - 534246887727239015
+= 52402156962778090
+```
+
+It matches! This confirms that the stored events are correct.
+
+
+## Reconstruct `balanceOf` with Transfer Events
+
+Similarly, we can verify the events are correct by using them to reconstruct the balance of an account.
+Every ERC20 token has a `balanceOf` method that returns the balance of a given account.
+We can read this state directly from the blockchain as follows.
+At the time of writing, this account has a USDC balance of `53489408794532`.
+
+```bash
+cast call \
+  0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
+  "balanceOf(address)" \
+    0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640 \
+  --block finalized \
+  --rpc-url https://gateway.tenderly.co/public/mainnet | cast --to-dec
+```
+
+
+Now let's try to reconstruct the same state using the events stored by `quixote`.
+The balance of an account is the sum of incoming transfers (+) minus outgoing transfers (-).
+
+We can query the transfer events sent to the account as follows.
+A total of `1012679061520274098` came in.
+```bash
+curl -X POST http://your_indexer_url_with_usdc:9720/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"SELECT SUM(value) AS incoming FROM event_1_transfer_ddf25 WHERE LOWER(\"to\") = '\''0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640'\''"}'
+```
+
+And for outgoing transfers, a total of `1012625572111479566` went out.
+```bash
+curl -X POST http://your_indexer_url_with_usdc:9720/raw_query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"SELECT SUM(value) AS outgoing FROM event_1_transfer_ddf25 WHERE LOWER(\"from\") = '\''0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640'\''"}'
+```
+
+Doing the math:
+```bash
+1012679061520274098 - 1012625572111479566
+= 53489408794532
+```
+
+This matches the balance we read directly from the contract state!
+
+Depending on the contract you are indexing, there may be other on-chain state variables you can use to verify that the events stored by `quixote` are correct.
+We ensure correctness through testing and best practices, but you can always verify it yourself.

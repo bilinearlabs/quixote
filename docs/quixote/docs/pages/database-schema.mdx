@@ -1,0 +1,31 @@
+# Database Schema
+
+Quixote uses DuckDB with a dynamic schema that adapts to your indexed events.
+
+## Core Tables
+
+| Table | Description |
+|-------|-------------|
+| `quixote_info` | Metadata about indexed blocks |
+| `blocks_<chain_id>` | Record of all indexed blocks with timestamps |
+| `event_descriptor` | Registry of indexed event types |
+| `event_<chain_id>_<event_name>_<hash_prefix>` | One table per event type |
+
+> 💡 The `hash_prefix` is the first 5 hex characters of the event's keccak256 hash. For example, `ddf25` comes from `0xddf252ad...`
+
+## Query Your Data
+
+```sql
+-- Check indexing progress
+SELECT * FROM event_descriptor;
+
+-- Count transfers (chain 1 = Ethereum mainnet)
+SELECT COUNT(*) FROM event_1_transfer_ddf25;
+
+-- Top receivers
+SELECT "to", COUNT(*) as transfers
+FROM event_1_transfer_ddf25
+GROUP BY "to"
+ORDER BY transfers DESC
+LIMIT 10;
+```

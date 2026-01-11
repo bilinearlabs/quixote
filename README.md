@@ -1,343 +1,92 @@
 <p align="center">
-  <img src="assets/quixote-icon.png" alt="Quixote" width="120"/>
-</p>
-
-<h1 align="center">Quixote</h1>
-
-<p align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/bilinearlabs/quixote/ci.yaml?style=for-the-badge&logo=github&label=BUILD" alt="Build Status"/>
-  <img src="https://img.shields.io/github/license/bilinearlabs/quixote?style=for-the-badge" alt="License"/>
-  <a href="https://discord.gg/Et8BTnVBZS"><img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"/></a>
-  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
-  <img src="https://img.shields.io/badge/DuckDB-FFF000?style=for-the-badge&logo=duckdb&logoColor=black" alt="DuckDB"/>
+  <img src="assets/quixote-icon.png" alt="quixote" width="120"/>
 </p>
 
 <p align="center">
-  <strong>Blazing-fast blockchain event indexing, powered by Rust and DuckDB</strong>
+  <strong>From the blockchain to your database. Index RWAs, Stablecoins, and Digital Assets.</strong>
 </p>
 
-<p align="center">
-  <em>Index any EVM chain. Query with SQL. Visualize instantly.</em>
-</p>
+# quixote
 
----
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/bilinearlabs/quixote/ci.yaml?style=flat-square)
+![GitHub License](https://img.shields.io/github/license/bilinearlabs/quixote?style=flat-square)
+![Rust](https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white)
+![Duckdb](https://img.shields.io/badge/DuckDB-FFF000?style=flat-square&logo=duckdb&logoColor=black)
+[![Join our Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white&style=flat-square)](https://discord.gg/Et8BTnVBZS)
 
-## 🚀 Why Quixote?
 
-**Quixote** is a lightweight event indexer for EVM-compatible blockchains. Built in Rust with DuckDB as its storage engine, it focuses on doing one thing well: getting blockchain events into a queryable database as fast as possible.
+**quixote** is a lightweight, high-performance EVM event indexer built in Rust. It lets you capture, store, and query blockchain events with minimal setup. Get it up and running in two commands.
 
-| Feature | Quixote |
-|---------|---------|
-| ⚡ **Performance** | Rust-native with async I/O and multiple RPC support |
-| 💰 **RPC Cost Control** | Configurable block range to optimize RPC calls and reduce costs |
-| 🦆 **Storage** | DuckDB — the fastest analytical database for local queries |
-| 🔄 **Resume Support** | Automatically continues from the last synced block |
-| 🌐 **Multi-chain** | Works with any EVM-compatible blockchain |
-| 📊 **Built-in Dashboard** | Streamlit-powered frontend included out of the box |
-| 🔌 **REST API** | Query your indexed data programmatically |
-| 📈 **Prometheus Metrics** | Production-ready observability built-in |
-| 🎯 **Event Filtering** | Filter events at the source — index only what you need |
+Index and query on-chain data from stablecoins, RWAs, DeFi protocols, or any asset on EVM-compatible blockchains.
 
----
+Just point it at an RPC, specify the events you care about, and start querying your data with SQL.
 
-## ✨ Features at a Glance
 
-### 🎯 Precision Indexing
-Index specific events or entire contract ABIs. Filter by address, topic, or any indexed parameter. No more indexing data you don't need.
+## Quickstart
 
-### 🦆 DuckDB-Powered Analytics
-Your indexed events live in a DuckDB database — run complex analytical queries at lightning speed. Export to Parquet, join with other data sources, or power your dashboards.
-
-### 📊 Instant Visualization
-Launch `quixote` and immediately access a beautiful Streamlit dashboard at `http://localhost:8501`. No setup required.
-
-### 🔌 Developer-Friendly API
-A REST API runs alongside your indexer for programmatic access. List events, query contracts, or execute raw SQL — all via simple HTTP endpoints.
-
-### 🔄 Resilient by Design
-Network hiccups? RPC rate limits? Quixote handles it all with intelligent exponential backoff and automatic retry logic. Your indexing job will survive anything.
-
-### 💰 RPC Cost Control
-Using a paid RPC provider? The `--block-range` parameter lets you control how many blocks are fetched per request. Tune it to match your provider's limits and pricing — fetch more blocks per call to reduce total requests, or dial it down to stay within rate limits. Every RPC call counts when you're paying per request.
-
----
-
-## 📦 Quick Start
-
-### One-Liner to Start Indexing
+Install:
 
 ```bash
-quixote -r https://eth.llamarpc.com \
-    -c 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 \
-    -e "Blacklisted(address indexed address)" \
-    -s 23744000 \
-    --block-range 10
+curl -fsSL https://quixote.bilinearlabs.io/install | bash -s
 ```
 
-That's it! You're now indexing USDC Blacklist events on Ethereum mainnet. 🎉
-
-### What Just Happened?
-
-1. **Connected** to an Ethereum RPC endpoint
-2. **Started indexing** Blacklisted events from block 23,744,000
-3. **Stored** events in a local DuckDB database
-4. **Launched** a REST API at `http://localhost:9720`
-5. **Opened** a dashboard at `http://localhost:8501`
-
----
-
-## 🛠️ Installation
-
-### Pre-built Binaries
-
-Download the latest release for your platform from our [Releases page](https://github.com/bilinearlabs/quixote/releases).
-
-### Build from Source
-
-Building requires linking against DuckDB. Here's how:
+Index all existing pools in Uniswap V4:
 
 ```bash
-cargo build --release
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x000000000004444c5dc75cB358380D2e3dE08A90 \
+  -e "Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)" \
+  -s 21688329
 ```
 
----
-
-## 📖 Usage
-
-### Command Line Interface
-
-```
-Usage: quixote [OPTIONS]
-
-Options:
-  -r, --rpc-host <RPC_HOST>          RPC URL to index (supports basic auth)
-  -c, --contract <CONTRACT>          Contract address to index
-  -e, --event <EVENT>                Event signature(s) to index (can be repeated)
-  -a, --abi-spec <ABI_SPEC>          Path to ABI JSON (indexes all events)
-  -s, --start-block <START_BLOCK>    Starting block number [default: 0]
-  -d, --database <DATABASE>          Database file path [default: quixote_indexer.duckdb]
-  -j, --api-server <API_SERVER>      API server address [default: 127.0.0.1:9720]
-      --block-range <BLOCK_RANGE>    Blocks per RPC request [default: 10000]
-  -v, --verbosity <VERBOSITY>        Log level: 0=WARN, 1=INFO, 2=DEBUG, 3=TRACE
-      --disable-frontend             Don't launch the dashboard
-      --strict-mode                  Stop on first processing error
-      --config <CONFIG>              Path to YAML configuration file
-  -h, --help                         Print help
-  -V, --version                      Print version
-```
-
-### Examples
-
-#### Index Multiple Events
+Now `quixote` will start indexing the `Initialize` event for this smart contract starting from block `21688329` and dumping all the content into `quixote_indexer.duckdb`. You can check the sync status as follows.
 
 ```bash
-quixote -r https://eth.llamarpc.com \
-    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
-    -e "Transfer(address indexed from, address indexed to, uint256 amount)" \
-    -e "Approval(address indexed owner, address indexed spender, uint256 value)" \
-    -s 23744000
+curl http://localhost:9720/list_events
 ```
 
-#### Index from ABI
+And the database schema as follows.
 
 ```bash
-quixote -r https://eth.llamarpc.com \
-    -c 0xdAC17F958D2ee523a2206206994597C13D831ec7 \
-    -a ./usdt_abi.json \
-    -s 23744000
+curl http://localhost:9720/db_schema
 ```
 
-#### Using a Configuration File
-
-For advanced use cases like event filtering or multi-job indexing, use a YAML config:
-
-```yaml
-database_path: "quixote_indexer.duckdb"
-api_server_address: "127.0.0.1"
-api_server_port: 9720
-frontend_address: "127.0.0.1"
-frontend_port: 8501
-
-index_jobs:
-  - rpc_url: "https://eth.llamarpc.com"
-    contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
-    events:
-      - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
-        filters:
-          from: "0x12347F958D2ee523a2206206994597C13D831ec7"
-      - full_signature: "Approval(address indexed owner, address indexed spender, uint256 value)"
-
-  - rpc_url: "https://polygon-rpc.com"
-    contract: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-    events:
-      - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
-```
+You can also pass raw SQL queries as follows. 
 
 ```bash
-quixote --config quixote_config.yaml
+curl -X POST http://localhost:9720/raw_query \
+-H "Content-Type: application/json" \
+-d '{"query": "SELECT * FROM event_1_initialize_dd466 limit 5"}'
 ```
 
----
+And `quixote` ships with a built-in frontend that you can use to query data in a simple way, showing the content as a table. Go to `http://127.0.0.1:8501`
 
-## 🔌 REST API
 
-The built-in REST API makes it easy to query your indexed data programmatically.
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /list_events` | List all indexed event types |
-| `POST /list_contracts` | List all indexed contracts |
-| `POST /get_events` | Query events by contract and time range |
-| `POST /raw_query` | Execute raw SQL queries |
 
-### Quick Example
+## Features
 
-```bash
-# List all indexed events
-curl -X POST http://localhost:9720/list_events -H "Content-Type: application/json" | jq
+- **Simple to run**: Single binary, minimal configuration. Point to an RPC and start indexing.
+- **DuckDB-powered**: Fast analytical queries with SQL. File-based storage, no external services required. Export to Parquet or join with other data sources.
+- **Any EVM chain**: Works with Ethereum, Arbitrum, Optimism, Polygon, and any EVM-compatible chain.
+- **Flexible event selection**: Index specific events or entire ABIs. Filter by address, topic, or any indexed parameter.
+- **Built-in REST API**: List events, query contracts, or execute raw SQL via HTTP endpoints.
+- **Built-in frontend**: Embedded Streamlit dashboard at `http://localhost:8501` for data exploration.
+- **Auto resume**: Automatically resumes from the last synced block.
+- **Resilient**: Exponential backoff and retry logic for network issues and RPC rate limits.
+- **RPC cost control**: The `--block-range` parameter controls blocks per request to match provider limits.
+- **YAML configuration**: Advanced filtering and multi-job support via config files.
+- **Built in Rust**: Fast, safe, and memory-efficient.
 
-# Query events for a specific time range
-curl -X POST http://localhost:9720/get_events \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contract": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-    "start_time": "2024-01-15T00:00:00Z",
-    "end_time": "2024-01-16T00:00:00Z"
-  }' | jq
-```
 
-📚 See [API_EXAMPLES.md](./API_EXAMPLES.md) for comprehensive documentation.
-
----
-
-## 🗄️ Database Schema
-
-Quixote uses DuckDB with a dynamic schema that adapts to your indexed events.
-
-### Core Tables
-
-| Table | Description |
-|-------|-------------|
-| `quixote_info` | Metadata about indexed blocks |
-| `blocks_<chain_id>` | Record of all indexed blocks with timestamps |
-| `event_descriptor` | Registry of indexed event types |
-| `event_<chain_id>_<event_name>_<hash_prefix>` | One table per event type |
-
-> 💡 The `hash_prefix` is the first 5 hex characters of the event's keccak256 hash — for example, `ddf25` comes from `0xddf252ad...`
-
-### Query Your Data
-
-```sql
--- Check indexing progress
-SELECT * FROM event_descriptor;
-
--- Count transfers (chain 1 = Ethereum mainnet)
-SELECT COUNT(*) FROM event_1_transfer_ddf25;
-
--- Top receivers
-SELECT "to", COUNT(*) as transfers
-FROM event_1_transfer_ddf25
-GROUP BY "to"
-ORDER BY transfers DESC
-LIMIT 10;
-```
-
-> 💡 DuckDB only allows one process at a time. To query the database directly, stop the indexer first — or use the REST API while indexing.
-
----
-
-## 📈 Monitoring
-
-Quixote exposes Prometheus metrics for production deployments.
-
-```bash
-quixote --metrics --metrics-address 0.0.0.0 --metrics-port 9090 ...
-```
-
----
-
-## 🧪 Testing
-
-```bash
-export QUIXOTE_TEST_RPC=<your-rpc-url>
-export QUIXOTE_TEST_RPC_USER=<optional-user>
-export QUIXOTE_TEST_RPC_PASSWORD=<optional-password>
-cargo test
-```
-
-> 💡 Some tests require a connection to an RPC.
-
----
-
-## 🎨 Frontend Development
-
-The embedded dashboard is a [Streamlit](https://streamlit.io/) application located at `frontend/generic_dashboard.py`. The Rust binary spawns the frontend using a bundled Python environment.
-
-### Setup
-
-> ⚠️ Python 3.11 or lower is required (Streamlit compatibility).
-
-To develop the frontend, first create the bundled Python environment using [Conda](https://docs.conda.io/en/latest/):
-
-```bash
-conda create --prefix=./quixote_frontend_env python=3.11 streamlit pyarrow -y
-```
-
-### Running
-
-The frontend is launched automatically by Quixote. Simply run the indexer and access the dashboard at `http://localhost:8501`:
-
-```bash
-quixote -r <rpc-url> -c <contract> -e <event> ...
-```
-
-Edit `frontend/generic_dashboard.py` and restart Quixote to see your changes.
-
-To run without the frontend (e.g., for headless deployments):
-
-```bash
-quixote --disable-frontend ...
-```
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Whether it's bug reports, feature requests, or pull requests — we'd love to hear from you.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📄 License
+## License
 
 This project is open source and available under the [MIT License](LICENSE).
 
----
 
-## 🏢 About Bilinear Labs
+## About Bilinear Labs
 
-**Quixote** is built and maintained by [Bilinear Labs](https://www.bilinearlabs.io), a team passionate about building high-performance infrastructure for the decentralized web.
+`quixote` is built and maintained by [Bilinear Labs](https://www.bilinearlabs.io), a team passionate about building high-performance infrastructure for blockchain and finance.
 
-We specialize in:
-- 🔗 **Blockchain Infrastructure** — Indexers, RPCs, and data pipelines
-- 🦀 **Rust Development** — Performance-critical systems and tooling
-- 📊 **Data Engineering** — Real-time analytics and event processing
-
-**Interested in working together?** [Get in touch](https://www.bilinearlabs.io) or [join our Discord](https://discord.gg/Et8BTnVBZS)!
-
----
-
-<p align="center">
-  <strong>Built with ❤️ by <a href="https://www.bilinearlabs.io">Bilinear Labs</a></strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/bilinearlabs/quixote">⭐ Star us on GitHub</a> •
-  <a href="https://discord.gg/Et8BTnVBZS">💬 Join our Discord</a> •
-  <a href="https://www.bilinearlabs.io">🌐 Visit our website</a>
-</p>
+Need help with custom indexing solutions, high-performance backends, or managed infrastructure?
+We're happy to help. Whether it's tailoring quixote for your specific use case, building something bespoke, or running the infrastructure so you don't have to. Feel free to reach out.

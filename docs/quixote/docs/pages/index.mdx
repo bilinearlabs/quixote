@@ -1,0 +1,273 @@
+---
+content:
+  width: 100%
+layout: landing
+showLogo: false
+title: quixote
+description: Simple and flexible Rust-based EVM event indexer powered by DuckDB.
+---
+
+import { HomePage } from "vocs/components";
+
+<style>{`
+  #home-install pre code {
+    font-size: 0.85rem !important;
+    line-height: 1.5 !important;
+  }
+  #home-install [role="tablist"] button {
+    font-size: 0.95rem !important;
+    font-weight: 500 !important;
+  }
+  #home-install pre {
+    min-height: 320px !important;
+    max-height: 320px !important;
+    overflow-y: hidden !important;
+  }
+`}</style>
+
+<div className="max-w-[1120px] mx-auto vp-doc relative px-[24px] mb-[64px] mt-[32px] md:px-0 md:mb-[32px]">
+  <div className="pt-[48px] max-sm:pt-0">
+    <div className="max-sm:px-0 flex justify-between gap-6 z-0 max-md:justify-center max-md:flex-col max-md:items-center max-md:space-y-6">
+      <div className="space-y-4 max-w-[320px] max-md:max-w-none max-md:w-full flex flex-col justify-between items-start max-md:items-center max-md:text-center">
+        <div className="space-y-4 w-full lg:mb-[40px] max-md:flex max-md:flex-col max-md:items-center">
+          <img
+            src="/quixote.png"
+            alt="quixote"
+            className="w-[200px] h-auto rounded-xl block max-md:mx-auto"
+          />
+          <h1 style={{
+            fontSize: '3.5rem',
+            fontWeight: 'bold',
+            background: 'linear-gradient(90deg, #8158e8 0%, #08b4d5 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            backgroundClip: 'text',
+            margin: 0
+          }}>
+            quixote
+          </h1>
+          <div className="font-regular text-[21px] max-sm:text-[18px] text-[#919193] max-md:text-center">From the <span className="text-black dark:text-white">blockchain</span> to your <span className="text-black dark:text-white">database</span>. Index RWAs, Stablecoins, and Digital Assets.</div>
+        </div>
+        <div className="flex justify-center space-x-2">
+          <HomePage.Button href="/get-started" variant="accent">Get Started</HomePage.Button>
+          <HomePage.Button href="https://github.com/bilinearlabs/quixote">GitHub</HomePage.Button>
+        </div>
+      </div>
+      <div className="flex flex-col w-full max-w-[850px] justify-between">
+        <div id="home-install">
+          :::code-group
+
+          ```bash [Index Events]
+          # Install quixote
+          curl -fsSL https://quixote.bilinearlabs.io/install | bash -s
+
+          # Index USDC Burn events on Ethereum
+          quixote -r https://gateway.tenderly.co/public/mainnet \
+            --contract 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48 \
+            --event "Burn(address indexed burner, uint256 amount)" \
+            --start-block 6082465 \
+            --block-range 10000
+
+          # Check sync status
+          curl http://localhost:9720/list_events
+          ```
+
+          ```bash [Query Data]
+          # Check database schema
+          curl http://localhost:9720/db_schema
+
+          # Pass raw queries. Last 5 USDC burn events
+          curl -X POST http://localhost:9720/raw_query \
+          -H "Content-Type: application/json" \
+          -d '{"query": "SELECT * FROM event_1_burn_cc16f limit 5"}'
+
+          # Browse the live dashboard for more
+          http://127.0.0.1:8501
+          ```
+
+          :::
+        </div>
+        <div className="flex flex-wrap justify-between w-full mt-5">
+          <a href="https://bilinearlabs.io" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-purple-400/30 hover:border-purple-400/60 hover:bg-purple-400/5 transition-all text-[13px]" rel="noreferrer noopener" target="_blank">
+            <span className="text-[#919193]">built by</span>
+            <img src="/bilinearlabs.png" alt="Bilinear Labs" className="h-[12px] w-[12px] rounded-sm object-contain" />
+            <span className="text-black dark:text-white font-medium">Bilinear Labs</span>
+          </a>
+          <a href="https://github.com/bilinearlabs/quixote" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-orange-400/30 hover:border-orange-400/60 hover:bg-orange-400/5 transition-all text-[13px]" rel="noreferrer noopener" target="_blank">
+            <span className="text-[#919193]">built with</span>
+            <span className="text-black dark:text-white font-medium">🦀 Rust</span>
+          </a>
+          <a href="https://duckdb.org" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-yellow-400/30 hover:border-yellow-400/60 hover:bg-yellow-400/5 transition-all text-[13px]" rel="noreferrer noopener" target="_blank">
+            <span className="text-[#919193]">powered by</span>
+            <span className="text-yellow-500 font-medium">🦆 DuckDB</span>
+          </a>
+          <a href="https://github.com/bilinearlabs/quixote/blob/main/LICENSE" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-black/10 dark:border-white/20 hover:border-black/20 dark:hover:border-white/30 hover:bg-black/5 dark:hover:bg-white/5 transition-all text-[13px]" rel="noreferrer noopener" target="_blank">
+            <span className="text-[#919193]">license</span>
+            <span className="text-black dark:text-white font-medium">MIT</span>
+          </a>
+        </div>
+      </div>
+    </div>
+    <div className="flex justify-between flex-wrap mt-10 lg:mt-30">
+      <div className="pr-2 w-1/4 max-lg:pb-3 max-sm:px-0 max-lg:w-1/2 max-sm:w-full z-0">
+        <div className="relative w-full h-[168px] max-lg:h-[142px] overflow-hidden">
+          <a href="/get-started" className="hover:bg-black/2 dark:hover:bg-white/2 border-black/10 dark:border-white/10 border border-solid rounded-lg h-full px-5 py-6 absolute z-10 flex flex-col justify-between w-full">
+            <div className="text-2xl font-medium text-black dark:text-white">Simple & Easy</div>
+            <div className="text-[19px] text-[#919193]">Single binary, minimal config. Start indexing in seconds.</div>
+          </a>
+          <div className="absolute left-0 right-0 top-0 bottom-0 dark:bg-[#313136] opacity-20 z-0" />
+          <div className="absolute left-0 right-0 top-0 bottom-0 backdrop-filter backdrop-blur-[2px] z-0" />
+        </div>
+      </div>
+      <div className="pl-2 pr-2 max-sm:px-0 max-lg:pb-3 max-lg:pr-0 w-1/4 max-lg:w-1/2 max-sm:w-full z-0">
+        <div className="relative w-full h-[168px] max-lg:h-[142px]">
+          <a href="/get-started" className="hover:bg-black/2 dark:hover:bg-white/2 border-black/10 dark:border-white/10 border border-solid rounded-lg h-full px-5 py-6 absolute z-10 flex flex-col justify-between w-full">
+            <div className="text-2xl font-medium text-black dark:text-white">DuckDB-Powered</div>
+            <div className="text-[19px] text-[#919193]">Blazing-fast analytical queries on your indexed data with SQL.</div>
+          </a>
+          <div className="absolute left-0 right-0 top-0 bottom-0 dark:bg-[#313136] opacity-20 z-0" />
+          <div className="absolute left-0 right-0 top-0 bottom-0 backdrop-filter backdrop-blur-[2px] z-0" />
+        </div>
+      </div>
+      <div className="pl-2 pr-2 max-lg:pb-3 max-sm:px-0 max-lg:pl-0 w-1/4 max-lg:w-1/2 max-sm:w-full z-0">
+        <div className="relative w-full h-[168px] max-lg:h-[142px]">
+          <a href="/get-started" className="hover:bg-black/2 dark:hover:bg-white/2 border-black/10 dark:border-white/10 border border-solid rounded-lg h-full px-5 py-6 absolute z-10 flex flex-col justify-between w-full">
+            <div className="text-2xl font-medium text-black dark:text-white">Any EVM Chain</div>
+            <div className="text-[19px] text-[#919193]">Ethereum, Arbitrum, Optimism, Polygon, and any EVM chain.</div>
+          </a>
+          <div className="absolute left-0 right-0 top-0 bottom-0 dark:bg-[#313136] opacity-20 z-0" />
+          <div className="absolute left-0 right-0 top-0 bottom-0 backdrop-filter backdrop-blur-[2px] z-0" />
+        </div>
+      </div>
+      <div className="pl-2 w-1/4 max-sm:px-0 max-lg:w-1/2 max-sm:w-full z-0">
+        <div className="relative w-full h-[168px] max-lg:h-[142px]">
+          <a href="/get-started" className="hover:bg-black/2 dark:hover:bg-white/2 border-black/10 dark:border-white/10 border border-solid rounded-lg h-full px-5 py-6 absolute z-10 flex flex-col justify-between w-full">
+            <div className="text-2xl font-medium text-black dark:text-white">Arbitrary Events</div>
+            <div className="text-[19px] text-[#919193]">Index any event from any contract using signatures or ABI.</div>
+          </a>
+          <div className="absolute left-0 right-0 top-0 bottom-0 dark:bg-[#313136] opacity-20 z-0" />
+          <div className="absolute left-0 right-0 top-0 bottom-0 backdrop-filter backdrop-blur-[2px] z-0" />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<article className="vocs_Content max-w-3xl mx-auto">
+
+## What is quixote?
+
+**quixote** is a lightweight, high-performance EVM event indexer built in Rust. It lets you capture, store, and query blockchain events with minimal setup. Get it up and running in two commands.
+
+Index and query on-chain data from stablecoins, RWAs, DeFi protocols, or any asset on EVM-compatible blockchains.
+
+Just point it at an RPC, specify the events you care about, and start querying your data with SQL.
+
+## Why quixote?
+
+- **Simple & Easy to Run**: Single binary and minimal configuration. Just point to an RPC and start indexing. Great as a dev tool.
+- **DuckDB-Powered**: Built on DuckDB for fast analytical queries and file-based storage, without requiring extra services.
+- **Any EVM Chain**: Works with Ethereum, Arbitrum, Optimism, Polygon, and any EVM-compatible chain.
+- **Arbitrary Events**: Index any event from any smart contract. Just provide the event signature or ABI with optional filters.
+- **Auto Resume**: Automatically resumes from the last synced block. Never lose progress.
+- **Built-in Frontend**: Comes with an embedded web UI to visualize and explore your indexed data.
+- **YAML Configuration**: Advanced filtering and multi-job support via configuration files.
+- **Built in Rust**: Fast, safe, and memory-efficient by design.
+- **Built for Production**: Instrumented to run in production, with pluggable storage and much more.
+
+## Examples
+
+Note: Use your own RPC endpoint. Some of these examples may not work with free public RPCs, as they may contain a large numbers of events and quixote will generate a high volume of requests.
+
+### 💵 USDC Transfers
+
+Index all USDC stablecoin mint and burn events on Ethereum mainnet.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48 \
+  -e "Mint(address indexed minter, address indexed to, uint256 amount)" \
+  -e "Burn(address indexed burner, uint256 amount)" \
+  -s 6082465
+```
+
+
+
+### 🏦 Securitize BUIDL Fund
+
+Track BlackRock's tokenized treasury fund (BUIDL) transfers.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x7712c34205737192402172409a8F7ccef8aA2AEc \
+  -e "Transfer(address indexed from, address indexed to, uint256 value)" \
+  -s 19343293
+```
+
+### 🦄 Index Uniswap V4 Swaps
+
+Index all Uniswap V4 pool creations and all swaps for the ETH/USDC pair.
+
+```yaml
+# place this into a config.yaml file
+index_jobs:
+  - rpc_url: "https://gateway.tenderly.co/public/mainnet"
+    contract: "0x000000000004444c5dc75cB358380D2e3dE08A90"
+    start_block: 21688329
+    events:
+      - full_signature: "Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)"
+
+  - rpc_url: "https://gateway.tenderly.co/public/mainnet"
+    contract: "0x000000000004444c5dc75cB358380D2e3dE08A90"
+    start_block: 21688329
+    events:
+      - full_signature: "Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)"
+        filters:
+          id:
+            - "0x21c67e77068de97969ba93d4aab21826d33ca12bb9f565d8496e8fda8a82ca27"
+```
+
+```bash
+quixote --config config.yaml
+```
+
+### 🪙 Ethereum Deposit Contract
+
+Indexes the Ethereum deposit contract, where an event is emitted every time someone deposits a validator to join the proof-of-stake network.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x00000000219ab540356cBB839Cbe05303d7705Fa \
+  -e "DepositEvent(bytes pubkey, bytes withdrawal_credentials, bytes amount, bytes signature, bytes index)" \
+  -s 11052984
+```
+
+### 🟣 Polygon Agglayer
+
+Index bridges between Ethereum mainnet and Polygon's Agglayer.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -c 0x2a3dd3eb832af982ec71669e178424b10dca2ede \
+  -e "ClaimEvent(uint256 globalIndex, uint32 originNetwork, address originAddress, address destinationAddress, uint256 amount)" \
+  -e "BridgeEvent (uint8 leafType, uint32 originNetwork, address originAddress, uint32 destinationNetwork, address destinationAddress, uint256 amount, bytes metadata, uint32 depositCount)" \
+  -s 16896718
+```
+
+For more examples involving multiple RPCs, complex filter setups, and further documentation, check out the [Get Started guide](/get-started).
+
+---
+
+<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', marginTop: '48px', marginBottom: '24px' }}>
+  <a href="https://bilinearlabs.io" target="_blank" rel="noreferrer noopener">
+    <img src="/bilinearlabs.png" alt="Bilinear Labs" style={{ height: '50px', marginBottom: '20px' }} />
+  </a>
+  <p style={{ fontSize: '1.4rem', marginBottom: '16px' }}>
+    Built and maintained by <a href="https://bilinearlabs.io" target="_blank" rel="noreferrer noopener" style={{ fontWeight: '600' }}>Bilinear Labs</a>
+  </p>
+  <p style={{ color: '#919193', maxWidth: '650px', lineHeight: '1.7', fontSize: '1.15rem' }}>
+    Need help with custom indexing solutions, high-performance backends, or managed infrastructure? We're happy to help. Whether it's tailoring quixote for your specific use case, building something bespoke, or running the infrastructure so you don't have to. Feel free to <a href="mailto:contact@bilinearlabs.io">reach out</a>.
+  </p>
+</div>
+
+</article>

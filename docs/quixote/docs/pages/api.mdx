@@ -1,12 +1,10 @@
-# Quixote REST API
+# API
 
-This document provides examples for using the Quixote REST API endpoints.
+The built-in REST API makes it easy to query your indexed data programmatically.
 
 ## Base URL
 
 The API runs on `http://localhost:9720` by default.
-
----
 
 ## Endpoints Overview
 
@@ -17,7 +15,7 @@ The API runs on `http://localhost:9720` by default.
 | `/db_schema` | GET | Get database schema |
 | `/raw_query` | POST | Execute a raw SQL query |
 
----
+
 
 ## 1. List Events
 
@@ -61,7 +59,7 @@ curl http://localhost:9720/list_events
 | `lastBlock` | number | Last indexed block for this event |
 | `eventCount` | number | Total number of indexed events |
 
----
+
 
 ## 2. List Contracts
 
@@ -93,7 +91,7 @@ curl http://localhost:9720/list_contracts
 |-------|------|-------------|
 | `contract_address` | string | Contract address (hex with 0x prefix) |
 
----
+
 
 ## 3. Database Schema
 
@@ -154,7 +152,7 @@ This endpoint is useful for discovering the structure of event tables dynamicall
 
 > 💡 The `hash_prefix` is the first 5 hex characters of the event's keccak256 hash — for example, `ddf25` comes from `0xddf252ad...`
 
----
+
 
 ## 4. Raw Query
 
@@ -230,7 +228,7 @@ curl -X POST http://localhost:9720/raw_query \
 }
 ```
 
----
+
 
 ## Error Responses
 
@@ -265,7 +263,7 @@ Response:
 }
 ```
 
----
+
 
 ## Pretty-printing Responses
 
@@ -281,40 +279,7 @@ Or Python:
 curl http://localhost:9720/list_events | python3 -m json.tool
 ```
 
----
 
-## Testing Script
-
-A simple bash script to test all endpoints:
-
-```bash
-#!/bin/bash
-
-API_URL="http://localhost:9720"
-
-echo "=== List Events ==="
-curl -s "$API_URL/list_events" | jq '.'
-
-echo -e "\n=== List Contracts ==="
-curl -s "$API_URL/list_contracts" | jq '.'
-
-echo -e "\n=== Database Schema ==="
-curl -s "$API_URL/db_schema" | jq '.'
-
-echo -e "\n=== Raw Query (blocks) ==="
-curl -s -X POST "$API_URL/raw_query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "SELECT * FROM blocks_1 LIMIT 5"}' | jq '.'
-
-echo -e "\n=== Raw Query (indexing progress) ==="
-curl -s -X POST "$API_URL/raw_query" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "SELECT * FROM quixote_info"}' | jq '.'
-```
-
-Save as `test_api.sh`, make executable (`chmod +x test_api.sh`), and run.
-
----
 
 ## Notes
 
