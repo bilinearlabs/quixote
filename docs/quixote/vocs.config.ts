@@ -1,7 +1,7 @@
 import { defineConfig } from 'vocs'
 
 export default defineConfig({
-  basePath: '/quixote',
+  //basePath: '/quixote',
   title: 'quixote',
   description: 'Simple and flexible Rust-based EVM event indexer powered by DuckDB.',
   logoUrl: '/quixote.png',
