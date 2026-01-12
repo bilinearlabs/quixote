@@ -233,9 +233,9 @@ impl Storage for DuckDBStorage {
                 // Insert the always present fields (chain_id is encoded in table name)
                 let mut row_vals: Vec<String> = vec![
                     log.block_number.unwrap().to_string(),
-                    log.transaction_hash.unwrap().to_string(),
+                    log.transaction_hash.unwrap().to_string().to_lowercase(),
                     log.log_index.unwrap().to_string(),
-                    log.address().to_string(),
+                    log.address().to_string().to_lowercase(),
                 ];
 
                 // Parse the indexed and non-indexed parameters and convert them to strings ready for the DB.
@@ -259,7 +259,7 @@ impl Storage for DuckDBStorage {
                     [
                         log.block_number.unwrap().to_string(),
                         chain_id.to_string(),
-                        event_hash.clone(),
+                        event_hash.clone().to_lowercase(),
                     ],
                 )?;
             }
@@ -1045,7 +1045,7 @@ impl DuckDBStorage {
     /// For complex types (arrays, tuples), flattens them into a JSON-like string format.
     fn dyn_sol_value_to_string(value: &DynSolValue) -> String {
         match value {
-            DynSolValue::Address(a) => Self::remove_address_padding(&a.to_string()),
+            DynSolValue::Address(a) => Self::remove_address_padding(&a.to_string().to_lowercase()),
             DynSolValue::Bool(b) => b.to_string(),
             DynSolValue::Int(i, _) => i.to_string(),
             DynSolValue::Uint(u, _) => u.to_string(),
