@@ -99,19 +99,26 @@ impl EventProcessor {
                                         &self.event_selectors,
                                         Some(last_processed),
                                     )?;
-                                } else if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
-                                    error!("Error adding events: {}", e);
-                                    // Ensure the database is in a consistent state.
-                                    self.storage.synchronize_events(
-                                        self.chain_id,
-                                        &self.event_selectors,
-                                        Some(last_processed),
-                                    )?;
-                                    return Err(e);
                                 } else {
+                                    let event_count = ev.len();
+                                    let insert_start = std::time::Instant::now();
+                                    if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
+                                        error!("Error adding events: {}", e);
+                                        // Ensure the database is in a consistent state.
+                                        self.storage.synchronize_events(
+                                            self.chain_id,
+                                            &self.event_selectors,
+                                            Some(last_processed),
+                                        )?;
+                                        return Err(e);
+                                    }
+                                    let insert_elapsed = insert_start.elapsed();
                                     // No need to synchronize the database here, as we have already done it within
                                     // add_events.
-                                    info!("Stored events from blocks [{}-{}]", last_processed + 1, end);
+                                    info!(
+                                        "Stored {} events from blocks [{}-{}] in {:?}",
+                                        event_count, last_processed + 1, end, insert_elapsed
+                                    );
                                 }
 
                                 // Update the cursor so that the next expected start is directly
