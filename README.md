@@ -78,6 +78,15 @@ And `quixote` ships with a built-in frontend that you can use to query data in a
 - **YAML configuration**: Advanced filtering and multi-job support via config files.
 - **Built in Rust**: Fast, safe, and memory-efficient.
 
+## Data integrity
+
+Data integrity, or, in other words, ensuring that the data indexed in your database reflects exactly what happened on-chain—is our top priority. To achieve this, we have implemented several measures:
+* By default, the indexer runs on finalized blocks, meaning no reorgs can occur that would alter transaction history.
+* We process events in atomic batches. In the event of a crash or failure of any kind, the indexer remains in a consistent state.
+* We process events in order, meaning we never perform out-of-order inserts. This simplifies recovery: if the indexer stops or errors, there is no need to roll back or fill gaps.
+* We have conducted extensive testing, including reconciliation against the on-chain state, to ensure we can faithfully reproduce it from the indexed events.
+
+Learn more about [data integrity](https://quixote.bilinearlabs.io/data-integrity).
 
 ## License
 
