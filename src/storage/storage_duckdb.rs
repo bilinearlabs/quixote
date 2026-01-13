@@ -229,6 +229,9 @@ impl Storage for DuckDBStorage {
 
             let mut appender = tx.appender(&table_name)?;
 
+            // Track the max block number for this table's events (for single UPDATE at end)
+            let mut max_block_number: u64 = 0;
+
             for log in table_events {
                 // Insert the always present fields (chain_id is encoded in table name)
                 let mut row_vals: Vec<String> = vec![
@@ -237,6 +240,9 @@ impl Storage for DuckDBStorage {
                     log.log_index.unwrap().to_string(),
                     log.address().to_string().to_lowercase(),
                 ];
+
+                // Track max block for the UPDATE at end of table processing
+                max_block_number = max_block_number.max(log.block_number.unwrap());
 
                 // Parse the indexed and non-indexed parameters and convert them to strings ready for the DB.
                 if let Ok(DecodedEvent { indexed, body, .. }) =
@@ -253,16 +259,17 @@ impl Storage for DuckDBStorage {
                 appender.append_row(duckdb::appender_params_from_iter(
                     row_vals.iter().map(|s| s.as_str()),
                 ))?;
-
-                tx.execute(
-                    "UPDATE event_descriptor SET last_block = ? WHERE chain_id = ? AND event_hash = ?",
-                    [
-                        log.block_number.unwrap().to_string(),
-                        chain_id.to_string(),
-                        event_hash.clone().to_lowercase(),
-                    ],
-                )?;
             }
+
+            // Update event_descriptor ONCE per table (not per event) with the max block number
+            tx.execute(
+                "UPDATE event_descriptor SET last_block = ? WHERE chain_id = ? AND event_hash = ?",
+                [
+                    max_block_number.to_string(),
+                    chain_id.to_string(),
+                    event_hash.clone(),
+                ],
+            )?;
 
             // Flush the appender for this table
             appender.flush()?;
