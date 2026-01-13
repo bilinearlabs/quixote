@@ -16,6 +16,9 @@ index_jobs:
       - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
         filters:
           from: "0x12347F958D2ee523a2206206994597C13D831ec7"
+  - rpc_url: "https://eth.llamarpc.com"
+    contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    events:
       - full_signature: "Approval(address indexed owner, address indexed spender, uint256 value)"
 
   - rpc_url: "https://polygon-rpc.com"
@@ -29,3 +32,6 @@ And run as follows:
 ```bash
 quixote --config quixote_config.yaml
 ```
+
+> Note
+> Bear in mind that it is not possible to join multiple events in a single indexing job when using advanced filters like **from**, **to**, etc.

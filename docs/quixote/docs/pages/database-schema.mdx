@@ -6,14 +6,15 @@ Quixote uses DuckDB with a dynamic schema that adapts to your indexed events.
 
 | Table | Description |
 |-------|-------------|
-| `quixote_info` | Metadata about indexed blocks |
 | `blocks_<chain_id>` | Record of all indexed blocks with timestamps |
-| `event_descriptor` | Registry of indexed event types |
+| `event_descriptor` | Registry of indexed event types and their indexing status |
 | `event_<chain_id>_<event_name>_<hash_prefix>` | One table per event type |
 
 > 💡 The `hash_prefix` is the first 5 hex characters of the event's keccak256 hash. For example, `ddf25` comes from `0xddf252ad...`
 
 ## Query Your Data
+
+To query your data, you can either using the `/raw_query` endpoint of the API, or use some third-party tool to open the DB. However, the later requires to stop the indexer, as only one process can access the DB file at the same time.
 
 ```sql
 -- Check indexing progress

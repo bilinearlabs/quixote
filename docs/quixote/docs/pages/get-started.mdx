@@ -21,9 +21,16 @@ quixote -r https://gateway.tenderly.co/public/mainnet \
 
 ## Install
 
+### Pre-requisites
+
+If you aim to build the source code, the following will be needed:
+
+1. The building tools for the **Rust** programming language. Please, check out the official docs at [get-started](https://rust-lang.org/learn/get-started/) for the installation guidelines.
+2. To run the frontend, a complete Python environment is needed. You'll need the **Conda** package manager. We recommend using **Miniconda**, as it is a lightweight version of **Conda**. Please, follow the official [docs](https://www.anaconda.com/docs/getting-started/miniconda/install#quickstart-install-instructions) to install **Miniconda** in your system.
+
 ### Pre-built Binaries
 
-In a single command you can install it as follows.
+The easiest way to run **Quixote**: a single command that will install and set-up everything for you.
 
 ```bash
 curl -fsSL https://quixote.bilinearlabs.io/install | bash -s
@@ -33,13 +40,21 @@ See our [releases page](https://github.com/bilinearlabs/quixote/releases).
 
 ### Build from Source
 
+This method allows running the latest version of **Quixote** without waiting for an official release. Please, ensure you've followed the steps listed in the pre-requisites section before going forward.
+
 ```bash
 cargo build --release
 ```
 
+Then, if you plan to run the frontend, prepare the **Python** environment.
+
+```bash
+conda create --prefix=./quixote_frontend_env python=3.11 streamlit pyarrow plotly -y
+```
+
 ### Run from docker
 
-Every release is pushed as a docker image.
+Every release is pushed as a docker image to our GitHub registry:
 
 ```bash
 docker pull ghcr.io/bilinearlabs/quixote:0.1.0
@@ -50,21 +65,59 @@ docker pull ghcr.io/bilinearlabs/quixote:0.1.0
 ## Command Line Interface
 
 ```
+Quixote
+
 Usage: quixote [OPTIONS]
 
 Options:
-  -r, --rpc-host <RPC_HOST>          RPC URL to index (supports basic auth)
-  -c, --contract <CONTRACT>          Contract address to index
-  -e, --event <EVENT>                Event signature(s) to index (can be repeated)
-  -a, --abi-spec <ABI_SPEC>          Path to ABI JSON (indexes all events)
-  -s, --start-block <START_BLOCK>    Starting block number [default: 0]
-  -d, --database <DATABASE>          Database file path [default: quixote_indexer.duckdb]
-  -j, --api-server <API_SERVER>      API server address [default: 127.0.0.1:9720]
-      --block-range <BLOCK_RANGE>    Blocks per RPC request [default: 10000]
-  -v, --verbosity <VERBOSITY>        Log level: 0=WARN, 1=INFO, 2=DEBUG, 3=TRACE
-      --disable-frontend             Don't launch the dashboard
-      --strict-mode                  Stop on first processing error
-      --config <CONFIG>              Path to YAML configuration file
-  -h, --help                         Print help
-  -V, --version                      Print version
+  -r, --rpc-host <RPC_HOST>
+          RPC URL to index.
+
+          Format: <scheme>://[<username>:<password>@]<host>[:<port>]
+
+          Example for an RPC with basic auth => http://user:pass@localhost:8545
+
+          Example for an authless RPC => http://localhost:8545
+  -c, --contract <CONTRACT>
+          Contract to index.
+          Example: 0x1234567890123456789012345678901234567890
+  -e, --event <EVENT>
+          Event to index as defined by the contract's ABI.
+          Example: Transfer(address indexed from, address indexed to, uint256 amount)
+  -s, --start-block <START_BLOCK>
+          Start block to index (decimal). If the database is not empty, the indexer will resume from the last synchronized block, thus the given start block would be ignored.
+          Example => 28837711
+          Default: 0
+  -d, --database <DATABASE>
+          Path to the database file. Default: etherduck_indexer.duckdb
+  -a, --abi-spec <ABI_SPEC>
+          Path for the ABI JSON spec of the indexed contract. When give, the entire set of events defined in the ABI will be indexed.
+  -j, --api-server <API_SERVER>
+          Interface and port in which the API server will listen for requests. Defaults to 127.0.0.1:9720
+      --block-range <BLOCK_RANGE>
+          Block range for the RPC requests. Applies to all collectors. [default: 100]
+  -v, --verbosity <VERBOSITY>
+          Verbosity level. 0 = WARN, 1 = INFO (default), 2 = DEBUG, 3 = TRACE [default: 1]
+      --disable-frontend
+          Disable the frontend application.
+      --frontend-address <FRONTEND_ADDRESS>
+          Frontend listening address [default: 127.0.0.1]
+      --frontend-port <FRONTEND_PORT>
+          Frontend listening port [default: 8501]
+      --strict-mode
+          Enable strict mode (stops the indexing when an event fails to be processed)
+      --config <CONFIG>
+          Path to the configuration file. When used, the command line arguments will be ignored.
+      --metrics
+          Enable the Prometheus metrics endpoint.
+      --metrics-address <METRICS_ADDRESS>
+          Metrics server listening address [default: 127.0.0.1]
+      --metrics-port <METRICS_PORT>
+          Metrics server listening port [default: 5054]
+      --metrics-allow-origin <METRICS_ALLOW_ORIGIN>
+          Optional Access-Control-Allow-Origin value for the metrics endpoint
+  -h, --help
+          Print help (see more with '--help')
+  -V, --version
+          Print version
 ```
