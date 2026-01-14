@@ -7,7 +7,7 @@ use crate::{
     EventStatus,
     constants::*,
     error_codes::ERROR_CODE_DATABASE_LOCKED,
-    storage::{ContractDescriptorDb, EventDescriptorDb, Storage},
+    storage::{ContractDescriptorDb, EventDescriptorDb, Storage, StorageFactory},
 };
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
@@ -40,25 +40,15 @@ pub struct DuckDBStorage {
     event_descriptors: RwLock<HashMap<String, Event>>,
 }
 
-/// Simple factory pattern to allow opening a new connection to the same database from a task.
-///
-/// # Description
-///
-/// The main purpose of this object is to allow opening concurrent connections for reading from the database.
-/// The main use case is the REST API, which needs to open a new connection for each request. Using this entry
-/// point, we avoid lock contention.
-#[derive(Clone)]
-pub struct DuckDBStorageFactory {
-    db_path: String,
-}
-
-impl DuckDBStorageFactory {
-    pub fn new(db_path: String) -> Self {
-        Self { db_path }
-    }
-
-    pub fn create(&self) -> Result<DuckDBStorage> {
-        DuckDBStorage::with_db(&self.db_path)
+impl StorageFactory for DuckDBStorage {
+    /// Creates a new connection to the same database for concurrent access.
+    ///
+    /// This allows the REST API to open separate connections from the indexer,
+    /// reducing lock contention during backfill operations.
+    ///
+    /// **Note**: meant for reading access only.
+    fn create_storage(&self) -> Result<Box<dyn Storage>> {
+        Ok(Box::new(DuckDBStorage::with_db(&self.db_path)?))
     }
 }
 
@@ -591,6 +581,67 @@ impl Storage for DuckDBStorage {
             })
             .collect::<Vec<ContractDescriptorDb>>())
     }
+
+    fn set_first_block(&self, chain_id: u64, event: &Event, block_number: u64) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+        conn.execute(
+            "UPDATE event_descriptor SET first_block = ? WHERE chain_id = ? AND event_hash = ?",
+            [
+                block_number.to_string(),
+                chain_id.to_string(),
+                event.selector().to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn describe_database(&self) -> Result<Value> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // Get all tables using SHOW TABLES
+        let mut stmt = conn.prepare("SHOW TABLES")?;
+        let mut rows = stmt.query([])?;
+
+        let mut tables = Vec::new();
+        while let Some(row) = rows.next()? {
+            let table_name: String = row.get(0)?;
+            // Exclude quixote_info table
+            if table_name != DUCKDB_BASE_TABLE_NAME {
+                tables.push(table_name);
+            }
+        }
+
+        // Need to drop the statement and rows before reusing conn
+        drop(rows);
+        drop(stmt);
+
+        // For each table, get its description
+        let mut result = Vec::new();
+        for table_name in tables {
+            let mut desc_stmt = conn.prepare(&format!("DESCRIBE {}", table_name))?;
+            let mut desc_rows = desc_stmt.query([])?;
+
+            let mut columns = serde_json::Map::new();
+            while let Some(row) = desc_rows.next()? {
+                // DESCRIBE returns: column_name, column_type, null, key, default, extra
+                let column_name: String = row.get(0)?;
+                let column_type: String = row.get(1)?;
+                columns.insert(column_name, Value::String(column_type));
+            }
+
+            let mut table_obj = serde_json::Map::new();
+            table_obj.insert(table_name, Value::Object(columns));
+            result.push(Value::Object(table_obj));
+        }
+
+        Ok(Value::Array(result))
+    }
 }
 
 impl DuckDBStorage {
@@ -797,23 +848,6 @@ impl DuckDBStorage {
         conn.execute(
             &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET last_block = ?"),
             [block_number.to_string()],
-        )?;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn set_first_block(&self, chain_id: u64, event: &Event, block_number: u64) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        conn.execute(
-            "UPDATE event_descriptor SET first_block = ? WHERE chain_id = ? AND event_hash = ?",
-            [
-                block_number.to_string(),
-                chain_id.to_string(),
-                event.selector().to_string(),
-            ],
         )?;
         Ok(())
     }
@@ -1092,58 +1126,6 @@ impl DuckDBStorage {
     /// Gets the strict mode for the storage.
     pub fn strict_mode(&self) -> bool {
         self.strict_mode
-    }
-
-    /// Describe the tables in the database.
-    ///
-    /// # Description
-    ///
-    /// Returns a JSON array where each element is an object with a single key (the table name)
-    /// whose value is an object mapping column names to their types.
-    /// The `quixote_info` table is excluded from the results.
-    pub fn describe_database(&self) -> Result<Value> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-
-        // Get all tables using SHOW TABLES
-        let mut stmt = conn.prepare("SHOW TABLES")?;
-        let mut rows = stmt.query([])?;
-
-        let mut tables = Vec::new();
-        while let Some(row) = rows.next()? {
-            let table_name: String = row.get(0)?;
-            // Exclude quixote_info table
-            if table_name != DUCKDB_BASE_TABLE_NAME {
-                tables.push(table_name);
-            }
-        }
-
-        // Need to drop the statement and rows before reusing conn
-        drop(rows);
-        drop(stmt);
-
-        // For each table, get its description
-        let mut result = Vec::new();
-        for table_name in tables {
-            let mut desc_stmt = conn.prepare(&format!("DESCRIBE {}", table_name))?;
-            let mut desc_rows = desc_stmt.query([])?;
-
-            let mut columns = Map::new();
-            while let Some(row) = desc_rows.next()? {
-                // DESCRIBE returns: column_name, column_type, null, key, default, extra
-                let column_name: String = row.get(0)?;
-                let column_type: String = row.get(1)?;
-                columns.insert(column_name, Value::String(column_type));
-            }
-
-            let mut table_obj = Map::new();
-            table_obj.insert(table_name, Value::Object(columns));
-            result.push(Value::Object(table_obj));
-        }
-
-        Ok(Value::Array(result))
     }
 }
 

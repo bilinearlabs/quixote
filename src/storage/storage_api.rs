@@ -39,6 +39,8 @@ pub trait Storage: Send + Sync + 'static + Any {
     fn last_block(&self, chain_id: u64, event: &Event) -> Result<u64>;
     /// Gets the first block number that has been indexed for a specific chain.
     fn first_block(&self, chain_id: u64, event: &Event) -> Result<u64>;
+    /// Sets the first block number for an event on a specific chain.
+    fn set_first_block(&self, chain_id: u64, event: &Event, block_number: u64) -> Result<()>;
     /// Sets the last block number for the specified events on a specific chain.
     ///
     /// # Description
@@ -63,4 +65,18 @@ pub trait Storage: Send + Sync + 'static + Any {
     fn send_raw_query(&self, query: &str) -> Result<Value>;
     /// Lists the contracts indexed in the storage.
     fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>>;
+    /// Returns the database schema including all tables and their column definitions.
+    fn describe_database(&self) -> Result<Value>;
+}
+
+/// Trait for creating storage instances.
+///
+/// # Description
+///
+/// This trait abstracts over the creation of storage instances for concurrent access. Needed to allow passing
+/// different connections to the indexer and the API server when the underlying DB engine does not support
+/// concurrent access.
+pub trait StorageFactory: Send + Sync {
+    /// Creates or returns a storage instance suitable for concurrent access.
+    fn create_storage(&self) -> Result<Box<dyn Storage>>;
 }

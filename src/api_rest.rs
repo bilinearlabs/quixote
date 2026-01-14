@@ -3,7 +3,7 @@
 
 use crate::{
     CancellationToken,
-    storage::{ContractDescriptorDb, DuckDBStorageFactory, EventDescriptorDb, Storage},
+    storage::{ContractDescriptorDb, EventDescriptorDb, StorageFactory},
 };
 use anyhow::Result;
 use axum::{
@@ -60,10 +60,10 @@ pub struct DbSchemaResponse {
 /// This handler is used to list all the events indexed in the database along their indexing status.
 #[instrument(skip(factory))]
 async fn list_events_handler(
-    State(factory): State<Arc<DuckDBStorageFactory>>,
+    State(factory): State<Arc<dyn StorageFactory>>,
 ) -> Result<Json<ListEventsResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Create a new storage instance with a new connection for this request
-    let storage = factory.create().map_err(|e| {
+    let storage = factory.create_storage().map_err(|e| {
         error!("Failed to create database connection: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -72,7 +72,7 @@ async fn list_events_handler(
             }),
         )
     })?;
-    match storage.list_indexed_events() {
+    match storage.list_indexed_events().await {
         Ok(events) => {
             debug!("Events listed successfully");
             trace!("Events: {:?}", events);
@@ -97,10 +97,10 @@ async fn list_events_handler(
 /// This handler is used to list all the contracts indexed in the database.
 #[instrument(skip(factory))]
 async fn list_contracts_handler(
-    State(factory): State<Arc<DuckDBStorageFactory>>,
+    State(factory): State<Arc<dyn StorageFactory>>,
 ) -> Result<Json<ListContractsResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Create a new storage instance with a new connection for this request
-    let storage = factory.create().map_err(|e| {
+    let storage = factory.create_storage().map_err(|e| {
         error!("Failed to create database connection: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -109,7 +109,7 @@ async fn list_contracts_handler(
             }),
         )
     })?;
-    match storage.list_contracts() {
+    match storage.list_contracts().await {
         Ok(contracts) => {
             debug!("Contracts listed successfully");
             trace!("Contracts: {:?}", contracts);
@@ -134,7 +134,7 @@ async fn list_contracts_handler(
 /// This handler is used to execute SQL queries against the indexer database. Only SELECT queries are supported.
 #[instrument(skip(factory, payload), fields(query = %payload.query))]
 async fn raw_query_handler(
-    State(factory): State<Arc<DuckDBStorageFactory>>,
+    State(factory): State<Arc<dyn StorageFactory>>,
     Json(payload): Json<RawQueryRequest>,
 ) -> Result<Json<RawQueryResponse>, (StatusCode, Json<ErrorResponse>)> {
     // First, check if the query is a SELECT query.
@@ -154,7 +154,7 @@ async fn raw_query_handler(
     }
 
     // Create a new storage instance with a new connection for this request.
-    let storage = factory.create().map_err(|e| {
+    let storage = factory.create_storage().map_err(|e| {
         error!("Failed to create a database connection: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -165,7 +165,7 @@ async fn raw_query_handler(
     })?;
 
     // Send the query to the handler.
-    match storage.send_raw_query(&payload.query) {
+    match storage.send_raw_query(&payload.query).await {
         Ok(result) => {
             debug!("Query successfully served");
             trace!("Query result: {:?}", result);
@@ -193,9 +193,9 @@ async fn raw_query_handler(
 /// and their column definitions.
 #[instrument(skip(factory))]
 async fn db_schema_handler(
-    State(factory): State<Arc<DuckDBStorageFactory>>,
+    State(factory): State<Arc<dyn StorageFactory>>,
 ) -> Result<Json<DbSchemaResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let storage = factory.create().map_err(|e| {
+    let storage = factory.create_storage().map_err(|e| {
         error!("Failed to create database connection: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -205,7 +205,7 @@ async fn db_schema_handler(
         )
     })?;
 
-    match storage.describe_database() {
+    match storage.describe_database().await {
         Ok(schema) => {
             debug!("Database schema retrieved successfully");
             trace!("Schema: {:?}", schema);
@@ -224,7 +224,7 @@ async fn db_schema_handler(
 }
 
 /// Creates and returns the REST API router
-pub fn create_router(factory: Arc<DuckDBStorageFactory>) -> Router {
+pub fn create_router(factory: Arc<dyn StorageFactory>) -> Router {
     Router::new()
         .route("/list_events", get(list_events_handler))
         .route("/list_contracts", get(list_contracts_handler))
@@ -236,7 +236,7 @@ pub fn create_router(factory: Arc<DuckDBStorageFactory>) -> Router {
 /// Starts the REST API server in a separate task
 pub async fn start_api_server(
     server_address: &str,
-    storage_backend: Arc<DuckDBStorageFactory>,
+    storage_backend: Arc<dyn StorageFactory>,
     cancellation_token: CancellationToken,
 ) -> Result<()> {
     let server_address = server_address.to_string();

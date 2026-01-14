@@ -34,8 +34,8 @@ repos:
       types: [rust]
       pass_filenames: false
       stages: [pre-push]
-    - id: test
-      name: test
+    - id: cargo-test
+      name: cargo test
       description: Run tests
       entry: cargo test
       language: system
