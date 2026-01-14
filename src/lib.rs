@@ -147,3 +147,17 @@ pub struct EventStatus {
     pub last_block: u64,
     pub event_count: usize,
 }
+
+/// Extension trait for displaying `Option<Address>` with a fallback.
+pub trait OptionalAddressDisplay {
+    fn display_or_none(&self) -> String;
+}
+
+impl OptionalAddressDisplay for Option<alloy::primitives::Address> {
+    fn display_or_none(&self) -> String {
+        match self {
+            Some(addr) => addr.to_string(),
+            None => "None".to_string(),
+        }
+    }
+}

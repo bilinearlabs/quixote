@@ -34,7 +34,7 @@ pub struct FileConfiguration {
 #[derive(Debug, Deserialize, Clone)]
 pub struct IndexJob {
     pub rpc_url: SecretString,
-    pub contract: String,
+    pub contract: Option<String>,
     pub start_block: Option<u64>,
     pub block_range: Option<usize>,
     pub events: Option<Vec<EventJob>>,
@@ -165,30 +165,26 @@ impl FileConfiguration {
     ///
     /// This function will log an error and exit if the RPC host string cannot be parsed.
     pub fn from_args(args: &IndexingArgs) -> Self {
-        let index_jobs = if let Some(ref contract) = args.contract {
-            let events = args.event.as_ref().map(|evts| {
-                evts.iter()
-                    .map(|sig| EventJob {
-                        full_signature: sig.clone(),
-                        filters: None,
-                    })
-                    .collect()
-            });
+        let events = args.event.as_ref().map(|evts| {
+            evts.iter()
+                .map(|sig| EventJob {
+                    full_signature: sig.clone(),
+                    filters: None,
+                })
+                .collect()
+        });
 
-            // Use the RPC URL directly (standard URL format expected)
-            let rpc_url = SecretString::from(args.rpc_host.clone().unwrap_or_default());
+        // Use the RPC URL directly (standard URL format expected)
+        let rpc_url = SecretString::from(args.rpc_host.clone().unwrap_or_default());
 
-            vec![IndexJob {
-                rpc_url,
-                contract: contract.clone(),
-                start_block: args.start_block.as_ref().and_then(|s| s.parse().ok()),
-                block_range: Some(args.block_range),
-                events,
-                abi_path: args.abi_spec.clone(),
-            }]
-        } else {
-            vec![]
-        };
+        let index_jobs = vec![IndexJob {
+            rpc_url,
+            contract: args.contract.clone(),
+            start_block: args.start_block.as_ref().and_then(|s| s.parse().ok()),
+            block_range: Some(args.block_range),
+            events,
+            abi_path: args.abi_spec.clone(),
+        }];
 
         Self {
             index_jobs,

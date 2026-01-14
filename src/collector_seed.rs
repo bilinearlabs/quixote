@@ -11,6 +11,7 @@
 //! i.e. they synchronized up to different blocks if the ABI mode is selected.
 
 use crate::{
+    OptionalAddressDisplay,
     configuration::{FilterMap, IndexerConfiguration},
     constants,
     storage::{DuckDBStorage, Storage},
@@ -43,7 +44,7 @@ pub struct CollectorSeed {
     /// The RPC URL to connect to the network (already parsed and validated).
     pub rpc_url: Url,
     /// The contract address to index.
-    pub contract_address: Address,
+    pub contract_address: Option<Address>,
     /// The events to index from the contract.
     pub events: Vec<Event>,
     /// The block number to start indexing from.
@@ -68,7 +69,7 @@ impl CollectorSeed {
         db_conn: &DuckDBStorage,
         chain_id: u64,
         rpc_url: Url,
-        contract_address: Address,
+        contract_address: Option<Address>,
         events: Vec<Event>,
         start_block: u64,
         filter_config: Option<FilterMap>,
@@ -408,12 +409,16 @@ impl CollectorSeed {
             let chain_id = chain_id_resolver(job.rpc_url.expose_secret().to_string()).await?;
 
             // Parse the contract address
-            let contract_address = job.contract.parse::<Address>().map_err(|_| {
-                anyhow::anyhow!(format!(
-                    "Failed to parse the given contract address: {}",
-                    job.contract
-                ))
-            })?;
+            let contract_address = if let Some(contract) = &job.contract {
+                Some(contract.parse::<Address>().map_err(|_| {
+                    anyhow::anyhow!(format!(
+                        "Failed to parse the given contract address: {}",
+                        contract
+                    ))
+                })?)
+            } else {
+                None
+            };
 
             let mut coming_from_abi = false;
 
@@ -467,25 +472,35 @@ impl CollectorSeed {
                     .unwrap_or(false);
 
                 if events.len() > 1 && has_advanced_filters {
+                    let contract_info = job
+                        .contract
+                        .as_ref()
+                        .map(|c| format!(" for contract '{}'", c))
+                        .unwrap_or_default();
+                    let contract_line = job
+                        .contract
+                        .as_ref()
+                        .map(|c| format!("\n            contract: \"{}\"", c))
+                        .unwrap_or_default();
+
                     return Err(anyhow::anyhow!(
-                        "Configuration error: Advanced filters (e.g., 'from', 'to') cannot be used when multiple events are defined in the same index job.\n\n\
-                        You have {} events with filters in contract '{}'.\n\n\
+                        "Configuration error: Advanced filters (e.g., 'from', 'to') cannot be used \
+                        when multiple events are defined in the same index job.\n\n\
+                        You have {} events with filters{}.\n\n\
                         Solution: Split each event into its own index_job entry. For example:\n\n\
                         index_jobs:\n  \
-                          - rpc_url: \"...\"\n    \
-                            contract: \"{}\"\n    \
+                          - rpc_url: \"...\"{}\n    \
                             events:\n      \
                               - full_signature: \"Event1(...)\"\n        \
                                 filters:\n          \
                                   from: [\"0x...\"]\n  \
-                          - rpc_url: \"...\"\n    \
-                            contract: \"{}\"\n    \
+                          - rpc_url: \"...\"{}\n    \
                             events:\n      \
                               - full_signature: \"Event2(...)\"",
                         events.len(),
-                        job.contract,
-                        job.contract,
-                        job.contract
+                        contract_info,
+                        contract_line,
+                        contract_line
                     ));
                 }
 
@@ -522,7 +537,7 @@ impl CollectorSeed {
                 "Created indexing job for chain {:#x} at {} for contract {} with {} event(s), starting from block {}",
                 seed.chain_id,
                 seed.rpc_url,
-                seed.contract_address,
+                seed.contract_address.display_or_none(),
                 seed.events.len(),
                 seed.start_block
             );
@@ -587,7 +602,7 @@ mod tests {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
                 rpc_url: SecretString::from("http://localhost:8545"),
-                contract: TEST_CONTRACT_ADDRESS.to_string(),
+                contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
                 start_block: Some(0),
                 block_range: Some(1000),
                 events: Some(vec![EventJob {
@@ -617,7 +632,7 @@ mod tests {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
                 rpc_url: SecretString::from("http://localhost:8545"),
-                contract: TEST_CONTRACT_ADDRESS.to_string(),
+                contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
                 start_block: Some(0),
                 block_range: Some(1000),
                 events: None,
@@ -645,7 +660,7 @@ mod tests {
             index_jobs: vec![
                 IndexJob {
                     rpc_url: SecretString::from("http://localhost:8545"),
-                    contract: TEST_CONTRACT_ADDRESS.to_string(),
+                    contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
                     start_block: Some(0),
                     block_range: Some(1000),
                     events: Some(vec![EventJob {
@@ -656,7 +671,7 @@ mod tests {
                 },
                 IndexJob {
                     rpc_url: SecretString::from("http://localhost:8545"),
-                    contract: TEST_CONTRACT_ADDRESS.to_string(),
+                    contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
                     start_block: Some(0),
                     block_range: Some(1000),
                     events: Some(vec![EventJob {
@@ -693,7 +708,7 @@ mod tests {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
                 rpc_url: SecretString::from("http://localhost:8545"),
-                contract: TEST_CONTRACT_ADDRESS.to_string(),
+                contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
                 start_block: Some(0),
                 block_range: Some(1000),
                 events: Some(vec![EventJob {
@@ -748,7 +763,7 @@ mod tests {
 
         // Verify the contract address
         let expected_address: Address = TEST_CONTRACT_ADDRESS.parse().unwrap();
-        assert_eq!(seed.contract_address, expected_address);
+        assert_eq!(seed.contract_address, Some(expected_address));
 
         // Verify that exactly one event is included
         assert_eq!(
@@ -837,7 +852,7 @@ mod tests {
 
         // Verify the contract address
         let expected_address: Address = TEST_CONTRACT_ADDRESS.parse().unwrap();
-        assert_eq!(seed.contract_address, expected_address);
+        assert_eq!(seed.contract_address, Some(expected_address));
 
         // Verify that multiple events are included (USDC ABI has many events)
         assert!(
@@ -884,7 +899,7 @@ mod tests {
         let first_seed = &seeds[0];
         assert_eq!(first_seed.chain_id, TEST_CHAIN_ID);
         assert_eq!(first_seed.rpc_url, expected_rpc_url());
-        assert_eq!(first_seed.contract_address, expected_address);
+        assert_eq!(first_seed.contract_address, Some(expected_address));
         assert_eq!(
             first_seed.events.len(),
             1,
@@ -908,7 +923,7 @@ mod tests {
         let second_seed = &seeds[1];
         assert_eq!(second_seed.chain_id, TEST_CHAIN_ID);
         assert_eq!(second_seed.rpc_url, expected_rpc_url());
-        assert_eq!(second_seed.contract_address, expected_address);
+        assert_eq!(second_seed.contract_address, Some(expected_address));
         assert_eq!(
             second_seed.events.len(),
             1,

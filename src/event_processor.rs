@@ -3,7 +3,9 @@
 
 //! Module for the event processor.
 
-use crate::{CancellationToken, RxLogChunk, metrics::MetricsHandle, storage::Storage};
+use crate::{
+    CancellationToken, OptionalAddressDisplay, RxLogChunk, metrics::MetricsHandle, storage::Storage,
+};
 use alloy::{
     primitives::{Address, B256},
     rpc::types::Log,
@@ -27,7 +29,7 @@ pub struct EventProcessor {
     start_block: u64,
     producer_buffer: RxLogChunk,
     cancellation_token: CancellationToken,
-    contract_address: Address,
+    contract_address: Option<Address>,
     metrics: MetricsHandle,
     /// The event selectors (topic0 hashes) that this processor handles.
     /// Used to scope synchronize_events calls to only the events being processed.
@@ -38,7 +40,7 @@ impl EventProcessor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
-        contract_address: Address,
+        contract_address: Option<Address>,
         storage: Arc<dyn Storage + Send + Sync>,
         start_block: u64,
         producer_buffer: RxLogChunk,
@@ -127,7 +129,7 @@ impl EventProcessor {
                                 *last_processed_shared.lock().unwrap() = last_processed;
 
                                 debug!("Processed events from blocks [{}-{}]", last_processed + 1, end);
-                                self.metrics.record_indexed_block(self.chain_id, &self.contract_address.to_string(), last_processed);
+                                self.metrics.record_indexed_block(self.chain_id, &self.contract_address.display_or_none(), last_processed);
                             }
                         }
                         None => {
