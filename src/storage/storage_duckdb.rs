@@ -233,6 +233,13 @@ impl Storage for DuckDBStorage {
             let mut max_block_number: u64 = 0;
 
             for log in table_events {
+                // Check number of topics
+                let log_topics = log.topics().len();
+                let event_topics = parsed_event.num_topics();
+                if log_topics != event_topics {
+                    continue;
+                }
+
                 // Insert the always present fields (chain_id is encoded in table name)
                 let mut row_vals: Vec<String> = vec![
                     log.block_number.unwrap().to_string(),
@@ -756,7 +763,7 @@ impl DuckDBStorage {
                         block_number UBIGINT NOT NULL,
                         transaction_hash VARCHAR NOT NULL,
                         log_index USMALLINT NOT NULL,
-                        contract_address VARCHAR NOT NULL,
+                        contract_address VARCHAR,
                 ",
             );
 
