@@ -33,3 +33,12 @@ repos:
       args: ["--", "-D", "warnings"]
       types: [rust]
       pass_filenames: false
+      stages: [pre-push]
+    - id: test
+      name: test
+      description: Run tests
+      entry: cargo test
+      language: system
+      types: [rust]
+      pass_filenames: false
+      stages: [pre-push]
