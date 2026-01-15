@@ -13,7 +13,7 @@
 use crate::{
     configuration::{FilterMap, IndexerConfiguration},
     constants,
-    storage::{DuckDBStorage, Storage},
+    storage::Storage,
 };
 use alloy::{
     eips::BlockNumberOrTag,
@@ -65,7 +65,7 @@ impl CollectorSeed {
     /// block and returns a new CollectorSeed object.
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        db_conn: &DuckDBStorage,
+        db_conn: &dyn Storage,
         chain_id: u64,
         rpc_url: Url,
         contract_address: Address,
@@ -278,7 +278,7 @@ impl CollectorSeed {
 
     /// Ensure all the given events are synchronized up to the same block for a specific chain.
     async fn check_start_block(
-        db_conn: &DuckDBStorage,
+        db_conn: &dyn Storage,
         chain_id: u64,
         events: &[Event],
     ) -> Result<u64> {
@@ -307,7 +307,7 @@ impl CollectorSeed {
     /// it resumes from the last synchronized block. If not, it uses the start block from
     /// the command line arguments. It also ensures the first_block is set if the DB was empty.
     async fn set_start_block_for_events(
-        conn: &DuckDBStorage,
+        conn: &dyn Storage,
         chain_id: u64,
         events: &[Event],
         start_block_arg: Option<u64>,
@@ -375,7 +375,7 @@ impl CollectorSeed {
     /// When the option `--event` is used, the method will build a single seed for each event specified in the
     /// command line arguments.
     pub async fn build_seeds(
-        db_conn: &DuckDBStorage,
+        db_conn: &dyn Storage,
         config: &IndexerConfiguration,
     ) -> Result<Vec<Self>, anyhow::Error> {
         Self::build_seeds_with_chain_id_resolver(db_conn, config, Self::fetch_chain_id).await
@@ -388,7 +388,7 @@ impl CollectorSeed {
     /// This method allows injecting a custom chain_id resolver, which is useful for testing
     /// without making real RPC calls.
     pub async fn build_seeds_with_chain_id_resolver<F, Fut>(
-        db_conn: &DuckDBStorage,
+        db_conn: &dyn Storage,
         config: &IndexerConfiguration,
         chain_id_resolver: F,
     ) -> Result<Vec<Self>, anyhow::Error>
@@ -551,10 +551,11 @@ impl CollectorSeed {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "duckdb"))]
 mod tests {
     use super::*;
     use crate::configuration::{EventJob, FilterMap, IndexJob};
+    use crate::storage::DuckDBStorage;
     use alloy::json_abi::Event;
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
