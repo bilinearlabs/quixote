@@ -78,9 +78,9 @@ pub mod error_codes {
 /// Module with definitions related to the storage of the indexed data.
 pub mod storage {
     pub mod storage_api;
-    pub use storage_api::Storage;
+    pub use storage_api::{Storage, StorageFactory};
     pub mod storage_duckdb;
-    pub use storage_duckdb::{DuckDBStorage, DuckDBStorageFactory};
+    pub use storage_duckdb::DuckDBStorage;
 
     use serde::Serialize;
 
