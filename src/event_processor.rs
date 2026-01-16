@@ -76,11 +76,12 @@ impl EventProcessor {
                     debug!("Cancellation requested, shutting down gracefully...");
                     // Sometimes, if no events are detected, the first block gets registered but the last block remains
                     // as 0. This is an invalid state.
+                    let last_processed_val = *last_processed_shared.lock().unwrap();
                     self.storage.synchronize_events(
                         self.chain_id,
                         &self.event_selectors,
-                        Some(*last_processed_shared.lock().unwrap()),
-                    )?;
+                        Some(last_processed_val),
+                    ).await?;
                     return Ok(());
                 }
                 events = self.producer_buffer.recv() => {
@@ -98,18 +99,18 @@ impl EventProcessor {
                                         self.chain_id,
                                         &self.event_selectors,
                                         Some(last_processed),
-                                    )?;
+                                    ).await?;
                                 } else {
                                     let event_count = ev.len();
                                     let insert_start = std::time::Instant::now();
-                                    if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()) {
+                                    if let Err(e) = self.storage.add_events(self.chain_id, ev.as_slice()).await {
                                         error!("Error adding events: {}", e);
                                         // Ensure the database is in a consistent state.
                                         self.storage.synchronize_events(
                                             self.chain_id,
                                             &self.event_selectors,
                                             Some(last_processed),
-                                        )?;
+                                        ).await?;
                                         return Err(e);
                                     }
                                     let insert_elapsed = insert_start.elapsed();
@@ -134,11 +135,12 @@ impl EventProcessor {
                             // Channel closed, producer is done
                             info!("Event channel closed, all events processed");
                             // Ensure the database is in a consistent state.
+                            let last_processed_val = *last_processed_shared.lock().unwrap();
                             self.storage.synchronize_events(
                                 self.chain_id,
                                 &self.event_selectors,
-                                Some(*last_processed_shared.lock().unwrap()),
-                            )?;
+                                Some(last_processed_val),
+                            ).await?;
                             return Ok(());
                         }
                     }

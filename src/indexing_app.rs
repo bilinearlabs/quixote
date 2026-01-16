@@ -7,7 +7,7 @@ use crate::{
     configuration::IndexerConfiguration,
     constants, error_codes,
     metrics::{MetricsConfig, MetricsHandle},
-    storage::{DuckDBStorage, DuckDBStorageFactory, Storage},
+    storage::{DuckDBStorage, Storage, StorageFactory},
 };
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use tracing::{error, info, warn};
 pub struct IndexingApp {
     pub storage: Arc<dyn Storage + Send + Sync>,
     pub api_server_address: String,
-    pub storage_for_api: Arc<DuckDBStorageFactory>,
+    pub storage_for_api: Arc<dyn StorageFactory>,
     pub cancellation_token: CancellationToken,
     pub seeds: Vec<CollectorSeed>,
     pub metrics_config: MetricsConfig,
@@ -38,13 +38,11 @@ impl IndexingApp {
         let metrics = MetricsHandle::new(&metrics_config)?;
 
         // Instantiate the DB handlers, for the consumer task and the API server.
-        let (storage, storage_for_api) = {
+        let (storage, storage_for_api): (DuckDBStorage, Arc<dyn StorageFactory>) = {
             let mut storage = DuckDBStorage::with_db(&config.database_path)?;
             storage.set_strict_mode(config.strict_mode);
-            (
-                storage,
-                Arc::new(DuckDBStorageFactory::new(config.database_path.clone())),
-            )
+            let storage_clone = storage.clone();
+            (storage, Arc::new(storage_clone))
         };
 
         // Build a list of events from the command line arguments.
