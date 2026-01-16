@@ -264,12 +264,22 @@ mod tests {
     }
 
     #[rstest]
-    fn from_args_without_contract_creates_no_jobs() {
-        let args = create_test_args(Some("http://localhost:8545".to_string()), None);
+    fn from_args_without_contract_creates_event_job() {
+        let mut args = create_test_args(Some("http://localhost:8545".to_string()), None);
+        args.event = Some(vec![
+            "Transfer(address indexed from, address indexed to, uint256 value)".to_string(),
+        ]);
 
         let config = FileConfiguration::from_args(&args);
 
-        assert!(config.index_jobs.is_empty());
+        assert_eq!(config.index_jobs.len(), 1);
+        let events = config.index_jobs[0].events.as_ref().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].full_signature,
+            "Transfer(address indexed from, address indexed to, uint256 value)"
+        );
+        assert!(events[0].filters.is_none());
     }
 
     #[rstest]
