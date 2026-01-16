@@ -1874,7 +1874,8 @@ mod tests {
             "logIndex": "0x0",
             "removed": false
         }))
-        .unwrap_or_else(|e| panic!("Failed to build log with 3 topics: {e}"));
+        .expect("failed to build log with 3 topics");
+
         storage
             .add_events(TEST_CHAIN_ID, &[log])
             .expect("should add events with correct topic number");
@@ -1896,12 +1897,13 @@ mod tests {
             "logIndex": "0x0",
             "removed": false
         }))
-        .unwrap_or_else(|e| panic!("Failed to build log with 4 topics: {e}"));
+        .expect("failed to build log with 4 topics");
+
         storage
             .add_events(TEST_CHAIN_ID, &[log])
             .expect("should skip events with same signature but different topic number");
 
-        // We should have 0 events stored
+        // We should have 1 event stored
         assert_eq!(
             stored_count_for_event(&storage, &transfer_event()),
             1,
