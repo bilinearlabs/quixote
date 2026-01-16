@@ -763,7 +763,7 @@ impl DuckDBStorage {
                         block_number UBIGINT NOT NULL,
                         transaction_hash VARCHAR NOT NULL,
                         log_index USMALLINT NOT NULL,
-                        contract_address VARCHAR,
+                        contract_address VARCHAR NOT NULL,
                 ",
             );
 
