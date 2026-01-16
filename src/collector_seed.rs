@@ -409,17 +409,7 @@ impl CollectorSeed {
             let chain_id = chain_id_resolver(job.rpc_url.expose_secret().to_string()).await?;
 
             // Parse the contract address
-            let contract_address = if let Some(contract) = &job.contract {
-                Some(contract.parse::<Address>().map_err(|_| {
-                    anyhow::anyhow!(format!(
-                        "Failed to parse the given contract address: {}",
-                        contract
-                    ))
-                })?)
-            } else {
-                None
-            };
-
+            let contract_address = job.contract;
             let mut coming_from_abi = false;
 
             // Parse the given event signatures into [alloy::json_abi::Event]
@@ -567,12 +557,12 @@ impl CollectorSeed {
 mod tests {
     use super::*;
     use crate::configuration::{EventJob, FilterMap, IndexJob};
-    use alloy::json_abi::Event;
+    use alloy::{json_abi::Event, primitives::address};
     use pretty_assertions::assert_eq;
     use rstest::{fixture, rstest};
     use secrecy::SecretString;
 
-    const TEST_CONTRACT_ADDRESS: &str = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+    const TEST_CONTRACT_ADDRESS: Address = address!("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
     const TEST_RPC_URL: &str = "http://localhost:8545/";
     const TEST_CHAIN_ID: u64 = 1;
     const TRANSFER_EVENT_SIGNATURE: &str =
@@ -602,7 +592,7 @@ mod tests {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
                 rpc_url: SecretString::from("http://localhost:8545"),
-                contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
+                contract: Some(TEST_CONTRACT_ADDRESS),
                 start_block: Some(0),
                 block_range: Some(1000),
                 events: Some(vec![EventJob {
@@ -632,7 +622,7 @@ mod tests {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
                 rpc_url: SecretString::from("http://localhost:8545"),
-                contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
+                contract: Some(TEST_CONTRACT_ADDRESS),
                 start_block: Some(0),
                 block_range: Some(1000),
                 events: None,
@@ -660,7 +650,7 @@ mod tests {
             index_jobs: vec![
                 IndexJob {
                     rpc_url: SecretString::from("http://localhost:8545"),
-                    contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
+                    contract: Some(TEST_CONTRACT_ADDRESS),
                     start_block: Some(0),
                     block_range: Some(1000),
                     events: Some(vec![EventJob {
@@ -671,7 +661,7 @@ mod tests {
                 },
                 IndexJob {
                     rpc_url: SecretString::from("http://localhost:8545"),
-                    contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
+                    contract: Some(TEST_CONTRACT_ADDRESS),
                     start_block: Some(0),
                     block_range: Some(1000),
                     events: Some(vec![EventJob {
@@ -708,7 +698,7 @@ mod tests {
         IndexerConfiguration {
             index_jobs: vec![IndexJob {
                 rpc_url: SecretString::from("http://localhost:8545"),
-                contract: Some(TEST_CONTRACT_ADDRESS.to_string()),
+                contract: Some(TEST_CONTRACT_ADDRESS),
                 start_block: Some(0),
                 block_range: Some(1000),
                 events: Some(vec![EventJob {
@@ -762,8 +752,7 @@ mod tests {
         assert_eq!(seed.rpc_url, expected_rpc_url());
 
         // Verify the contract address
-        let expected_address: Address = TEST_CONTRACT_ADDRESS.parse().unwrap();
-        assert_eq!(seed.contract_address, Some(expected_address));
+        assert_eq!(seed.contract_address, Some(TEST_CONTRACT_ADDRESS));
 
         // Verify that exactly one event is included
         assert_eq!(
@@ -851,8 +840,7 @@ mod tests {
         assert_eq!(seed.rpc_url, expected_rpc_url());
 
         // Verify the contract address
-        let expected_address: Address = TEST_CONTRACT_ADDRESS.parse().unwrap();
-        assert_eq!(seed.contract_address, Some(expected_address));
+        assert_eq!(seed.contract_address, Some(TEST_CONTRACT_ADDRESS));
 
         // Verify that multiple events are included (USDC ABI has many events)
         assert!(
@@ -891,7 +879,6 @@ mod tests {
             "Expected exactly two seeds for two-event config"
         );
 
-        let expected_address: Address = TEST_CONTRACT_ADDRESS.parse().unwrap();
         let transfer_event = Event::parse(TRANSFER_EVENT_SIGNATURE).unwrap();
         let approval_event = Event::parse(APPROVAL_EVENT_SIGNATURE).unwrap();
 
@@ -899,7 +886,7 @@ mod tests {
         let first_seed = &seeds[0];
         assert_eq!(first_seed.chain_id, TEST_CHAIN_ID);
         assert_eq!(first_seed.rpc_url, expected_rpc_url());
-        assert_eq!(first_seed.contract_address, Some(expected_address));
+        assert_eq!(first_seed.contract_address, Some(TEST_CONTRACT_ADDRESS));
         assert_eq!(
             first_seed.events.len(),
             1,
@@ -923,7 +910,7 @@ mod tests {
         let second_seed = &seeds[1];
         assert_eq!(second_seed.chain_id, TEST_CHAIN_ID);
         assert_eq!(second_seed.rpc_url, expected_rpc_url());
-        assert_eq!(second_seed.contract_address, Some(expected_address));
+        assert_eq!(second_seed.contract_address, Some(TEST_CONTRACT_ADDRESS));
         assert_eq!(
             second_seed.events.len(),
             1,

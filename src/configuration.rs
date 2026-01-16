@@ -4,6 +4,7 @@
 //! Module that handles the configuration of the application.
 
 use crate::{cli::IndexingArgs, constants, error_codes};
+use alloy::primitives::Address;
 use clap::Parser;
 use config::{Config, ConfigError, Environment, File};
 use secrecy::SecretString;
@@ -34,7 +35,7 @@ pub struct FileConfiguration {
 #[derive(Debug, Deserialize, Clone)]
 pub struct IndexJob {
     pub rpc_url: SecretString,
-    pub contract: Option<String>,
+    pub contract: Option<Address>,
     pub start_block: Option<u64>,
     pub block_range: Option<usize>,
     pub events: Option<Vec<EventJob>>,
@@ -177,9 +178,25 @@ impl FileConfiguration {
         // Use the RPC URL directly (standard URL format expected)
         let rpc_url = SecretString::from(args.rpc_host.clone().unwrap_or_default());
 
+        // Parse the contract address if provided
+        let contract = if let Some(contract) = args.contract.clone() {
+            contract
+                .parse::<Address>()
+                .map_err(|_| {
+                    eprintln!(
+                        "\x1b[31merror:\x1b[0m Failed to parse the given contract address: {}",
+                        contract
+                    );
+                    std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
+                })
+                .ok()
+        } else {
+            None
+        };
+
         let index_jobs = vec![IndexJob {
             rpc_url,
-            contract: args.contract.clone(),
+            contract,
             start_block: args.start_block.as_ref().and_then(|s| s.parse().ok()),
             block_range: Some(args.block_range),
             events,
