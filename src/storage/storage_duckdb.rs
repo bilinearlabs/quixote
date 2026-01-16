@@ -1874,9 +1874,7 @@ mod tests {
             "logIndex": "0x0",
             "removed": false
         }))
-        .unwrap_or_else(|e| {
-            panic!("Failed to build log for transfer event with correct topic number: {e}")
-        });
+        .unwrap_or_else(|e| panic!("Failed to build log with 3 topics: {e}"));
         storage
             .add_events(TEST_CHAIN_ID, &[log])
             .expect("should add events with correct topic number");
@@ -1898,9 +1896,7 @@ mod tests {
             "logIndex": "0x0",
             "removed": false
         }))
-        .unwrap_or_else(|e| {
-            panic!("Failed to build log for transfer event with different topic number: {e}")
-        });
+        .unwrap_or_else(|e| panic!("Failed to build log with 4 topics: {e}"));
         storage
             .add_events(TEST_CHAIN_ID, &[log])
             .expect("should skip events with same signature but different topic number");

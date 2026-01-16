@@ -162,11 +162,12 @@ impl EventCollector {
 
                         // Build the base filter for the get_Logs call. By default, all the events for a given smart
                         // contract are fetched.
-                        let mut filter = Filter::new().from_block(chunk_start).to_block(chunk_end);
+                        let filter = Filter::new().from_block(chunk_start).to_block(chunk_end);
 
-                        if let Some(contract_address) = contract_address {
-                            filter = filter.address(contract_address);
-                        }
+                        let mut filter = match contract_address {
+                            Some(contract_address) => filter.address(contract_address),
+                            None => filter,
+                        };
 
                         // Add custom filters (topics) if provided.
                         if let Some(custom_filter) = self.filter.clone()
@@ -279,9 +280,8 @@ mod tests {
     use super::*;
     use alloy::{
         json_abi::{Event, JsonAbi},
-        primitives::B256,
-        providers::Provider,
-        providers::ProviderBuilder,
+        primitives::{B256, address},
+        providers::{Provider, ProviderBuilder},
         rpc::client::RpcClient,
         transports::http::reqwest::Url,
     };
@@ -348,9 +348,7 @@ mod tests {
             chain_id: TEST_CHAIN_ID,
             rpc_url: rpc_url_fixture,
             // USDC contract address
-            contract_address: Some(
-                Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap(),
-            ),
+            contract_address: Some(address!("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")),
             events: usdc_events_fixture,
             start_block: 24022000,
             sync_mode: BlockNumberOrTag::Latest,
@@ -466,9 +464,7 @@ mod tests {
         CollectorSeed {
             chain_id: TEST_CHAIN_ID,
             rpc_url: rpc_url_fixture,
-            contract_address: Some(
-                Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap(),
-            ),
+            contract_address: Some(address!("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")),
             events: transfer_event_fixture,
             start_block: TEST_BLOCK,
             sync_mode: BlockNumberOrTag::Number(TEST_BLOCK),
@@ -581,9 +577,7 @@ mod tests {
         let seed = CollectorSeed {
             chain_id: TEST_CHAIN_ID,
             rpc_url: rpc_url_fixture,
-            contract_address: Some(
-                Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap(),
-            ),
+            contract_address: Some(address!("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")),
             events: transfer_event_fixture,
             start_block: TEST_BLOCK,
             sync_mode: BlockNumberOrTag::Number(TEST_BLOCK),
@@ -612,9 +606,7 @@ mod tests {
         let seed = CollectorSeed {
             chain_id: TEST_CHAIN_ID,
             rpc_url: rpc_url_fixture,
-            contract_address: Some(
-                Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap(),
-            ),
+            contract_address: Some(address!("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")),
             events: transfer_event_fixture,
             start_block: TEST_BLOCK,
             sync_mode: BlockNumberOrTag::Number(TEST_BLOCK),
@@ -646,9 +638,7 @@ mod tests {
         let seed = CollectorSeed {
             chain_id: TEST_CHAIN_ID,
             rpc_url: rpc_url_fixture,
-            contract_address: Some(
-                Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap(),
-            ),
+            contract_address: Some(address!("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")),
             events: transfer_event_fixture,
             start_block: TEST_BLOCK,
             sync_mode: BlockNumberOrTag::Number(TEST_BLOCK),
