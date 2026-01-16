@@ -4,6 +4,7 @@
 //! Module that handles the configuration of the application.
 
 use crate::{cli::IndexingArgs, constants, error_codes};
+use alloy::primitives::Address;
 use clap::Parser;
 use config::{Config, ConfigError, Environment, File};
 use secrecy::SecretString;
@@ -34,7 +35,7 @@ pub struct FileConfiguration {
 #[derive(Debug, Deserialize, Clone)]
 pub struct IndexJob {
     pub rpc_url: SecretString,
-    pub contract: String,
+    pub contract: Option<Address>,
     pub start_block: Option<u64>,
     pub block_range: Option<usize>,
     pub events: Option<Vec<EventJob>>,
@@ -165,30 +166,42 @@ impl FileConfiguration {
     ///
     /// This function will log an error and exit if the RPC host string cannot be parsed.
     pub fn from_args(args: &IndexingArgs) -> Self {
-        let index_jobs = if let Some(ref contract) = args.contract {
-            let events = args.event.as_ref().map(|evts| {
-                evts.iter()
-                    .map(|sig| EventJob {
-                        full_signature: sig.clone(),
-                        filters: None,
-                    })
-                    .collect()
-            });
+        let events = args.event.as_ref().map(|evts| {
+            evts.iter()
+                .map(|sig| EventJob {
+                    full_signature: sig.clone(),
+                    filters: None,
+                })
+                .collect()
+        });
 
-            // Use the RPC URL directly (standard URL format expected)
-            let rpc_url = SecretString::from(args.rpc_host.clone().unwrap_or_default());
+        // Use the RPC URL directly (standard URL format expected)
+        let rpc_url = SecretString::from(args.rpc_host.clone().unwrap_or_default());
 
-            vec![IndexJob {
-                rpc_url,
-                contract: contract.clone(),
-                start_block: args.start_block.as_ref().and_then(|s| s.parse().ok()),
-                block_range: Some(args.block_range),
-                events,
-                abi_path: args.abi_spec.clone(),
-            }]
+        // Parse the contract address if provided
+        let contract = if let Some(contract) = args.contract.clone() {
+            contract
+                .parse::<Address>()
+                .map_err(|_| {
+                    eprintln!(
+                        "\x1b[31merror:\x1b[0m Failed to parse the given contract address: {}",
+                        contract
+                    );
+                    std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
+                })
+                .ok()
         } else {
-            vec![]
+            None
         };
+
+        let index_jobs = vec![IndexJob {
+            rpc_url,
+            contract,
+            start_block: args.start_block.as_ref().and_then(|s| s.parse().ok()),
+            block_range: Some(args.block_range),
+            events,
+            abi_path: args.abi_spec.clone(),
+        }];
 
         Self {
             index_jobs,
@@ -268,12 +281,22 @@ mod tests {
     }
 
     #[rstest]
-    fn from_args_without_contract_creates_no_jobs() {
-        let args = create_test_args(Some("http://localhost:8545".to_string()), None);
+    fn from_args_without_contract_creates_event_job() {
+        let mut args = create_test_args(Some("http://localhost:8545".to_string()), None);
+        args.event = Some(vec![
+            "Transfer(address indexed from, address indexed to, uint256 value)".to_string(),
+        ]);
 
         let config = FileConfiguration::from_args(&args);
 
-        assert!(config.index_jobs.is_empty());
+        assert_eq!(config.index_jobs.len(), 1);
+        let events = config.index_jobs[0].events.as_ref().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].full_signature,
+            "Transfer(address indexed from, address indexed to, uint256 value)"
+        );
+        assert!(events[0].filters.is_none());
     }
 
     #[rstest]
