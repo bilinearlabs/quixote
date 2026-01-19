@@ -1955,7 +1955,7 @@ mod tests {
 
         // We register only the transfer event
         storage
-            .include_events(TEST_CHAIN_ID, &[transfer_event()])
+            .include_events_sync(TEST_CHAIN_ID, &[transfer_event()])
             .expect("failed to register transfer event");
 
         // We add a log with the correct topic number
@@ -1977,7 +1977,7 @@ mod tests {
         .expect("failed to build log with 3 topics");
 
         storage
-            .add_events(TEST_CHAIN_ID, &[log])
+            .add_events_sync(TEST_CHAIN_ID, &[log])
             .expect("should add events with correct topic number");
 
         // We try to add a log with a different topic number
@@ -2000,7 +2000,7 @@ mod tests {
         .expect("failed to build log with 4 topics");
 
         storage
-            .add_events(TEST_CHAIN_ID, &[log])
+            .add_events_sync(TEST_CHAIN_ID, &[log])
             .expect("should skip events with same signature but different topic number");
 
         // We should have 1 event stored
