@@ -7,7 +7,7 @@ use crate::{
     EventStatus,
     constants::*,
     error_codes::ERROR_CODE_DATABASE_LOCKED,
-    storage::{ContractDescriptorDb, EventDescriptorDb, Storage},
+    storage::{ContractDescriptorDb, EventDescriptorDb, Storage, StorageFactory},
 };
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
@@ -20,6 +20,8 @@ use duckdb::{Connection, OptionalExt, types::ValueRef};
 use serde_json::{Map, Number, Value, json};
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
+    pin::Pin,
     string::ToString,
     sync::{Mutex, RwLock},
 };
@@ -40,25 +42,15 @@ pub struct DuckDBStorage {
     event_descriptors: RwLock<HashMap<String, Event>>,
 }
 
-/// Simple factory pattern to allow opening a new connection to the same database from a task.
-///
-/// # Description
-///
-/// The main purpose of this object is to allow opening concurrent connections for reading from the database.
-/// The main use case is the REST API, which needs to open a new connection for each request. Using this entry
-/// point, we avoid lock contention.
-#[derive(Clone)]
-pub struct DuckDBStorageFactory {
-    db_path: String,
-}
-
-impl DuckDBStorageFactory {
-    pub fn new(db_path: String) -> Self {
-        Self { db_path }
-    }
-
-    pub fn create(&self) -> Result<DuckDBStorage> {
-        DuckDBStorage::with_db(&self.db_path)
+impl StorageFactory for DuckDBStorage {
+    /// Creates a new connection to the same database for concurrent access.
+    ///
+    /// This allows the REST API to open separate connections from the indexer,
+    /// reducing lock contention during backfill operations.
+    ///
+    /// **Note**: meant for reading access only.
+    fn create_storage(&self) -> Result<Box<dyn Storage>> {
+        Ok(Box::new(DuckDBStorage::with_db(&self.db_path)?))
     }
 }
 
@@ -70,7 +62,112 @@ impl Clone for DuckDBStorage {
 }
 
 impl Storage for DuckDBStorage {
-    fn add_events(&self, chain_id: u64, events: &[Log]) -> Result<()> {
+    fn add_events(
+        &self,
+        chain_id: u64,
+        events: &[Log],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(std::future::ready(self.add_events_sync(chain_id, events)))
+    }
+
+    fn list_indexed_events(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<EventDescriptorDb>>> + Send + '_>> {
+        Box::pin(std::future::ready(self.list_indexed_events_sync()))
+    }
+
+    fn last_block(
+        &self,
+        chain_id: u64,
+        event: &Event,
+    ) -> Pin<Box<dyn Future<Output = Result<u64>> + Send + '_>> {
+        Box::pin(std::future::ready(self.last_block_sync(chain_id, event)))
+    }
+
+    fn first_block(
+        &self,
+        chain_id: u64,
+        event: &Event,
+    ) -> Pin<Box<dyn Future<Output = Result<u64>> + Send + '_>> {
+        Box::pin(std::future::ready(self.first_block_sync(chain_id, event)))
+    }
+
+    fn include_events(
+        &self,
+        chain_id: u64,
+        events: &[Event],
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(std::future::ready(
+            self.include_events_sync(chain_id, events),
+        ))
+    }
+
+    fn get_event_signature(
+        &self,
+        event_hash: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        Box::pin(std::future::ready(
+            self.get_event_signature_sync(event_hash),
+        ))
+    }
+
+    fn event_index_status(
+        &self,
+        chain_id: u64,
+        event: &Event,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<EventStatus>>> + Send + '_>> {
+        Box::pin(std::future::ready(
+            self.event_index_status_sync(chain_id, event),
+        ))
+    }
+
+    fn synchronize_events(
+        &self,
+        chain_id: u64,
+        event_selectors: &[B256],
+        last_processed: Option<u64>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(std::future::ready(self.synchronize_events_sync(
+            chain_id,
+            event_selectors,
+            last_processed,
+        )))
+    }
+
+    fn send_raw_query(
+        &self,
+        query: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
+        Box::pin(std::future::ready(self.send_raw_query_sync(query)))
+    }
+
+    fn list_contracts(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ContractDescriptorDb>>> + Send + '_>> {
+        Box::pin(std::future::ready(self.list_contracts_sync()))
+    }
+
+    fn set_first_block(
+        &self,
+        chain_id: u64,
+        event: &Event,
+        block_number: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(std::future::ready(self.set_first_block_sync(
+            chain_id,
+            event,
+            block_number,
+        )))
+    }
+
+    fn describe_database(&self) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
+        Box::pin(std::future::ready(self.describe_database_sync()))
+    }
+}
+
+impl DuckDBStorage {
+    /// Sync implementation of add_events
+    fn add_events_sync(&self, chain_id: u64, events: &[Log]) -> Result<()> {
         // Quick check to avoid unnecessary operations.
         if events.is_empty() {
             info!("No events for the given block range");
@@ -288,7 +385,8 @@ impl Storage for DuckDBStorage {
         Ok(())
     }
 
-    fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> {
+    /// Sync implementation of list_indexed_events
+    fn list_indexed_events_sync(&self) -> Result<Vec<EventDescriptorDb>> {
         let conn = self
             .conn
             .lock()
@@ -332,8 +430,9 @@ impl Storage for DuckDBStorage {
         Ok(events)
     }
 
+    /// Sync implementation of last_block
     #[inline]
-    fn last_block(&self, chain_id: u64, event: &Event) -> Result<u64> {
+    fn last_block_sync(&self, chain_id: u64, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
@@ -345,8 +444,9 @@ impl Storage for DuckDBStorage {
         )?)
     }
 
+    /// Sync implementation of first_block
     #[inline]
-    fn first_block(&self, chain_id: u64, event: &Event) -> Result<u64> {
+    fn first_block_sync(&self, chain_id: u64, event: &Event) -> Result<u64> {
         let conn = self
             .conn
             .lock()
@@ -358,7 +458,8 @@ impl Storage for DuckDBStorage {
         )?)
     }
 
-    fn include_events(&self, chain_id: u64, events: &[Event]) -> Result<()> {
+    /// Sync implementation of include_events
+    fn include_events_sync(&self, chain_id: u64, events: &[Event]) -> Result<()> {
         DuckDBStorage::create_event_schema(&self.conn, chain_id, events)?;
         let mut event_descriptors = self.event_descriptors.write().map_err(|_| {
             anyhow::anyhow!("Failed to acquire write lock for the event descriptor")
@@ -375,7 +476,8 @@ impl Storage for DuckDBStorage {
         Ok(())
     }
 
-    fn get_event_signature(&self, event_hash: &str) -> Result<String> {
+    /// Sync implementation of get_event_signature
+    fn get_event_signature_sync(&self, event_hash: &str) -> Result<String> {
         let conn = self
             .conn
             .lock()
@@ -387,7 +489,8 @@ impl Storage for DuckDBStorage {
         )?)
     }
 
-    fn event_index_status(&self, chain_id: u64, event: &Event) -> Result<Option<EventStatus>> {
+    /// Sync implementation of event_index_status
+    fn event_index_status_sync(&self, chain_id: u64, event: &Event) -> Result<Option<EventStatus>> {
         let conn = self
             .conn
             .lock()
@@ -428,7 +531,8 @@ impl Storage for DuckDBStorage {
         Ok(Some(event_status))
     }
 
-    fn synchronize_events(
+    /// Sync implementation of synchronize_events
+    fn synchronize_events_sync(
         &self,
         chain_id: u64,
         event_selectors: &[B256],
@@ -486,7 +590,8 @@ impl Storage for DuckDBStorage {
         Ok(())
     }
 
-    fn send_raw_query(&self, query: &str) -> Result<Value> {
+    /// Sync implementation of send_raw_query
+    fn send_raw_query_sync(&self, query: &str) -> Result<Value> {
         if !query.trim_start().to_uppercase().starts_with("SELECT") {
             return Ok(json!({ "error": "Query must be a SELECT statement" }));
         }
@@ -547,7 +652,8 @@ impl Storage for DuckDBStorage {
         Ok(Value::Array(results))
     }
 
-    fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
+    /// Sync implementation of list_contracts
+    fn list_contracts_sync(&self) -> Result<Vec<ContractDescriptorDb>> {
         let conn = self
             .conn
             .lock()
@@ -597,6 +703,69 @@ impl Storage for DuckDBStorage {
                 contract_name: None,
             })
             .collect::<Vec<ContractDescriptorDb>>())
+    }
+
+    /// Sync implementation of set_first_block
+    fn set_first_block_sync(&self, chain_id: u64, event: &Event, block_number: u64) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+        conn.execute(
+            "UPDATE event_descriptor SET first_block = ? WHERE chain_id = ? AND event_hash = ?",
+            [
+                block_number.to_string(),
+                chain_id.to_string(),
+                event.selector().to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Sync implementation of describe_database
+    fn describe_database_sync(&self) -> Result<Value> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+
+        // Get all tables using SHOW TABLES
+        let mut stmt = conn.prepare("SHOW TABLES")?;
+        let mut rows = stmt.query([])?;
+
+        let mut tables = Vec::new();
+        while let Some(row) = rows.next()? {
+            let table_name: String = row.get(0)?;
+            // Exclude quixote_info table
+            if table_name != DUCKDB_BASE_TABLE_NAME {
+                tables.push(table_name);
+            }
+        }
+
+        // Need to drop the statement and rows before reusing conn
+        drop(rows);
+        drop(stmt);
+
+        // For each table, get its description
+        let mut result = Vec::new();
+        for table_name in tables {
+            let mut desc_stmt = conn.prepare(&format!("DESCRIBE {}", table_name))?;
+            let mut desc_rows = desc_stmt.query([])?;
+
+            let mut columns = serde_json::Map::new();
+            while let Some(row) = desc_rows.next()? {
+                // DESCRIBE returns: column_name, column_type, null, key, default, extra
+                let column_name: String = row.get(0)?;
+                let column_type: String = row.get(1)?;
+                columns.insert(column_name, Value::String(column_type));
+            }
+
+            let mut table_obj = serde_json::Map::new();
+            table_obj.insert(table_name, Value::Object(columns));
+            result.push(Value::Object(table_obj));
+        }
+
+        Ok(Value::Array(result))
     }
 }
 
@@ -804,23 +973,6 @@ impl DuckDBStorage {
         conn.execute(
             &format!("UPDATE {DUCKDB_BASE_TABLE_NAME} SET last_block = ?"),
             [block_number.to_string()],
-        )?;
-        Ok(())
-    }
-
-    #[inline]
-    pub fn set_first_block(&self, chain_id: u64, event: &Event, block_number: u64) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-        conn.execute(
-            "UPDATE event_descriptor SET first_block = ? WHERE chain_id = ? AND event_hash = ?",
-            [
-                block_number.to_string(),
-                chain_id.to_string(),
-                event.selector().to_string(),
-            ],
         )?;
         Ok(())
     }
@@ -1100,58 +1252,6 @@ impl DuckDBStorage {
     pub fn strict_mode(&self) -> bool {
         self.strict_mode
     }
-
-    /// Describe the tables in the database.
-    ///
-    /// # Description
-    ///
-    /// Returns a JSON array where each element is an object with a single key (the table name)
-    /// whose value is an object mapping column names to their types.
-    /// The `quixote_info` table is excluded from the results.
-    pub fn describe_database(&self) -> Result<Value> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
-
-        // Get all tables using SHOW TABLES
-        let mut stmt = conn.prepare("SHOW TABLES")?;
-        let mut rows = stmt.query([])?;
-
-        let mut tables = Vec::new();
-        while let Some(row) = rows.next()? {
-            let table_name: String = row.get(0)?;
-            // Exclude quixote_info table
-            if table_name != DUCKDB_BASE_TABLE_NAME {
-                tables.push(table_name);
-            }
-        }
-
-        // Need to drop the statement and rows before reusing conn
-        drop(rows);
-        drop(stmt);
-
-        // For each table, get its description
-        let mut result = Vec::new();
-        for table_name in tables {
-            let mut desc_stmt = conn.prepare(&format!("DESCRIBE {}", table_name))?;
-            let mut desc_rows = desc_stmt.query([])?;
-
-            let mut columns = Map::new();
-            while let Some(row) = desc_rows.next()? {
-                // DESCRIBE returns: column_name, column_type, null, key, default, extra
-                let column_name: String = row.get(0)?;
-                let column_type: String = row.get(1)?;
-                columns.insert(column_name, Value::String(column_type));
-            }
-
-            let mut table_obj = Map::new();
-            table_obj.insert(table_name, Value::Object(columns));
-            result.push(Value::Object(table_obj));
-        }
-
-        Ok(Value::Array(result))
-    }
 }
 
 #[cfg(test)]
@@ -1255,12 +1355,12 @@ mod tests {
 
         // We register only the transfer event
         storage
-            .include_events(TEST_CHAIN_ID, &[transfer_event()])
+            .include_events_sync(TEST_CHAIN_ID, &[transfer_event()])
             .expect("failed to register transfer event");
 
         // But we try to add both transfer and approval events
         let err = storage
-            .add_events(
+            .add_events_sync(
                 TEST_CHAIN_ID,
                 &[get_5_approval_logs(), get_5_transfer_logs()].concat(),
             )
@@ -1296,12 +1396,12 @@ mod tests {
 
         // Register only the Transfer event
         storage
-            .include_events(TEST_CHAIN_ID, &[transfer_event()])
+            .include_events_sync(TEST_CHAIN_ID, &[transfer_event()])
             .expect("failed to register event");
 
         // We try to add both transfer and approval events
         storage
-            .add_events(
+            .add_events_sync(
                 TEST_CHAIN_ID,
                 &[get_5_approval_logs(), get_5_transfer_logs()].concat(),
             )
@@ -1331,12 +1431,12 @@ mod tests {
 
         // Register both events
         storage
-            .include_events(TEST_CHAIN_ID, &[transfer_event(), approval_event()])
+            .include_events_sync(TEST_CHAIN_ID, &[transfer_event(), approval_event()])
             .expect("failed to register events");
 
         // Insert both events
         storage
-            .add_events(
+            .add_events_sync(
                 TEST_CHAIN_ID,
                 &[get_5_approval_logs(), get_5_transfer_logs()].concat(),
             )
@@ -1382,7 +1482,7 @@ mod tests {
         let mut storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
         storage.set_strict_mode(true);
         storage
-            .include_events(TEST_CHAIN_ID, events)
+            .include_events_sync(TEST_CHAIN_ID, events)
             .expect("failed to register events");
         storage
     }
@@ -1416,7 +1516,7 @@ mod tests {
         .expect("failed to build erc721 log");
 
         storage
-            .add_events(TEST_CHAIN_ID, &[log])
+            .add_events_sync(TEST_CHAIN_ID, &[log])
             .expect("erc721 transfer should be accepted");
 
         let table = event_table_name(&erc721);
@@ -1466,7 +1566,7 @@ mod tests {
         .expect("failed to build erc20 log");
 
         storage
-            .add_events(TEST_CHAIN_ID, &[log])
+            .add_events_sync(TEST_CHAIN_ID, &[log])
             .expect("erc20 transfer should be accepted");
 
         let table = event_table_name(&erc20);
@@ -1785,7 +1885,7 @@ mod tests {
 
             // Add log to storage
             storage
-                .add_events(TEST_CHAIN_ID, &[log])
+                .add_events_sync(TEST_CHAIN_ID, &[log])
                 .unwrap_or_else(|e| {
                     panic!("Failed to store event {}: {}", test_case.event_signature, e)
                 });

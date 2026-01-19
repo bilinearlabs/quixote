@@ -287,9 +287,11 @@ impl CollectorSeed {
         // If a previous run indexed events using -e multiple times, and the current run is
         // using the -a option, the indexing state for such event might be different. Thus
         // we can't resume indexing these events as a block (using the same eth_getLogs call).
-        let current_start_block = db_conn.first_block(chain_id, events.iter().next().unwrap())?;
+        let current_start_block = db_conn
+            .first_block(chain_id, events.iter().next().unwrap())
+            .await?;
         for event in events {
-            if current_start_block != db_conn.first_block(chain_id, event)? {
+            if current_start_block != db_conn.first_block(chain_id, event).await? {
                 return Err(anyhow::anyhow!(
                     "The given events are disjoint for chain {:#x}. This means that you need to run the indexer using -e for each one of the given events.",
                     chain_id
@@ -305,7 +307,7 @@ impl CollectorSeed {
     /// This method checks if the event was already indexed. If the DB contains the event,
     /// it resumes from the last synchronized block. If not, it uses the start block from
     /// the command line arguments. It also ensures the first_block is set if the DB was empty.
-    fn set_start_block_for_events(
+    async fn set_start_block_for_events(
         conn: &DuckDBStorage,
         chain_id: u64,
         events: &[Event],
@@ -316,7 +318,7 @@ impl CollectorSeed {
         // If not, consider the start block from the command line arguments.
         let event = events.first().unwrap();
 
-        if let Ok(last_block) = conn.last_block(chain_id, event) {
+        if let Ok(last_block) = conn.last_block(chain_id, event).await {
             if last_block != 0 {
                 info!(
                     "Chain {:#x}: The DB contains events of the ABI up to the block {last_block}. Resuming indexing from the last synchronized block.",
@@ -331,7 +333,7 @@ impl CollectorSeed {
                 let start_block = start_block_arg.unwrap_or_default();
 
                 for event in events {
-                    conn.set_first_block(chain_id, event, start_block)?;
+                    conn.set_first_block(chain_id, event, start_block).await?;
                 }
 
                 Ok(start_block)
@@ -442,14 +444,15 @@ impl CollectorSeed {
             };
 
             // Register the events in the DB. If the events are already registered, the operation will be ignored.
-            db_conn.include_events(chain_id, &events)?;
+            db_conn.include_events(chain_id, &events).await?;
             // Ensure all events are synchronized up to the same block (consistency check).
             Self::check_start_block(db_conn, chain_id, &events).await?;
 
             // Get the correct start block: either from the DB (last_block + 1) for resumption,
             // or from the config for fresh indexing.
             let start_block =
-                Self::set_start_block_for_events(db_conn, chain_id, &events, job.start_block)?;
+                Self::set_start_block_for_events(db_conn, chain_id, &events, job.start_block)
+                    .await?;
 
             let filter = if coming_from_abi {
                 None
