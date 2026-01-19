@@ -12,6 +12,8 @@ jobs:
         steps:
             - name: Checkout
               uses: actions/checkout@v4
+            - name: Set up QEMU
+              uses: docker/setup-qemu-action@v3
             - name: Write release version
               run: |
                 if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
@@ -30,7 +32,7 @@ jobs:
                 dockerfile: ./Containerfile
                 labels: io.containers.autoupdate=registry
                 tags: ghcr.io/${{ github.repository }}:${{ env.VERSION }} ghcr.io/${{ github.repository }}:latest
-                extra_args: --annotation org.opencontainers.image.authors=Felipe\ Torres\ Gonzalez<felipe@bilinearlabs.io> --annotation org.opencontainers.image.description=Quixote\ Indexer
+                extra_args: --platform linux/amd64,linux/arm64 --annotation org.opencontainers.image.authors=Felipe\ Torres\ Gonzalez<felipe@bilinearlabs.io> --annotation org.opencontainers.image.description=Quixote\ Indexer
                 push: true
                 security: |
                   --security-opt=seccomp=unconfined
