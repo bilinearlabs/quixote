@@ -8,6 +8,7 @@ The following examples show how to use different `quixote` features:
 * Use a configuration file indexing multiple RPCs.
 * Use filter for indexed topics.
 * Index events from from the signature or the abi.
+* Chain-wide indexing without specifying a contract address.
 
 ## 💵 USDC Transfers
 
@@ -81,4 +82,14 @@ quixote -r https://gateway.tenderly.co/public/mainnet \
   -e "ClaimEvent(uint256 globalIndex, uint32 originNetwork, address originAddress, address destinationAddress, uint256 amount)" \
   -e "BridgeEvent (uint8 leafType, uint32 originNetwork, address originAddress, uint32 destinationNetwork, address destinationAddress, uint256 amount, bytes metadata, uint32 depositCount)" \
   -s 16896718
+```
+
+## 📦 NFT Transfers
+
+Track every NFT transfer across all collections on the network.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -e "Transfer(address indexed from, address indexed to, uint256 indexed tokenId)" \
+  -s 21500000
 ```

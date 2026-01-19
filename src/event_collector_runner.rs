@@ -4,8 +4,8 @@
 //! Runner module for the event collector.
 
 use crate::{
-    CollectorSeed, TxLogChunk, constants::*, event_collector::EventCollector,
-    metrics::MetricsHandle,
+    CollectorSeed, OptionalAddressDisplay, TxLogChunk, constants::*,
+    event_collector::EventCollector, metrics::MetricsHandle,
 };
 use alloy::{
     providers::Provider,
@@ -260,7 +260,7 @@ impl EventCollectorRunner {
                 "Spawning collector {} (chain_id: {:#x}, contract: {}, start_block: {}, block_range: {})",
                 seed_index,
                 seed.chain_id,
-                seed.contract_address,
+                seed.contract_address.display_or_none(),
                 seed.start_block,
                 seed.block_range
             );
@@ -273,12 +273,17 @@ impl EventCollectorRunner {
                     if e.to_string().contains("channel closed") {
                         info!(
                             "Collector {} (chain_id: {:#x}, contract: {}) channel closed",
-                            seed_index, seed.chain_id, seed.contract_address
+                            seed_index,
+                            seed.chain_id,
+                            seed.contract_address.display_or_none()
                         );
                     } else {
                         error!(
                             "Collector {} (chain_id: {:#x}, contract: {}) failed: {}",
-                            seed_index, seed.chain_id, seed.contract_address, e
+                            seed_index,
+                            seed.chain_id,
+                            seed.contract_address.display_or_none(),
+                            e
                         );
                     }
                 }
