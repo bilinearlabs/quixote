@@ -248,7 +248,7 @@ impl Storage for PostgreSqlStorage {
             }
 
             tx.commit().await?;
-        Ok(())
+            Ok(())
         })
     }
 
@@ -463,7 +463,7 @@ impl Storage for PostgreSqlStorage {
                 event_descriptors.insert(key, event.clone());
             }
 
-        Ok(())
+            Ok(())
         })
     }
 
@@ -550,7 +550,7 @@ impl Storage for PostgreSqlStorage {
             )
             .execute(&pool)
             .await?;
-        Ok(())
+            Ok(())
         })
     }
 
@@ -604,7 +604,7 @@ impl Storage for PostgreSqlStorage {
                 last_processed.unwrap_or_default()
             );
 
-        Ok(())
+            Ok(())
         })
     }
 
@@ -661,7 +661,7 @@ impl Storage for PostgreSqlStorage {
                             let v: Option<Vec<u8>> = row.try_get(i).ok();
                             v.map(|b| Value::String(format!("0x{}", hex::encode(b))))
                                 .unwrap_or(Value::Null)
-    }
+                        }
                         _ => {
                             // Default: try as string
                             let v: Option<String> = row.try_get(i).ok();
@@ -828,5 +828,676 @@ impl super::StorageFactory for PostgreSqlStorage {
     fn create_storage(&self) -> Result<Box<dyn super::Storage>> {
         // Cloning is cheap - Pool is Arc internally
         Ok(Box::new(self.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::*;
+    use fake::{Fake, Faker};
+
+    const TEST_CHAIN_ID_MAINNET: u64 = 1;
+    const TEST_CHAIN_ID_BASE: u64 = 8453;
+
+    /// Helper function to get event count from DB
+    async fn event_count_from_db(
+        pool: &Pool<Postgres>,
+        chain_id: u64,
+        event: &Event,
+    ) -> Result<usize> {
+        let selector = event.selector().to_string();
+        let short_hash = &selector[2..7]; // first 5 chars after "0x"
+        let table_name = format!(
+            "event_{}_{}_{}",
+            chain_id,
+            event.name.to_ascii_lowercase(),
+            short_hash
+        );
+        let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {}", table_name))
+            .fetch_one(pool)
+            .await?;
+        Ok(count as usize)
+    }
+
+    /// Helper function to get first block from DB for a given event.
+    async fn first_block_from_db(
+        pool: &Pool<Postgres>,
+        chain_id: u64,
+        event: &Event,
+    ) -> Result<u64> {
+        let rec = sqlx::query!(
+            "SELECT first_block FROM event_descriptor WHERE event_hash = $1 AND chain_id = $2",
+            event.selector().as_slice().to_vec(),
+            chain_id as i64,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        // first_block can be Option<Decimal>
+        let first_block = rec.first_block;
+        match first_block {
+            Some(decimal) => Ok(u64::try_from(decimal).unwrap_or(0)),
+            None => anyhow::bail!(
+                "First block not found for event {}",
+                event.selector().to_string()
+            ),
+        }
+    }
+
+    /// Test case for adding events to the database.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn add_events(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+
+        // Insert logs containing 2 different event types. Repeat for 2 different chains.
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_approval()
+            .with_erc721_transfer()
+            .build();
+
+        storage
+            .include_events(
+                TEST_CHAIN_ID_MAINNET,
+                &[approval_event(), erc721_transfer_event()],
+            )
+            .await?;
+        storage
+            .include_events(
+                TEST_CHAIN_ID_BASE,
+                &[approval_event(), erc721_transfer_event()],
+            )
+            .await?;
+
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+        storage.add_events(TEST_CHAIN_ID_BASE, &logs).await?;
+
+        let inserted_logs_mainnet =
+            event_count_from_db(&pool, TEST_CHAIN_ID_MAINNET, &approval_event()).await?
+                + event_count_from_db(&pool, TEST_CHAIN_ID_MAINNET, &erc721_transfer_event())
+                    .await?;
+
+        let inserted_logs_base = event_count_from_db(&pool, TEST_CHAIN_ID_BASE, &approval_event())
+            .await?
+            + event_count_from_db(&pool, TEST_CHAIN_ID_BASE, &erc721_transfer_event()).await?;
+
+        assert_eq!(inserted_logs_mainnet, num_logs);
+        assert_eq!(inserted_logs_base, num_logs);
+
+        // Test an empty insertion
+        assert!(
+            storage
+                .include_events(TEST_CHAIN_ID_MAINNET, &[])
+                .await
+                .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn include_events_idempotent(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+        let events = vec![transfer_event()];
+
+        // Include the same events twice
+        storage.include_events(1, &events).await?;
+        storage.include_events(1, &events).await?;
+
+        // Should still have only 1 descriptor (ON CONFLICT DO NOTHING)
+        let descriptor_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM event_descriptor WHERE chain_id = 1")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(
+            descriptor_count, 1,
+            "should have 1 event descriptor (idempotent)"
+        );
+
+        Ok(())
+    }
+
+    /// Test case for setting the first block when starting an indexing task.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn first_block(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+
+        // Insert logs containing 2 different event types. Repeat for 2 different chains.
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_approval()
+            .with_erc721_transfer()
+            .build();
+
+        storage
+            .include_events(
+                TEST_CHAIN_ID_MAINNET,
+                &[approval_event(), erc721_transfer_event()],
+            )
+            .await?;
+
+        // Set the starting block for the indexing task. In both cases, the first block is the first block
+        // that was retrieved, regardless of whether it contained a particular event.
+        storage
+            .set_first_block(
+                TEST_CHAIN_ID_MAINNET,
+                &approval_event(),
+                logs[0].block_number.unwrap(),
+            )
+            .await?;
+        storage
+            .set_first_block(
+                TEST_CHAIN_ID_MAINNET,
+                &erc721_transfer_event(),
+                logs[0].block_number.unwrap(),
+            )
+            .await?;
+
+        // Now verify that the initial write of the first block is sound, using the getter
+        let saved_first_block =
+            first_block_from_db(&pool, TEST_CHAIN_ID_MAINNET, &approval_event()).await?;
+        let saved_first_block_erc721_transfer =
+            first_block_from_db(&pool, TEST_CHAIN_ID_MAINNET, &erc721_transfer_event()).await?;
+        assert_eq!(
+            saved_first_block,
+            storage
+                .first_block(TEST_CHAIN_ID_MAINNET, &approval_event())
+                .await?
+        );
+        assert_eq!(
+            saved_first_block_erc721_transfer,
+            storage
+                .first_block(TEST_CHAIN_ID_MAINNET, &erc721_transfer_event())
+                .await?
+        );
+
+        assert_eq!(
+            saved_first_block,
+            logs[0].block_number.unwrap(),
+            "first block should be the lowest block number in the logs"
+        );
+        assert_eq!(
+            saved_first_block_erc721_transfer,
+            logs[0].block_number.unwrap(),
+            "first block should be the lowest block number in the logs"
+        );
+
+        Ok(())
+    }
+
+    /// Check that the latest block is properly updated when adding events.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn latest_block(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+
+        // Insert logs containing 2 different event types. Repeat for 2 different chains.
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_approval()
+            .with_erc721_transfer()
+            .build();
+
+        storage
+            .include_events(
+                TEST_CHAIN_ID_MAINNET,
+                &[approval_event(), erc721_transfer_event()],
+            )
+            .await?;
+
+        // Set the starting block for the indexing task. In both cases, the first block is the first block
+        // that was retrieved, regardless of whether it contained a particular event.
+        storage
+            .set_first_block(
+                TEST_CHAIN_ID_MAINNET,
+                &approval_event(),
+                logs[0].block_number.unwrap(),
+            )
+            .await?;
+        storage
+            .set_first_block(
+                TEST_CHAIN_ID_MAINNET,
+                &erc721_transfer_event(),
+                logs[0].block_number.unwrap(),
+            )
+            .await?;
+
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+
+        // As we didn't call the synchronize_events method, the latest block should be the highest block that
+        // contained the particular event that was inserted.
+        let highest_block_approval = logs
+            .iter()
+            .filter(|log| log.topics()[0] == approval_event().selector())
+            .max_by_key(|log| log.block_number.unwrap())
+            .unwrap()
+            .block_number
+            .unwrap();
+        let highest_block_erc721_transfer = logs
+            .iter()
+            .filter(|log| log.topics()[0] == erc721_transfer_event().selector())
+            .max_by_key(|log| log.block_number.unwrap())
+            .unwrap()
+            .block_number
+            .unwrap();
+
+        assert_eq!(
+            storage
+                .last_block(TEST_CHAIN_ID_MAINNET, &approval_event())
+                .await?,
+            highest_block_approval
+        );
+        assert_eq!(
+            storage
+                .last_block(TEST_CHAIN_ID_MAINNET, &erc721_transfer_event())
+                .await?,
+            highest_block_erc721_transfer
+        );
+
+        Ok(())
+    }
+
+    /// Check that the latest block is properly updated when calling the synchronize_events method.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn synchronize_events(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+        let latest_block = Some(Faker.fake::<u64>());
+
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_approval()
+            .with_erc721_transfer()
+            .build();
+
+        storage
+            .include_events(
+                TEST_CHAIN_ID_MAINNET,
+                &[approval_event(), erc721_transfer_event()],
+            )
+            .await?;
+
+        // We add some logs
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+
+        // But now, we tell the indexer that we have indexed events up to the latest block
+        storage
+            .synchronize_events(
+                TEST_CHAIN_ID_MAINNET,
+                &[
+                    approval_event().selector(),
+                    erc721_transfer_event().selector(),
+                ],
+                latest_block,
+            )
+            .await?;
+
+        // So instead of having the latest block be the highest block in the logs, it should be the latest
+        //block that we told the indexer.
+        assert_eq!(
+            storage
+                .last_block(TEST_CHAIN_ID_MAINNET, &approval_event())
+                .await?,
+            latest_block.unwrap()
+        );
+        assert_eq!(
+            storage
+                .last_block(TEST_CHAIN_ID_MAINNET, &erc721_transfer_event())
+                .await?,
+            latest_block.unwrap()
+        );
+
+        Ok(())
+    }
+
+    /// Test case for the strict mode logic.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn strict_mode(pool: Pool<Postgres>) -> Result<()> {
+        let mut storage = PostgreSqlStorage::new(pool.clone());
+
+        // Let's start inserting some logs into the DB that should pass through
+        storage.set_strict_mode(true);
+
+        // The indexer is expected to receive only transfer events
+        let transfer_event = transfer_event();
+
+        storage
+            .include_events(TEST_CHAIN_ID_MAINNET, &[transfer_event.clone()])
+            .await?;
+
+        // Build some logs that only contain transfer events
+
+        // Add the logs
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize; // number between 1 and 50
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_transfer()
+            .build();
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+
+        assert_eq!(
+            event_count_from_db(&pool, TEST_CHAIN_ID_MAINNET, &transfer_event).await?,
+            num_logs
+        );
+
+        // Now, let's verify that logs containing approval events are rejected
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_approval()
+            .build();
+        assert!(
+            storage
+                .add_events(TEST_CHAIN_ID_MAINNET, &logs)
+                .await
+                .is_err(),
+            "strict mode should reject unknown events"
+        );
+
+        // Finally, let's verify that logs containing a mix of events insert the known and ignore the
+        // unknown ones when running in strict mode = `false`
+        storage.set_strict_mode(false);
+        let mixed_log_count = (Faker.fake::<u8>() % 50 + 1) as usize;
+        let logs = LogTestFixture::builder()
+            .with_log_count(mixed_log_count)
+            .with_erc20_transfer()
+            .with_erc20_approval()
+            .build();
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+
+        // The LogTestFixture cycles through event kinds, so with 2 event types,
+        // indices 0, 2, 4, ... are transfers. Count them.
+        let transfer_count_in_mixed = (mixed_log_count + 1) / 2;
+
+        // The former call should not return an error, so if we get here, it means the unknown event was ignored.
+        // The total count should be: num_logs (from first insertion) + transfer_count_in_mixed (from mixed insertion)
+        assert_eq!(
+            event_count_from_db(&pool, TEST_CHAIN_ID_MAINNET, &transfer_event).await?,
+            num_logs + transfer_count_in_mixed
+        );
+
+        Ok(())
+    }
+
+    /// Test case for listing all indexed events.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_indexed_events(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        // Include events for two different chains
+        storage
+            .include_events(TEST_CHAIN_ID_MAINNET, &[transfer_event(), approval_event()])
+            .await?;
+        storage
+            .include_events(TEST_CHAIN_ID_BASE, &[erc721_transfer_event()])
+            .await?;
+
+        // Add some logs to have event counts
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_transfer()
+            .build();
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+
+        // List all indexed events
+        let events = storage.list_indexed_events().await?;
+
+        // We should have 3 event descriptors (2 on mainnet + 1 on base)
+        assert_eq!(events.len(), 3, "should have 3 indexed events");
+
+        // Check that the Transfer event on mainnet has the correct count
+        let transfer_mainnet = events.iter().find(|e| {
+            e.chain_id == Some(TEST_CHAIN_ID_MAINNET) && e.event_name.as_deref() == Some("Transfer")
+        });
+        assert!(
+            transfer_mainnet.is_some(),
+            "Transfer event on mainnet should exist"
+        );
+        assert_eq!(
+            transfer_mainnet.unwrap().event_count,
+            Some(num_logs),
+            "Transfer event count should match"
+        );
+
+        // Approval event should have 0 count (no logs added)
+        let approval_mainnet = events.iter().find(|e| {
+            e.chain_id == Some(TEST_CHAIN_ID_MAINNET) && e.event_name.as_deref() == Some("Approval")
+        });
+        assert!(
+            approval_mainnet.is_some(),
+            "Approval event on mainnet should exist"
+        );
+        assert_eq!(
+            approval_mainnet.unwrap().event_count,
+            Some(0),
+            "Approval event count should be 0"
+        );
+
+        // ERC721 Transfer on Base should exist with 0 count
+        let transfer_base = events
+            .iter()
+            .find(|e| e.chain_id == Some(TEST_CHAIN_ID_BASE));
+        assert!(
+            transfer_base.is_some(),
+            "Transfer event on Base should exist"
+        );
+        assert_eq!(
+            transfer_base.unwrap().event_count,
+            Some(0),
+            "ERC721 Transfer event count should be 0"
+        );
+
+        Ok(())
+    }
+
+    /// Test case for sending raw SELECT queries.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn send_raw_query(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        // Include and add some events first
+        storage
+            .include_events(TEST_CHAIN_ID_MAINNET, &[transfer_event()])
+            .await?;
+
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_transfer()
+            .build();
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+
+        // Test a valid SELECT query
+        let selector = transfer_event().selector().to_string();
+        let short_hash = &selector[2..7];
+        let query = format!(
+            "SELECT COUNT(*) as cnt FROM event_{}_transfer_{}",
+            TEST_CHAIN_ID_MAINNET, short_hash
+        );
+        let result = storage.send_raw_query(&query).await?;
+
+        // Result should be an array with one object containing the count
+        assert!(result.is_array(), "result should be an array");
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "should have one row");
+        // COUNT(*) returns INT8 which is converted to a JSON Number
+        assert_eq!(
+            arr[0]["cnt"].as_i64(),
+            Some(num_logs as i64),
+            "count should match number of logs"
+        );
+
+        // Test that non-SELECT queries are rejected
+        let delete_query = "DELETE FROM event_descriptor";
+        let result = storage.send_raw_query(delete_query).await?;
+        assert!(
+            result.get("error").is_some(),
+            "non-SELECT queries should return an error"
+        );
+
+        let insert_query = "INSERT INTO event_descriptor (chain_id) VALUES (999)";
+        let result = storage.send_raw_query(insert_query).await?;
+        assert!(
+            result.get("error").is_some(),
+            "INSERT queries should return an error"
+        );
+
+        Ok(())
+    }
+
+    /// Test case for describing the database schema.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn describe_database(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        // Include some events to create tables
+        storage
+            .include_events(TEST_CHAIN_ID_MAINNET, &[transfer_event(), approval_event()])
+            .await?;
+
+        // Describe the database
+        let schema = storage.describe_database().await?;
+
+        // Result should be an array of table definitions
+        assert!(schema.is_array(), "schema should be an array");
+        let tables = schema.as_array().unwrap();
+
+        // We should have at least: event_descriptor, blocks_1, event_1_transfer_*, event_1_approval_*
+        assert!(tables.len() >= 4, "should have at least 4 tables");
+
+        // Find the event_descriptor table
+        let event_descriptor_table = tables.iter().find(|t| {
+            t.as_object()
+                .map(|obj| obj.contains_key("event_descriptor"))
+                .unwrap_or(false)
+        });
+        assert!(
+            event_descriptor_table.is_some(),
+            "event_descriptor table should exist"
+        );
+
+        // Check that event_descriptor has expected columns
+        let ed_columns = event_descriptor_table
+            .unwrap()
+            .get("event_descriptor")
+            .and_then(|v| v.as_object());
+        assert!(ed_columns.is_some(), "event_descriptor should have columns");
+        let columns = ed_columns.unwrap();
+        assert!(
+            columns.contains_key("chain_id"),
+            "should have chain_id column"
+        );
+        assert!(
+            columns.contains_key("event_hash"),
+            "should have event_hash column"
+        );
+        assert!(
+            columns.contains_key("event_name"),
+            "should have event_name column"
+        );
+
+        // Find a blocks table
+        let blocks_table = tables.iter().find(|t| {
+            t.as_object()
+                .map(|obj| obj.keys().any(|k| k.starts_with("blocks_")))
+                .unwrap_or(false)
+        });
+        assert!(blocks_table.is_some(), "blocks table should exist");
+
+        Ok(())
+    }
+
+    /// Test case for listing contracts from event tables.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_contracts(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        // Include events
+        storage
+            .include_events(TEST_CHAIN_ID_MAINNET, &[transfer_event()])
+            .await?;
+
+        // Add logs with specific contract addresses
+        let contract1 = fake_address();
+        let contract2 = fake_address();
+        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+        let logs = LogTestFixture::builder()
+            .with_log_count(num_logs)
+            .with_erc20_transfer()
+            .with_contract_addresses([contract1.clone(), contract2.clone()])
+            .build();
+        storage.add_events(TEST_CHAIN_ID_MAINNET, &logs).await?;
+
+        // List contracts
+        let contracts = storage.list_contracts().await?;
+
+        // Should have at least our 2 contracts
+        assert!(contracts.len() >= 2, "should have at least 2 contracts");
+
+        // Check that our contracts are in the list
+        let addresses: Vec<&str> = contracts
+            .iter()
+            .map(|c| c.contract_address.as_str())
+            .collect();
+        assert!(
+            addresses.contains(&contract1.to_lowercase().as_str())
+                || addresses.iter().any(|a| a.eq_ignore_ascii_case(&contract1)),
+            "contract1 should be in the list"
+        );
+        assert!(
+            addresses.contains(&contract2.to_lowercase().as_str())
+                || addresses.iter().any(|a| a.eq_ignore_ascii_case(&contract2)),
+            "contract2 should be in the list"
+        );
+
+        Ok(())
+    }
+
+    /// Test case for getting event signatures by hash.
+    #[sqlx::test(migrations = "./migrations")]
+    async fn get_event_signature(pool: Pool<Postgres>) -> Result<()> {
+        let storage = PostgreSqlStorage::new(pool.clone());
+
+        // Include events to register them in the event_descriptor table
+        storage
+            .include_events(TEST_CHAIN_ID_MAINNET, &[transfer_event(), approval_event()])
+            .await?;
+
+        // Test get_event_signature with 0x prefix
+        let event_hash = transfer_event().selector().to_string();
+        let signature = storage.get_event_signature(&event_hash).await?;
+
+        // The signature should match the full signature of the Transfer event
+        assert_eq!(
+            signature,
+            transfer_event().full_signature(),
+            "event signature should match"
+        );
+
+        // Test without the 0x prefix
+        let event_hash_no_prefix = event_hash.trim_start_matches("0x");
+        let signature2 = storage.get_event_signature(event_hash_no_prefix).await?;
+        assert_eq!(
+            signature2,
+            transfer_event().full_signature(),
+            "event signature should match without 0x prefix"
+        );
+
+        // Test with a different event (Approval)
+        let approval_hash = approval_event().selector().to_string();
+        let approval_signature = storage.get_event_signature(&approval_hash).await?;
+        assert_eq!(
+            approval_signature,
+            approval_event().full_signature(),
+            "approval event signature should match"
+        );
+
+        Ok(())
     }
 }

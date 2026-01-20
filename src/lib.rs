@@ -155,3 +155,6 @@ pub struct EventStatus {
     pub last_block: u64,
     pub event_count: usize,
 }
+
+#[cfg(feature = "test-utils")]
+pub mod test_utils;
