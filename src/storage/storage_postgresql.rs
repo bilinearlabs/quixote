@@ -1072,7 +1072,8 @@ mod tests {
     async fn latest_block(pool: Pool<Postgres>) -> Result<()> {
         let storage = PostgreSqlStorage::new(pool.clone());
 
-        let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
+        // Need at least 2 logs to ensure both event types are represented (logs cycle through event kinds)
+        let num_logs = (Faker.fake::<u8>() % 50 + 2) as usize;
 
         // Insert logs containing 2 different event types. Repeat for 2 different chains.
         let logs = LogTestFixture::builder()
