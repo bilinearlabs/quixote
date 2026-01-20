@@ -53,31 +53,41 @@ impl Storage for PostgreSqlStorage {
             let mut tx = pool.begin().await?;
 
             // First stage: insert the new blocks into the chain-specific blocks table.
-            // Use INSERT ... ON CONFLICT DO NOTHING to ignore duplicates without aborting the transaction.
-            let mut last_block_number = 0u64;
+            // Collect unique blocks into vectors for bulk insert using UNNEST.
+            let mut seen_blocks = HashSet::new();
+            let mut block_numbers: Vec<Decimal> = Vec::new();
+            let mut block_hashes: Vec<Vec<u8>> = Vec::new();
+            let mut block_timestamps: Vec<Decimal> = Vec::new();
+
             for event in &events {
                 if let Some(block_number) = event.block_number
-                    && block_number != last_block_number
+                    && seen_blocks.insert(block_number)
                 {
-                    let block_hash = event
-                        .block_hash
-                        .map(|h| h.as_slice().to_vec())
-                        .unwrap_or_default();
-                    let block_timestamp = event.block_timestamp.unwrap_or_default();
-
-                    let insert_block = format!(
-                        "INSERT INTO blocks_{} (block_number, block_hash, block_timestamp) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
-                        chain_id
+                    block_numbers.push(Decimal::from(block_number));
+                    block_hashes.push(
+                        event
+                            .block_hash
+                            .map(|h| h.as_slice().to_vec())
+                            .unwrap_or_default(),
                     );
-                    sqlx::query(&insert_block)
-                        .bind(Decimal::from(block_number))
-                        .bind(&block_hash)
-                        .bind(Decimal::from(block_timestamp))
-                        .execute(&mut *tx)
-                        .await?;
-
-                    last_block_number = block_number;
+                    block_timestamps.push(Decimal::from(event.block_timestamp.unwrap_or_default()));
                 }
+            }
+
+            // Bulk insert all blocks at once using UNNEST
+            if !block_numbers.is_empty() {
+                let insert_blocks = format!(
+                    "INSERT INTO blocks_{} (block_number, block_hash, block_timestamp) \
+                     SELECT * FROM UNNEST($1::numeric[], $2::bytea[], $3::numeric[]) \
+                     ON CONFLICT DO NOTHING",
+                    chain_id
+                );
+                sqlx::query(&insert_blocks)
+                    .bind(&block_numbers)
+                    .bind(&block_hashes)
+                    .bind(&block_timestamps)
+                    .execute(&mut *tx)
+                    .await?;
             }
 
             // Second stage: insert the new events into the event_X table.
@@ -125,7 +135,7 @@ impl Storage for PostgreSqlStorage {
                 }
             }
 
-            // Process each table's events
+            // Process each table's events using bulk insert with UNNEST
             for (table_name, table_events) in events_by_table {
                 if table_events.is_empty() {
                     continue;
@@ -146,88 +156,116 @@ impl Storage for PostgreSqlStorage {
                     .and_then(|l| l.topic0())
                     .map(|h| h.to_string())
                     .unwrap_or_default();
+
+                // Collect all data into vectors for bulk insert
+                let mut block_numbers: Vec<Decimal> = Vec::with_capacity(table_events.len());
+                let mut tx_hashes: Vec<Vec<u8>> = Vec::with_capacity(table_events.len());
+                let mut log_indices: Vec<i32> = Vec::with_capacity(table_events.len());
+                let mut contract_addresses: Vec<Vec<u8>> = Vec::with_capacity(table_events.len());
+
+                // Determine which params are uint256 (NUMERIC) vs TEXT
+                let param_is_uint256: Vec<bool> = parsed_event
+                    .inputs
+                    .iter()
+                    .map(|p| p.selector_type() == "uint256")
+                    .collect();
+
+                // Create vectors for each parameter column
+                // For NUMERIC params, we store as Decimal; for TEXT params, we store as String
+                let mut numeric_params: Vec<Vec<Decimal>> =
+                    vec![Vec::with_capacity(table_events.len()); param_is_uint256.len()];
+                let mut text_params: Vec<Vec<String>> =
+                    vec![Vec::with_capacity(table_events.len()); param_is_uint256.len()];
+
                 let mut max_block_number: u64 = 0;
 
-                for log in table_events {
+                for log in &table_events {
                     let block_number = log.block_number.unwrap();
-                    let tx_hash = log.transaction_hash.unwrap().as_slice().to_vec();
-                    let log_index = log.log_index.unwrap() as i32;
-                    let contract_address = log.address().as_slice().to_vec();
-
                     max_block_number = max_block_number.max(block_number);
 
-                    // Decode event parameters - store value and whether it's a uint256
-                    let mut param_values: Vec<(String, bool)> = Vec::new();
+                    // Decode event parameters first - only add to vectors if decoding succeeds
+                    // to ensure all arrays have matching lengths for UNNEST
                     if let Ok(DecodedEvent { indexed, body, .. }) = parsed_event
                         .decode_log_parts(log.topics().to_vec(), log.data().data.as_ref())
                     {
-                        // Process indexed parameters
-                        for (i, item) in indexed.iter().enumerate() {
-                            let is_uint256 = parsed_event
-                                .inputs
-                                .get(i)
-                                .map(|p| p.selector_type() == "uint256")
-                                .unwrap_or(false);
-                            param_values.push((
-                                PostgreSqlStorage::dyn_sol_value_to_string(item),
-                                is_uint256,
-                            ));
-                        }
-                        // Process body parameters (non-indexed)
-                        let indexed_count = indexed.len();
-                        for (i, item) in body.iter().enumerate() {
-                            let is_uint256 = parsed_event
-                                .inputs
-                                .get(indexed_count + i)
-                                .map(|p| p.selector_type() == "uint256")
-                                .unwrap_or(false);
-                            param_values.push((
-                                PostgreSqlStorage::dyn_sol_value_to_string(item),
-                                is_uint256,
-                            ));
+                        // Add fixed columns
+                        block_numbers.push(Decimal::from(block_number));
+                        tx_hashes.push(log.transaction_hash.unwrap().as_slice().to_vec());
+                        log_indices.push(log.log_index.unwrap() as i32);
+                        contract_addresses.push(log.address().as_slice().to_vec());
+
+                        // Add parameter columns
+                        let all_values: Vec<&DynSolValue> =
+                            indexed.iter().chain(body.iter()).collect();
+
+                        for (i, (is_uint256, value)) in
+                            param_is_uint256.iter().zip(all_values.iter()).enumerate()
+                        {
+                            let str_val = PostgreSqlStorage::dyn_sol_value_to_string(value);
+                            if *is_uint256 {
+                                numeric_params[i]
+                                    .push(str_val.parse::<Decimal>().unwrap_or_default());
+                                text_params[i].push(String::new()); // placeholder
+                            } else {
+                                numeric_params[i].push(Decimal::default()); // placeholder
+                                text_params[i].push(str_val);
+                            }
                         }
                     }
+                }
 
-                    // Build column names for this event
-                    let param_names: Vec<String> = parsed_event
-                        .inputs
-                        .iter()
-                        .map(|p| format!("\"{}\"", p.name))
-                        .collect();
-                    let all_columns = format!(
-                        "block_number, transaction_hash, log_index, contract_address{}",
-                        if param_names.is_empty() {
-                            String::new()
-                        } else {
-                            format!(", {}", param_names.join(", "))
-                        }
-                    );
+                // Build column names
+                let param_names: Vec<String> = parsed_event
+                    .inputs
+                    .iter()
+                    .map(|p| format!("\"{}\"", p.name))
+                    .collect();
+                let all_columns = format!(
+                    "block_number, transaction_hash, log_index, contract_address{}",
+                    if param_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {}", param_names.join(", "))
+                    }
+                );
 
-                    // Build placeholders
-                    let placeholder_count = 4 + param_values.len();
-                    let placeholders: Vec<String> =
-                        (1..=placeholder_count).map(|i| format!("${}", i)).collect();
+                // Build UNNEST types for each column
+                let mut unnest_parts = vec![
+                    "$1::numeric[]".to_string(),
+                    "$2::bytea[]".to_string(),
+                    "$3::int[]".to_string(),
+                    "$4::bytea[]".to_string(),
+                ];
+                for (i, is_uint256) in param_is_uint256.iter().enumerate() {
+                    let param_idx = 5 + i;
+                    if *is_uint256 {
+                        unnest_parts.push(format!("${}::numeric[]", param_idx));
+                    } else {
+                        unnest_parts.push(format!("${}::text[]", param_idx));
+                    }
+                }
 
+                // Only execute bulk insert if we have events to insert
+                if !block_numbers.is_empty() {
                     let insert_sql = format!(
-                        "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT DO NOTHING",
+                        "INSERT INTO {} ({}) SELECT * FROM UNNEST({}) ON CONFLICT DO NOTHING",
                         table_name,
                         all_columns,
-                        placeholders.join(", ")
+                        unnest_parts.join(", ")
                     );
 
+                    // Build and execute the query with all bindings
                     let mut query = sqlx::query(&insert_sql)
-                        .bind(Decimal::from(block_number))
-                        .bind(&tx_hash)
-                        .bind(log_index)
-                        .bind(&contract_address);
+                        .bind(&block_numbers)
+                        .bind(&tx_hashes)
+                        .bind(&log_indices)
+                        .bind(&contract_addresses);
 
-                    for (val, is_uint256) in &param_values {
+                    for (i, is_uint256) in param_is_uint256.iter().enumerate() {
                         if *is_uint256 {
-                            // Parse as Decimal for NUMERIC columns
-                            let decimal_val = val.parse::<Decimal>().unwrap_or_default();
-                            query = query.bind(decimal_val);
+                            query = query.bind(&numeric_params[i]);
                         } else {
-                            query = query.bind(val);
+                            query = query.bind(&text_params[i]);
                         }
                     }
 
