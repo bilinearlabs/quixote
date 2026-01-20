@@ -1,4 +1,4 @@
-name: Podman build & push
+name: Docker build & push
 
 on:
   workflow_dispatch:
@@ -41,7 +41,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Log in to Container Registry
-        uses: redhat-actions/podman-login@v1
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -50,15 +50,15 @@ jobs:
       - name: Build and push image
         run: |
           IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}"
-          podman build \
+          docker build \
             --platform ${{ matrix.platform }} \
             --label io.containers.autoupdate=registry \
-            --annotation org.opencontainers.image.authors="Felipe Torres Gonzalez <felipe@bilinearlabs.io>" \
-            --annotation org.opencontainers.image.description="Quixote Indexer" \
+            --label org.opencontainers.image.authors="Felipe Torres Gonzalez <felipe@bilinearlabs.io>, Martin Sanchez Bermudez <martin@bilinearlabs.io>" \
+            --label org.opencontainers.image.description="Quixote Indexer" \
             -t "$IMAGE_TAG" \
             -f ./Containerfile \
             .
-          podman push "$IMAGE_TAG"
+          docker push "$IMAGE_TAG"
 
   manifest:
     name: Create multi-arch manifest
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Log in to Container Registry
-        uses: redhat-actions/podman-login@v1
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -78,8 +78,8 @@ jobs:
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
 
           for TAG in "$VERSION" "latest"; do
-            podman manifest create "${IMAGE}:${TAG}" \
+            docker manifest create "${IMAGE}:${TAG}" \
               "${IMAGE}:${VERSION}-amd64" \
               "${IMAGE}:${VERSION}-arm64"
-            podman manifest push "${IMAGE}:${TAG}"
+            docker manifest push "${IMAGE}:${TAG}"
           done
