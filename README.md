@@ -12,6 +12,7 @@
 ![GitHub License](https://img.shields.io/github/license/bilinearlabs/quixote?style=flat-square)
 ![Rust](https://img.shields.io/badge/Rust-000000?style=flat-square&logo=rust&logoColor=white)
 ![Duckdb](https://img.shields.io/badge/DuckDB-FFF000?style=flat-square&logo=duckdb&logoColor=black)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)
 [![Join our Discord](https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white&style=flat-square)](https://discord.gg/Et8BTnVBZS)
 
 
@@ -51,7 +52,7 @@ And the database schema as follows.
 curl http://localhost:9720/db_schema
 ```
 
-You can also pass raw SQL queries as follows. 
+You can also pass raw SQL queries as follows.
 
 ```bash
 curl -X POST http://localhost:9720/raw_query \
@@ -67,7 +68,7 @@ And `quixote` ships with a built-in frontend that you can use to query data in a
 ## Features
 
 - **Simple to run**: Single binary, minimal configuration. Point to an RPC and start indexing.
-- **DuckDB-powered**: Fast analytical queries with SQL. File-based storage, no external services required. Export to Parquet or join with other data sources.
+- **Dual database support**: Choose between DuckDB (file-based, zero setup) or PostgreSQL (scalable, production-ready). See [docs](https://quixote.bilinearlabs.io/database).
 - **Any EVM chain**: Works with Ethereum, Arbitrum, Optimism, Polygon, and any EVM-compatible chain.
 - **Flexible event selection**: Index specific events or entire ABIs. Filter by address, topic, or any indexed parameter.
 - **Built-in REST API**: List events, query contracts, or execute raw SQL via HTTP endpoints.
