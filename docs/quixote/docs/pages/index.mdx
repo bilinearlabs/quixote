@@ -254,6 +254,16 @@ quixote -r https://gateway.tenderly.co/public/mainnet \
   -s 16896718
 ```
 
+### 📦 NFT Transfers
+
+Track every NFT transfer across all collections on the network.
+
+```bash
+quixote -r https://gateway.tenderly.co/public/mainnet \
+  -e "Transfer(address indexed from, address indexed to, uint256 indexed tokenId)" \
+  -s 21500000
+```
+
 For more examples involving multiple RPCs, complex filter setups, and further documentation, check out the [Get Started guide](/get-started).
 
 ---

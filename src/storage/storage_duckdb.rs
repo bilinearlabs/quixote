@@ -330,6 +330,13 @@ impl DuckDBStorage {
             let mut max_block_number: u64 = 0;
 
             for log in table_events {
+                // Check number of topics
+                let log_topics = log.topics().len();
+                let event_topics = parsed_event.num_topics();
+                if log_topics != event_topics {
+                    continue;
+                }
+
                 // Insert the always present fields (chain_id is encoded in table name)
                 let mut row_vals: Vec<String> = vec![
                     log.block_number.unwrap().to_string(),
@@ -1940,5 +1947,67 @@ mod tests {
                 stored_value
             );
         }
+    }
+
+    #[test]
+    fn skip_events_with_same_signature_but_different_topic_number() {
+        let storage = DuckDBStorage::with_db(":memory:").expect("in-memory DB should open");
+
+        // We register only the transfer event
+        storage
+            .include_events_sync(TEST_CHAIN_ID, &[transfer_event()])
+            .expect("failed to register transfer event");
+
+        // We add a log with the correct topic number
+        let log: Log = serde_json::from_value(json!({
+            "address": "0x000000000000000000000000000000000000c0de",
+            "topics": [
+                transfer_event().selector().to_string(),
+                "0x000000000000000000000000000000000000000000000000000000000000d00d",
+                "0x000000000000000000000000000000000000000000000000000000000000f00d"
+            ],
+            "data": "0x000000000000000000000000000000000000000000000000000000000000900d",
+            "blockNumber": "0x1",
+            "transactionHash": format!("0x{:064x}", 0xaaa_u64),
+            "transactionIndex": "0x0",
+            "blockHash": format!("0x{:064x}", 0xbbb_u64),
+            "logIndex": "0x0",
+            "removed": false
+        }))
+        .expect("failed to build log with 3 topics");
+
+        storage
+            .add_events_sync(TEST_CHAIN_ID, &[log])
+            .expect("should add events with correct topic number");
+
+        // We try to add a log with a different topic number
+        let log: Log = serde_json::from_value(json!({
+            "address": "0x000000000000000000000000000000000000c0de",
+            "topics": [
+                transfer_event().selector().to_string(),
+                "0x000000000000000000000000000000000000000000000000000000000000d00d",
+                "0x000000000000000000000000000000000000000000000000000000000000f00d",
+                "0x000000000000000000000000000000000000000000000000000000000000900d"
+            ],
+            "data": "0x",
+            "blockNumber": "0x2",
+            "transactionHash": format!("0x{:064x}", 0xbbb_u64),
+            "transactionIndex": "0x0",
+            "blockHash": format!("0x{:064x}", 0xccc_u64),
+            "logIndex": "0x0",
+            "removed": false
+        }))
+        .expect("failed to build log with 4 topics");
+
+        storage
+            .add_events_sync(TEST_CHAIN_ID, &[log])
+            .expect("should skip events with same signature but different topic number");
+
+        // We should have 1 event stored
+        assert_eq!(
+            stored_count_for_event(&storage, &transfer_event()),
+            1,
+            "1 transfer event must be stored"
+        );
     }
 }

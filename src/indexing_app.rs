@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 use crate::{
-    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, TxLogChunk,
+    CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, OptionalAddressDisplay,
+    TxLogChunk,
     api_rest::start_api_server,
     configuration::IndexerConfiguration,
     constants, error_codes,
@@ -145,7 +146,7 @@ impl IndexingApp {
                 "Starting EventProcessor {} for chain {:#x}, contract {}, from block {}, with {} event(s)",
                 seed_index,
                 seed.chain_id,
-                seed.contract_address,
+                seed.contract_address.display_or_none(),
                 seed.start_block,
                 seed.events.len()
             );
