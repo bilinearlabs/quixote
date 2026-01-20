@@ -80,14 +80,10 @@ pub mod storage {
     pub mod storage_api;
     pub use storage_api::{Storage, StorageFactory};
 
-    #[cfg(feature = "duckdb")]
     pub mod storage_duckdb;
-    #[cfg(feature = "duckdb")]
     pub use storage_duckdb::DuckDBStorage;
 
-    #[cfg(feature = "postgresql")]
     pub mod storage_postgresql;
-    #[cfg(feature = "postgresql")]
     pub use storage_postgresql::PostgreSqlStorage;
 
     use serde::Serialize;

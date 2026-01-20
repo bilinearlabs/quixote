@@ -3578,7 +3578,6 @@ dependencies = [
  "alloy",
  "anyhow",
  "axum",
- "cfg-if",
  "clap",
  "config",
  "duckdb",

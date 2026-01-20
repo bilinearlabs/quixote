@@ -556,10 +556,10 @@ impl CollectorSeed {
     }
 }
 
-#[cfg(all(test, feature = "duckdb"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configuration::{EventJob, FilterMap, IndexJob};
+    use crate::configuration::{DatabaseBackend, EventJob, FilterMap, IndexJob};
     use crate::storage::DuckDBStorage;
     use alloy::{json_abi::Event, primitives::address};
     use pretty_assertions::assert_eq;
@@ -605,6 +605,7 @@ mod tests {
                 }]),
                 abi_path: None,
             }],
+            database_backend: DatabaseBackend::DuckDb,
             database_path: ":memory:".to_string(),
             api_server_address: "127.0.0.1".to_string(),
             api_server_port: 9720,
@@ -632,6 +633,7 @@ mod tests {
                 events: None,
                 abi_path: Some("test/fixtures/usdc_abi.json".to_string()),
             }],
+            database_backend: DatabaseBackend::DuckDb,
             database_path: ":memory:".to_string(),
             api_server_address: "127.0.0.1".to_string(),
             api_server_port: 9720,
@@ -675,6 +677,7 @@ mod tests {
                     abi_path: None,
                 },
             ],
+            database_backend: DatabaseBackend::DuckDb,
             database_path: ":memory:".to_string(),
             api_server_address: "127.0.0.1".to_string(),
             api_server_port: 9720,
@@ -711,6 +714,7 @@ mod tests {
                 }]),
                 abi_path: None,
             }],
+            database_backend: DatabaseBackend::DuckDb,
             database_path: ":memory:".to_string(),
             api_server_address: "127.0.0.1".to_string(),
             api_server_port: 9720,

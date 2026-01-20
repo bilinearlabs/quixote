@@ -47,6 +47,8 @@ pub struct IndexingArgs {
         help = "Path to the database file. Default: etherduck_indexer.duckdb"
     )]
     pub database: Option<String>,
+    #[arg(long, help = "Database backend to use: duckdb (default) or postgresql")]
+    pub database_backend: Option<String>,
     #[arg(
         short,
         long,

@@ -5,24 +5,15 @@ use crate::{
     CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, OptionalAddressDisplay,
     TxLogChunk,
     api_rest::start_api_server,
-    configuration::IndexerConfiguration,
+    configuration::{DatabaseBackend, IndexerConfiguration},
     constants, error_codes,
     metrics::{MetricsConfig, MetricsHandle},
-    storage::{Storage, StorageFactory},
+    storage::{DuckDBStorage, PostgreSqlStorage, Storage, StorageFactory},
 };
 use anyhow::{Context, Result};
-use cfg_if::cfg_if;
 use std::sync::Arc;
 use tokio::{signal::ctrl_c, sync::mpsc};
 use tracing::{error, info, warn};
-
-cfg_if! {
-    if #[cfg(feature = "duckdb")] {
-        use crate::storage::DuckDBStorage;
-    } else if #[cfg(feature = "postgresql")] {
-        use crate::storage::PostgreSqlStorage;
-    }
-}
 
 pub struct IndexingApp {
     pub storage: Arc<dyn Storage + Send + Sync>,
@@ -48,23 +39,17 @@ impl IndexingApp {
         let metrics = MetricsHandle::new(&metrics_config)?;
 
         // Instantiate the DB handlers, for the consumer task and the API server.
-        // The storage backend is selected based on the enabled feature.
-        cfg_if! {
-            if #[cfg(feature = "duckdb")] {
-                let (storage, storage_for_api): (
-                    Arc<dyn Storage + Send + Sync>,
-                    Arc<dyn StorageFactory>,
-                ) = {
+        // The storage backend is selected based on the configuration.
+        info!("Using database backend: {}", config.database_backend);
+        let (storage, storage_for_api): (Arc<dyn Storage + Send + Sync>, Arc<dyn StorageFactory>) =
+            match config.database_backend {
+                DatabaseBackend::DuckDb => {
                     let mut storage = DuckDBStorage::with_db(&config.database_path)?;
                     storage.set_strict_mode(config.strict_mode);
                     let storage_arc = Arc::new(storage);
                     (storage_arc.clone(), storage_arc)
-                };
-            } else if #[cfg(feature = "postgresql")] {
-                let (storage, storage_for_api): (
-                    Arc<dyn Storage + Send + Sync>,
-                    Arc<dyn StorageFactory>,
-                ) = {
+                }
+                DatabaseBackend::PostgreSql => {
                     let pool = sqlx::postgres::PgPoolOptions::new()
                         .connect(&config.database_path)
                         .await
@@ -73,11 +58,8 @@ impl IndexingApp {
                     pg_storage.set_strict_mode(config.strict_mode);
                     let storage_arc = Arc::new(pg_storage);
                     (storage_arc.clone(), storage_arc)
-                };
-            } else {
-                compile_error!("Must enable either 'duckdb' or 'postgresql' feature");
-            }
-        }
+                }
+            };
 
         // Build a list of events from the command line arguments.
         let seeds = match CollectorSeed::build_seeds(storage.as_ref(), config).await {

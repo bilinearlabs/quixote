@@ -12,6 +12,39 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Database backend selection for runtime configuration.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseBackend {
+    #[default]
+    DuckDb,
+    PostgreSql,
+}
+
+impl std::fmt::Display for DatabaseBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DatabaseBackend::DuckDb => write!(f, "duckdb"),
+            DatabaseBackend::PostgreSql => write!(f, "postgresql"),
+        }
+    }
+}
+
+impl std::str::FromStr for DatabaseBackend {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "duckdb" => Ok(DatabaseBackend::DuckDb),
+            "postgresql" | "postgres" => Ok(DatabaseBackend::PostgreSql),
+            _ => Err(format!(
+                "Invalid database backend '{}'. Valid options: duckdb, postgresql",
+                s
+            )),
+        }
+    }
+}
+
 /// Type alias for event filter configuration.
 ///
 /// Maps indexed parameter names to lists of filter values.
@@ -25,6 +58,8 @@ pub type FilterMap = HashMap<String, Vec<String>>;
 pub struct FileConfiguration {
     #[serde(default)]
     pub index_jobs: Vec<IndexJob>,
+    #[serde(default)]
+    pub database_backend: DatabaseBackend,
     pub database_path: Option<String>,
     pub api_server_address: Option<String>,
     pub api_server_port: Option<u16>,
@@ -52,6 +87,7 @@ pub struct EventJob {
 #[derive(Debug, Clone)]
 pub struct IndexerConfiguration {
     pub index_jobs: Vec<IndexJob>,
+    pub database_backend: DatabaseBackend,
     pub database_path: String,
     pub api_server_address: String,
     pub api_server_port: u16,
@@ -124,8 +160,16 @@ impl IndexerConfiguration {
         };
 
         // Resolve all fields with defaults
+        // CLI database_backend takes precedence over file config if explicitly provided
+        let database_backend = args
+            .database_backend
+            .as_ref()
+            .and_then(|s| s.parse::<DatabaseBackend>().ok())
+            .unwrap_or(file_config.database_backend);
+
         Self {
             index_jobs: file_config.index_jobs,
+            database_backend,
             database_path: file_config
                 .database_path
                 .unwrap_or_else(|| constants::DUCKDB_FILE_PATH.to_string()),
@@ -205,6 +249,11 @@ impl FileConfiguration {
 
         Self {
             index_jobs,
+            database_backend: args
+                .database_backend
+                .as_ref()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(DatabaseBackend::DuckDb),
             database_path: args.database.clone(),
             api_server_address: args
                 .api_server
@@ -249,6 +298,7 @@ mod tests {
             event: None,
             start_block: None,
             database: None,
+            database_backend: None,
             abi_spec: None,
             api_server: None,
             block_range: DEFAULT_BLOCK_RANGE,

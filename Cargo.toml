@@ -9,19 +9,16 @@ readme = "README.md"
 keywords = ["evm", "indexing", "events", "ethereum"]
 
 [features]
-default = ["duckdb"]
-duckdb = ["dep:duckdb"]
-postgresql = ["dep:sqlx"]
+default = []
 test-utils = ["dep:fake"]
 
 [dependencies]
 alloy = { version = "1.4.0", features = ["rpc-types", "json", "rpc-client", "json-rpc"] }
 anyhow = "1.0.100"
-cfg-if = "1.0"
 axum = { version = "0.8.7", features = ["default", "http2"] }
 hex = "0.4"
 clap = { version = "4.5.51", features = ["derive"] }
-duckdb = { version = "1.4.3", features = ["bundled"], optional = true }
+duckdb = { version = "1.4.3", features = ["bundled"] }
 futures = "0.3.31"
 regex = "1.12.2"
 prometheus = { version = "0.13", default-features = false, features = ["process"] }
@@ -37,7 +34,6 @@ fake = { version = "4.4.0", optional = true }
 [dependencies.sqlx]
 version = "0.8.6"
 features = [ "runtime-tokio", "postgres", "derive", "macros", "migrate", "chrono", "rust_decimal" ]
-optional = true
 
 [dev-dependencies]
 rstest = "0.26.1"
