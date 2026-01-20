@@ -14,3 +14,5 @@ CREATE TABLE IF NOT EXISTS event_descriptor(
     last_block NUMERIC(20,0),
     PRIMARY KEY (chain_id, event_hash)
 );
+
+INSERT INTO quixote_info (version) VALUES ('0.1.0');
