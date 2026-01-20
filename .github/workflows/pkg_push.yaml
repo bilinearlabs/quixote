@@ -1,4 +1,4 @@
-name: Podman build & push
+name: Docker build & push
 
 on:
   workflow_dispatch:
@@ -6,34 +6,80 @@ on:
     tags:
       - 'v*'
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
-    build-push:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-            - name: Set up QEMU
-              uses: docker/setup-qemu-action@v3
-            - name: Write release version
-              run: |
-                if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-                  VERSION=${GITHUB_REF_NAME#v}
-                else
-                  VERSION=${GITHUB_SHA::7}
-                fi
-                echo Version: $VERSION
-                echo "VERSION=$VERSION" >> $GITHUB_ENV
-            - name: Use Podman Build and Push Action
-              uses: Frozen-Tapestry/container-action@v1.4.0
-              with:
-                login_registry: ghcr.io
-                login_username: ${{ github.actor }}
-                login_password: ${{ secrets.REGISTRY_TOKEN }}
-                dockerfile: ./Containerfile
-                labels: io.containers.autoupdate=registry
-                tags: ghcr.io/${{ github.repository }}:${{ env.VERSION }} ghcr.io/${{ github.repository }}:latest
-                extra_args: --platform linux/amd64,linux/arm64 --annotation org.opencontainers.image.authors=Felipe\ Torres\ Gonzalez<felipe@bilinearlabs.io> --annotation org.opencontainers.image.description=Quixote\ Indexer
-                push: true
-                security: |
-                  --security-opt=seccomp=unconfined
-                  --security-opt=apparmor=unconfined
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set release version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF_NAME#v}
+          else
+            VERSION=${GITHUB_SHA::7}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Build and push image
+        run: |
+          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}"
+          docker build \
+            --platform ${{ matrix.platform }} \
+            --label io.containers.autoupdate=registry \
+            --label org.opencontainers.image.authors="Felipe Torres Gonzalez <felipe@bilinearlabs.io>, Martin Sanchez Bermudez <martin@bilinearlabs.io>" \
+            --label org.opencontainers.image.description="Quixote Indexer" \
+            -t "$IMAGE_TAG" \
+            -f ./Containerfile \
+            .
+          docker push "$IMAGE_TAG"
+
+  manifest:
+    name: Create multi-arch manifest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - name: Create and push manifests
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          for TAG in "$VERSION" "latest"; do
+            docker manifest create "${IMAGE}:${TAG}" \
+              "${IMAGE}:${VERSION}-amd64" \
+              "${IMAGE}:${VERSION}-arm64"
+            docker manifest push "${IMAGE}:${TAG}"
+          done
