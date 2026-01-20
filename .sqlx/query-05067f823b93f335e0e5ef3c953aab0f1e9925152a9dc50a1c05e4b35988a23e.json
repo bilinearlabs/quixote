@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT chain_id, event_hash, event_signature, event_name, first_block, last_block FROM event_descriptor",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chain_id",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 1,
+        "name": "event_hash",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "event_signature",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "event_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "first_block",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_block",
+        "type_info": "Numeric"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "05067f823b93f335e0e5ef3c953aab0f1e9925152a9dc50a1c05e4b35988a23e"
+}
