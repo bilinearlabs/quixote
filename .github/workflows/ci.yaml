@@ -91,4 +91,4 @@ jobs:
           QUIXOTE_TEST_RPC=${{ secrets.QUIXOTE_TEST_RPC }} \
           QUIXOTE_TEST_RPC_USER=${{ secrets.QUIXOTE_TEST_RPC_USER }} \
           QUIXOTE_TEST_RPC_PASSWORD=${{ secrets.QUIXOTE_TEST_RPC_PASSWORD }} \
-          cargo test
+          cargo test --all-features
