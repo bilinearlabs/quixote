@@ -46,7 +46,7 @@ jobs:
         with:
           components: rustfmt clippy
       - name: Build with all features
-        run: cargo check --all-features --future-incompat-report
+        run: SQLX_OFFLINE=true cargo check --all-features --future-incompat-report
 
   clippy:
     name: Clippy linter
@@ -59,18 +59,34 @@ jobs:
         with:
           components: rustfmt clippy
       - name: Linting with all features
-        run: cargo clippy --all-features --no-deps -- -D warnings
+        run: SQLX_OFFLINE=true cargo clippy --all-features --no-deps -- -D warnings
 
   # Comprehensive test with all features
   test:
     name: Test
     needs: clippy
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: quixote_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2.8.2
       - uses: dtolnay/rust-toolchain@stable
       - name: Tests
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/quixote_test
         run: |
           QUIXOTE_TEST_RPC=${{ secrets.QUIXOTE_TEST_RPC }} \
           QUIXOTE_TEST_RPC_USER=${{ secrets.QUIXOTE_TEST_RPC_USER }} \
