@@ -163,19 +163,24 @@ impl Storage for PostgreSqlStorage {
                 let mut log_indices: Vec<i32> = Vec::with_capacity(table_events.len());
                 let mut contract_addresses: Vec<Vec<u8>> = Vec::with_capacity(table_events.len());
 
-                // Determine which params are uint256 (NUMERIC) vs TEXT
-                let param_is_uint256: Vec<bool> = parsed_event
+                // Determine param types: 0 = TEXT, 1 = NUMERIC (uint256), 2 = BYTEA (address)
+                let param_types: Vec<u8> = parsed_event
                     .inputs
                     .iter()
-                    .map(|p| p.selector_type() == "uint256")
+                    .map(|p| match p.selector_type().as_ref() {
+                        "uint256" => 1,
+                        "address" => 2,
+                        _ => 0,
+                    })
                     .collect();
 
-                // Create vectors for each parameter column
-                // For NUMERIC params, we store as Decimal; for TEXT params, we store as String
+                // Create vectors for each parameter column type
                 let mut numeric_params: Vec<Vec<Decimal>> =
-                    vec![Vec::with_capacity(table_events.len()); param_is_uint256.len()];
+                    vec![Vec::with_capacity(table_events.len()); param_types.len()];
                 let mut text_params: Vec<Vec<String>> =
-                    vec![Vec::with_capacity(table_events.len()); param_is_uint256.len()];
+                    vec![Vec::with_capacity(table_events.len()); param_types.len()];
+                let mut bytea_params: Vec<Vec<Vec<u8>>> =
+                    vec![Vec::with_capacity(table_events.len()); param_types.len()];
 
                 let mut max_block_number: u64 = 0;
 
@@ -198,17 +203,32 @@ impl Storage for PostgreSqlStorage {
                         let all_values: Vec<&DynSolValue> =
                             indexed.iter().chain(body.iter()).collect();
 
-                        for (i, (is_uint256, value)) in
-                            param_is_uint256.iter().zip(all_values.iter()).enumerate()
+                        for (i, (param_type, value)) in
+                            param_types.iter().zip(all_values.iter()).enumerate()
                         {
-                            let str_val = PostgreSqlStorage::dyn_sol_value_to_string(value);
-                            if *is_uint256 {
-                                numeric_params[i]
-                                    .push(str_val.parse::<Decimal>().unwrap_or_default());
-                                text_params[i].push(String::new()); // placeholder
-                            } else {
-                                numeric_params[i].push(Decimal::default()); // placeholder
-                                text_params[i].push(str_val);
+                            match param_type {
+                                1 => {
+                                    // NUMERIC (uint256)
+                                    let str_val = PostgreSqlStorage::dyn_sol_value_to_string(value);
+                                    numeric_params[i]
+                                        .push(str_val.parse::<Decimal>().unwrap_or_default());
+                                    text_params[i].push(String::new());
+                                    bytea_params[i].push(Vec::new());
+                                }
+                                2 => {
+                                    // BYTEA (address)
+                                    let bytes = PostgreSqlStorage::dyn_sol_value_to_bytes(value);
+                                    bytea_params[i].push(bytes);
+                                    numeric_params[i].push(Decimal::default());
+                                    text_params[i].push(String::new());
+                                }
+                                _ => {
+                                    // TEXT
+                                    let str_val = PostgreSqlStorage::dyn_sol_value_to_string(value);
+                                    text_params[i].push(str_val);
+                                    numeric_params[i].push(Decimal::default());
+                                    bytea_params[i].push(Vec::new());
+                                }
                             }
                         }
                     }
@@ -236,12 +256,12 @@ impl Storage for PostgreSqlStorage {
                     "$3::int[]".to_string(),
                     "$4::bytea[]".to_string(),
                 ];
-                for (i, is_uint256) in param_is_uint256.iter().enumerate() {
+                for (i, param_type) in param_types.iter().enumerate() {
                     let param_idx = 5 + i;
-                    if *is_uint256 {
-                        unnest_parts.push(format!("${}::numeric[]", param_idx));
-                    } else {
-                        unnest_parts.push(format!("${}::text[]", param_idx));
+                    match param_type {
+                        1 => unnest_parts.push(format!("${}::numeric[]", param_idx)),
+                        2 => unnest_parts.push(format!("${}::bytea[]", param_idx)),
+                        _ => unnest_parts.push(format!("${}::text[]", param_idx)),
                     }
                 }
 
@@ -261,11 +281,11 @@ impl Storage for PostgreSqlStorage {
                         .bind(&log_indices)
                         .bind(&contract_addresses);
 
-                    for (i, is_uint256) in param_is_uint256.iter().enumerate() {
-                        if *is_uint256 {
-                            query = query.bind(&numeric_params[i]);
-                        } else {
-                            query = query.bind(&text_params[i]);
+                    for (i, param_type) in param_types.iter().enumerate() {
+                        match param_type {
+                            1 => query = query.bind(&numeric_params[i]),
+                            2 => query = query.bind(&bytea_params[i]),
+                            _ => query = query.bind(&text_params[i]),
                         }
                     }
 
@@ -458,10 +478,10 @@ impl Storage for PostgreSqlStorage {
                 );
 
                 for param in &event.inputs {
-                    let db_type = if param.selector_type() == "uint256" {
-                        "NUMERIC(78,0)"
-                    } else {
-                        "TEXT"
+                    let db_type = match param.selector_type().as_ref() {
+                        "uint256" => "NUMERIC(78,0)",
+                        "address" => "BYTEA",
+                        _ => "TEXT",
                     };
                     create_table.push_str(&format!("\"{}\" {db_type},", param.name));
                 }
@@ -858,6 +878,15 @@ impl PostgreSqlStorage {
                     values.iter().map(Self::dyn_sol_value_to_string).collect();
                 format!("({})", elements.join(","))
             }
+        }
+    }
+
+    /// Converts a `DynSolValue` to bytes for BYTEA storage (addresses).
+    fn dyn_sol_value_to_bytes(value: &DynSolValue) -> Vec<u8> {
+        match value {
+            DynSolValue::Address(a) => a.as_slice().to_vec(),
+            // For non-address types, return empty (should not happen if types are correct)
+            _ => Vec::new(),
         }
     }
 }
