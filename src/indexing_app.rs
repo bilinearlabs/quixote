@@ -12,7 +12,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use tokio::{signal::ctrl_c, sync::mpsc};
+use tokio::{
+    signal::{self, ctrl_c},
+    sync::mpsc,
+};
 use tracing::{error, info, warn};
 
 pub struct IndexingApp {
@@ -142,10 +145,10 @@ impl IndexingApp {
         let _ = tokio::spawn(async move { event_collector_runner.run().await });
 
         // Spawn a task that handles Ctrl+C and aborts the collector
-        let ctrl_c_task = IndexingApp::spawn_ctrl_c_handler(self.cancellation_token.clone());
+        let kill_task = IndexingApp::spawn_kill_handler(self.cancellation_token.clone());
 
-        // Wait for Ctrl+C handler
-        ctrl_c_task.await?;
+        // Wait for kill handler
+        kill_task.await?;
 
         // Wait for all processors to finish
         for handle in processor_handles {
@@ -157,10 +160,20 @@ impl IndexingApp {
         Ok(())
     }
 
-    fn spawn_ctrl_c_handler(cancellation_token: CancellationToken) -> tokio::task::JoinHandle<()> {
+    fn spawn_kill_handler(cancellation_token: CancellationToken) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            ctrl_c().await.ok();
-            warn!("Received Ctrl+C, shutting down gracefully...");
+            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to create SIGTERM signal");
+
+            tokio::select! {
+                _ = ctrl_c() => {
+                    warn!("Received Ctrl+C, shutting down gracefully...");
+
+                }
+                _ = sigterm.recv() => {
+                    warn!("Received SIGTERM, shutting down gracefully...");
+                }
+            }
             // Signal cancellation to processor
             cancellation_token.graceful_shutdown();
         })
