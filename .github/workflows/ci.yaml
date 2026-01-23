@@ -73,7 +73,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: password
           POSTGRES_DB: quixote_test
         ports:
           - 5432:5432
@@ -97,7 +97,7 @@ jobs:
         run: SKIP_DOCKER=true ./script/init_postgresql.bash
       - name: Tests
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/quixote_test
+          DATABASE_URL: postgres://postgres:password@localhost:5432/quixote_test
         run: |
           QUIXOTE_TEST_RPC=${{ secrets.QUIXOTE_TEST_RPC }} \
           QUIXOTE_TEST_RPC_USER=${{ secrets.QUIXOTE_TEST_RPC_USER }} \
