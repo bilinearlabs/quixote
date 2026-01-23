@@ -3,6 +3,8 @@ name: Rust Main
 
 env:
   CARGO_TERM_COLOR: always
+  SQLX_VERSION: 0.8.6
+  SQLX_FEATURES: "postgres"
 
 # Run for every event affecting the main branch
 on:
@@ -84,6 +86,15 @@ jobs:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2.8.2
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install SQLx-cli
+        run:
+            cargo install sqlx-cli
+            --version=${{ env.SQLX_VERSION }}
+            --features ${{ env.SQLX_FEATURES }}
+            --no-default-features
+            --locked
+      - name: Migrate database
+        run: SKIP_DOCKER=true ./script/init_postgresql.bash
       - name: Tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/quixote_test
