@@ -221,10 +221,9 @@ impl EventCollector {
                             chunk_length >> 1
                         };
 
+                        // Check for situations in which the hint for the range yields 0 (1-1)
                         if chunk_length == 0 {
-                            return Err(anyhow::anyhow!(
-                                "Block range reduced to zero, cannot continue the indexing."
-                            ));
+                            chunk_length = 1;
                         }
 
                         warn!(
