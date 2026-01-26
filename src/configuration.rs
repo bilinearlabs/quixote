@@ -45,6 +45,19 @@ impl std::str::FromStr for DatabaseBackend {
     }
 }
 
+/// Detects the database backend from a database URL or path.
+///
+/// If the URL starts with `postgres://` or `postgresql://`, returns `PostgreSql`.
+/// Otherwise, defaults to `DuckDb`.
+fn detect_backend_from_url(url: &str) -> DatabaseBackend {
+    let url_lower = url.to_lowercase();
+    if url_lower.starts_with("postgres://") || url_lower.starts_with("postgresql://") {
+        DatabaseBackend::PostgreSql
+    } else {
+        DatabaseBackend::DuckDb
+    }
+}
+
 /// Type alias for event filter configuration.
 ///
 /// Maps indexed parameter names to lists of filter values.
@@ -160,11 +173,11 @@ impl IndexerConfiguration {
         };
 
         // Resolve all fields with defaults
-        // CLI database_backend takes precedence over file config if explicitly provided
-        let database_backend = args
-            .database_backend
+        // Auto-detect backend from database_path, falling back to file config
+        let database_backend = file_config
+            .database_path
             .as_ref()
-            .and_then(|s| s.parse::<DatabaseBackend>().ok())
+            .map(|path| detect_backend_from_url(path))
             .unwrap_or(file_config.database_backend);
 
         Self {
@@ -250,9 +263,9 @@ impl FileConfiguration {
         Self {
             index_jobs,
             database_backend: args
-                .database_backend
+                .database
                 .as_ref()
-                .and_then(|s| s.parse().ok())
+                .map(|path| detect_backend_from_url(path))
                 .unwrap_or(DatabaseBackend::DuckDb),
             database_path: args.database.clone(),
             api_server_address: args
@@ -298,7 +311,6 @@ mod tests {
             event: None,
             start_block: None,
             database: None,
-            database_backend: None,
             abi_spec: None,
             api_server: None,
             block_range: DEFAULT_BLOCK_RANGE,
