@@ -97,7 +97,7 @@ jobs:
         run: SKIP_DOCKER=true ./script/init_postgresql.bash
       - name: Tests
         env:
-          DATABASE_URL: postgres://postgres:password@localhost:5432/quixote_test
+          DATABASE_URL: postgres://postgres:password@localhost:5432/quixote
         run: |
           QUIXOTE_TEST_RPC=${{ secrets.QUIXOTE_TEST_RPC }} \
           QUIXOTE_TEST_RPC_USER=${{ secrets.QUIXOTE_TEST_RPC_USER }} \
