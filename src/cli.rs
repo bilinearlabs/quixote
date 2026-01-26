@@ -25,7 +25,6 @@ pub struct IndexingArgs {
     #[arg(
         short,
         long,
-        required_unless_present = "config",
         help = "Contract to index.\nExample: 0x1234567890123456789012345678901234567890"
     )]
     pub contract: Option<String>,
