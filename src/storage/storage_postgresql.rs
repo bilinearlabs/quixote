@@ -390,14 +390,28 @@ impl Storage for PostgreSqlStorage {
                 return Ok(None);
             };
 
-            let first_block_u64 = record
-                .first_block
-                .map(|d| u64::try_from(d).unwrap_or(0))
-                .unwrap_or(0);
-            let last_block_u64 = record
-                .last_block
-                .map(|d| u64::try_from(d).unwrap_or(0))
-                .unwrap_or(0);
+            let first_block_u64 = u64::try_from(record.first_block.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "first_block is NULL in database for chain_id={} event_hash={}",
+                    chain_id,
+                    event_hash
+                )
+            })?)
+            .context(format!(
+                "Failed to convert first_block to u64 for chain_id={} event_hash={}",
+                chain_id, event_hash
+            ))?;
+            let last_block_u64 = u64::try_from(record.last_block.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "last_block is NULL in database for chain_id={} event_hash={}",
+                    chain_id,
+                    event_hash
+                )
+            })?)
+            .context(format!(
+                "Failed to convert last_block to u64 for chain_id={} event_hash={}",
+                chain_id, event_hash
+            ))?;
 
             let mut event_status = EventStatus {
                 hash: event_hash.clone(),
