@@ -11,7 +11,7 @@ DuckDB is the default backend—file-based, zero configuration, and optimized fo
 quixote -r https://your-rpc-url -c 0xContractAddress -e "YourEvent(...)"
 
 # Or explicitly specify the database file
-quixote --database-backend duckdb -d my_data.duckdb -r https://your-rpc-url ...
+quixote -d my_data.duckdb -r https://your-rpc-url ...
 ```
 
 ### When to use DuckDB
@@ -36,13 +36,16 @@ PostgreSQL is recommended for production deployments with concurrent access, lar
 
 ### CLI Usage
 
+The database backend is automatically detected from the connection string. Simply provide a PostgreSQL connection URL:
+
 ```bash
-quixote --database-backend postgresql \
-  -d "postgres://user:password@localhost:5432/quixote" \
+quixote -d "postgres://user:password@localhost:5432/quixote" \
   -r https://your-rpc-url \
   -c 0xContractAddress \
   -e "YourEvent(...)"
 ```
+
+The backend is automatically detected when the connection string starts with `postgres://` or `postgresql://`.
 
 ### Configuration File
 
