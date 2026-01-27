@@ -3,7 +3,7 @@ import { defineConfig } from 'vocs'
 export default defineConfig({
   //basePath: '/quixote',
   title: 'quixote',
-  description: 'Simple and flexible Rust-based EVM event indexer powered by DuckDB.',
+  description: 'Simple and flexible Rust-based EVM event indexer with DuckDB and PostgreSQL support.',
   logoUrl: '/quixote.png',
   iconUrl: '/quixote.png',
   theme: {
@@ -27,6 +27,10 @@ export default defineConfig({
     {
       text: 'Get Started',
       link: '/get-started',
+    },
+    {
+      text: 'Database',
+      link: '/database',
     },
     {
       text: 'Examples',

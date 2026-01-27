@@ -43,7 +43,7 @@ pub struct IndexingArgs {
     #[arg(
         short,
         long,
-        help = "Path to the database file. Default: etherduck_indexer.duckdb"
+        help = "Path to the database file or PostgreSQL connection string. Default: etherduck_indexer.duckdb\nFor PostgreSQL, use: postgres://user:password@host:port/database"
     )]
     pub database: Option<String>,
     #[arg(

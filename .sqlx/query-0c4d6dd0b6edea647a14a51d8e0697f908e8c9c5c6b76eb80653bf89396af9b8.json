@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE event_descriptor SET first_block = $1 WHERE chain_id = $2 AND event_hash = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Numeric",
+        "Numeric",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0c4d6dd0b6edea647a14a51d8e0697f908e8c9c5c6b76eb80653bf89396af9b8"
+}

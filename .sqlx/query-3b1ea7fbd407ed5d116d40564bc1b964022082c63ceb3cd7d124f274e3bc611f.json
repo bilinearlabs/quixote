@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT event_name, first_block, last_block FROM event_descriptor WHERE chain_id = $1 AND event_hash = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "event_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "first_block",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_block",
+        "type_info": "Numeric"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Numeric",
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "3b1ea7fbd407ed5d116d40564bc1b964022082c63ceb3cd7d124f274e3bc611f"
+}

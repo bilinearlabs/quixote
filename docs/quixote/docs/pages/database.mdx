@@ -1,0 +1,137 @@
+# Database Backend
+
+Quixote supports two database backends, allowing you to choose the best option for your use case.
+
+## DuckDB (Default)
+
+DuckDB is the default backend—file-based, zero configuration, and optimized for analytical queries.
+
+```bash
+# Uses DuckDB by default, storing data in quixote_indexer.duckdb
+quixote -r https://your-rpc-url -c 0xContractAddress -e "YourEvent(...)"
+
+# Or explicitly specify the database file
+quixote -d my_data.duckdb -r https://your-rpc-url ...
+```
+
+### When to use DuckDB
+
+- **Local development**: Quick setup, no external services required
+- **Single-user analytics**: Fast analytical queries on your machine
+- **Quick prototyping**: Get started in seconds
+- **Data export**: Easy export to Parquet or CSV for further analysis
+- **Embedded deployments**: Self-contained, single-file database
+
+### DuckDB Features
+
+- File-based storage (single `.duckdb` file)
+- OLAP-optimized query engine
+- SQL support with analytical extensions
+- Direct Parquet export
+- No server process required
+
+## PostgreSQL
+
+PostgreSQL is recommended for production deployments with concurrent access, larger datasets, or integration with existing infrastructure.
+
+### CLI Usage
+
+The database backend is automatically detected from the connection string. Simply provide a PostgreSQL connection URL:
+
+```bash
+quixote -d "postgres://user:password@localhost:5432/quixote" \
+  -r https://your-rpc-url \
+  -c 0xContractAddress \
+  -e "YourEvent(...)"
+```
+
+The backend is automatically detected when the connection string starts with `postgres://` or `postgresql://`.
+
+### Configuration File
+
+```yaml
+database_backend: postgresql
+database_path: "postgres://user:password@localhost:5432/quixote"
+api_server_address: "127.0.0.1"
+api_server_port: 9720
+
+index_jobs:
+  - rpc_url: "https://your-rpc-url"
+    contract: "0xContractAddress"
+    events:
+      - full_signature: "Transfer(address indexed from, address indexed to, uint256 value)"
+```
+
+### PostgreSQL Setup
+
+Before running Quixote with PostgreSQL, you need to create the database and run migrations:
+
+```bash
+# Install sqlx-cli if you haven't already
+cargo install sqlx-cli --no-default-features --features postgres
+
+# Set the database URL
+export DATABASE_URL="postgres://user:password@localhost:5432/quixote"
+
+# Create the database
+sqlx database create
+
+# Run migrations
+sqlx migrate run
+```
+
+Alternatively, use the provided setup script:
+
+```bash
+# Set your PostgreSQL credentials
+export POSTGRES_USER=postgres
+export POSTGRES_PASSWORD=your_password
+export POSTGRES_DB=quixote
+
+# Skip Docker if PostgreSQL is already running
+export SKIP_DOCKER=1
+
+# Run the setup script
+./script/init_postgresql.bash
+```
+
+### When to use PostgreSQL
+
+- **Production deployments**: Battle-tested, reliable database
+- **Concurrent access**: Multiple readers/writers supported
+- **Large datasets**: Scales to terabytes of data
+- **Existing infrastructure**: Integrate with your current PostgreSQL setup
+- **Advanced features**: Full PostgreSQL ecosystem (replication, backups, extensions)
+
+### PostgreSQL Features
+
+- Client-server architecture
+- ACID transactions
+- Concurrent read/write access
+- Built-in replication and high availability
+- Rich extension ecosystem
+- Standard SQL with advanced features
+
+## Comparison
+
+| Feature | DuckDB | PostgreSQL |
+|---------|--------|------------|
+| Setup | Zero config | Requires server |
+| Storage | Single file | Client-server |
+| Concurrency | Limited | Full support |
+| Analytics | Excellent | Good |
+| Scalability | Moderate | Excellent |
+| Best for | Development, analytics | Production, multi-user |
+
+## Switching Backends
+
+:::warning
+Switching between backends requires re-indexing your data. There is no automatic migration between DuckDB and PostgreSQL.
+:::
+
+To switch backends:
+
+1. Stop Quixote
+2. Update your configuration to use the new backend
+3. Create a new database (for PostgreSQL, run migrations)
+4. Restart Quixote—it will re-index from your configured start block

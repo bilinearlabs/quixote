@@ -3,6 +3,7 @@
 For advanced use cases like event filtering or multi-job indexing, use a YAML config:
 
 ```yaml
+database_backend: duckdb  # Options: duckdb (default), postgresql
 database_path: "quixote_indexer.duckdb"
 api_server_address: "127.0.0.1"
 api_server_port: 9720
@@ -26,6 +27,26 @@ index_jobs:
     events:
       - full_signature: "Transfer(address indexed from, address indexed to, uint256 amount)"
 ```
+
+## Database Backend
+
+You can choose between DuckDB and PostgreSQL:
+
+### DuckDB (Default)
+
+```yaml
+database_backend: duckdb
+database_path: "quixote_indexer.duckdb"
+```
+
+### PostgreSQL
+
+```yaml
+database_backend: postgresql
+database_path: "postgres://user:password@localhost:5432/quixote"
+```
+
+See the [Database](/database) page for detailed setup instructions.
 
 And run as follows:
 

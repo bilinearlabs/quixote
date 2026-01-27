@@ -42,7 +42,7 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
 
 WORKDIR /app
 COPY . .
-RUN cargo build --release
+RUN SQLX_OFFLINE=true cargo build --release
 
 # Runtime stage -------------
 

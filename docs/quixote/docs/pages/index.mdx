@@ -4,7 +4,7 @@ content:
 layout: landing
 showLogo: false
 title: quixote
-description: Simple and flexible Rust-based EVM event indexer powered by DuckDB.
+description: Simple and flexible Rust-based EVM event indexer with DuckDB and PostgreSQL support.
 ---
 
 import { HomePage } from "vocs/components";
@@ -97,9 +97,11 @@ import { HomePage } from "vocs/components";
             <span className="text-[#919193]">built with</span>
             <span className="text-black dark:text-white font-medium">🦀 Rust</span>
           </a>
-          <a href="https://duckdb.org" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-yellow-400/30 hover:border-yellow-400/60 hover:bg-yellow-400/5 transition-all text-[13px]" rel="noreferrer noopener" target="_blank">
+          <a href="/database" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-yellow-400/30 hover:border-yellow-400/60 hover:bg-yellow-400/5 transition-all text-[13px]">
             <span className="text-[#919193]">powered by</span>
             <span className="text-yellow-500 font-medium">🦆 DuckDB</span>
+            <span className="text-[#919193]">/</span>
+            <span className="text-blue-500 font-medium">🐘 PostgreSQL</span>
           </a>
           <a href="https://github.com/bilinearlabs/quixote/blob/main/LICENSE" className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-black/10 dark:border-white/20 hover:border-black/20 dark:hover:border-white/30 hover:bg-black/5 dark:hover:bg-white/5 transition-all text-[13px]" rel="noreferrer noopener" target="_blank">
             <span className="text-[#919193]">license</span>
@@ -121,9 +123,9 @@ import { HomePage } from "vocs/components";
       </div>
       <div className="pl-2 pr-2 max-sm:px-0 max-lg:pb-3 max-lg:pr-0 w-1/4 max-lg:w-1/2 max-sm:w-full z-0">
         <div className="relative w-full h-[168px] max-lg:h-[142px]">
-          <a href="/get-started" className="hover:bg-black/2 dark:hover:bg-white/2 border-black/10 dark:border-white/10 border border-solid rounded-lg h-full px-5 py-6 absolute z-10 flex flex-col justify-between w-full">
-            <div className="text-2xl font-medium text-black dark:text-white">DuckDB-Powered</div>
-            <div className="text-[19px] max-sm:text-[16px] text-[#919193] break-words">Blazing-fast analytical queries on your indexed data with SQL.</div>
+          <a href="/database" className="hover:bg-black/2 dark:hover:bg-white/2 border-black/10 dark:border-white/10 border border-solid rounded-lg h-full px-5 py-6 absolute z-10 flex flex-col justify-between w-full">
+            <div className="text-2xl font-medium text-black dark:text-white">Dual DB Support</div>
+            <div className="text-[19px] max-sm:text-[16px] text-[#919193] break-words">DuckDB for analytics or PostgreSQL for production. Your choice.</div>
           </a>
           <div className="absolute left-0 right-0 top-0 bottom-0 dark:bg-[#313136] opacity-20 z-0" />
           <div className="absolute left-0 right-0 top-0 bottom-0 backdrop-filter backdrop-blur-[2px] z-0" />
@@ -166,7 +168,7 @@ Just point it at an RPC, specify the events you care about, and start querying y
 ## Why quixote?
 
 - **Simple & Easy to Run**: Single binary and minimal configuration. Just point to an RPC and start indexing. Great as a dev tool.
-- **DuckDB-Powered**: Built on DuckDB for fast analytical queries and file-based storage, without requiring extra services.
+- **Dual Database Support**: Choose DuckDB for zero-config analytics or PostgreSQL for production deployments.
 - **Any EVM Chain**: Works with Ethereum, Arbitrum, Optimism, Polygon, and any EVM-compatible chain.
 - **Arbitrary Events**: Index any event from any smart contract. Just provide the event signature or ABI with optional filters.
 - **Auto Resume**: Automatically resumes from the last synced block. Never lose progress.

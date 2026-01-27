@@ -5,10 +5,10 @@ use crate::{
     CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, OptionalAddressDisplay,
     TxLogChunk,
     api_rest::start_api_server,
-    configuration::IndexerConfiguration,
+    configuration::{DatabaseBackend, IndexerConfiguration},
     constants, error_codes,
     metrics::{MetricsConfig, MetricsHandle},
-    storage::{DuckDBStorage, Storage, StorageFactory},
+    storage::{DuckDBStorage, PostgreSqlStorage, Storage, StorageFactory},
 };
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -42,15 +42,30 @@ impl IndexingApp {
         let metrics = MetricsHandle::new(&metrics_config)?;
 
         // Instantiate the DB handlers, for the consumer task and the API server.
-        let (storage, storage_for_api): (DuckDBStorage, Arc<dyn StorageFactory>) = {
-            let mut storage = DuckDBStorage::with_db(&config.database_path)?;
-            storage.set_strict_mode(config.strict_mode);
-            let storage_clone = storage.clone();
-            (storage, Arc::new(storage_clone))
-        };
+        // The storage backend is selected based on the configuration.
+        info!("Using database backend: {}", config.database_backend);
+        let (storage, storage_for_api): (Arc<dyn Storage + Send + Sync>, Arc<dyn StorageFactory>) =
+            match config.database_backend {
+                DatabaseBackend::DuckDb => {
+                    let mut storage = DuckDBStorage::with_db(&config.database_path)?;
+                    storage.set_strict_mode(config.strict_mode);
+                    let storage_arc = Arc::new(storage);
+                    (storage_arc.clone(), storage_arc)
+                }
+                DatabaseBackend::PostgreSql => {
+                    let pool = sqlx::postgres::PgPoolOptions::new()
+                        .connect(&config.database_path)
+                        .await
+                        .with_context(|| "Failed to connect to PostgreSQL")?;
+                    let mut pg_storage = PostgreSqlStorage::new(pool);
+                    pg_storage.set_strict_mode(config.strict_mode);
+                    let storage_arc = Arc::new(pg_storage);
+                    (storage_arc.clone(), storage_arc)
+                }
+            };
 
         // Build a list of events from the command line arguments.
-        let seeds = match CollectorSeed::build_seeds(&storage, config).await {
+        let seeds = match CollectorSeed::build_seeds(storage.as_ref(), config).await {
             Ok(seeds) => seeds,
             Err(e) => {
                 error!("Failed to build the indexing jobs: {}", e);
@@ -62,7 +77,7 @@ impl IndexingApp {
             format!("{}:{}", config.api_server_address, config.api_server_port);
 
         Ok(Self {
-            storage: Arc::new(storage),
+            storage,
             api_server_address,
             storage_for_api,
             cancellation_token,

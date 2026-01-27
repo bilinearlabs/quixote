@@ -79,8 +79,12 @@ pub mod error_codes {
 pub mod storage {
     pub mod storage_api;
     pub use storage_api::{Storage, StorageFactory};
+
     pub mod storage_duckdb;
     pub use storage_duckdb::DuckDBStorage;
+
+    pub mod storage_postgresql;
+    pub use storage_postgresql::PostgreSqlStorage;
 
     use serde::Serialize;
 
@@ -161,3 +165,6 @@ impl OptionalAddressDisplay for Option<alloy::primitives::Address> {
         }
     }
 }
+
+#[cfg(feature = "test-utils")]
+pub mod test_utils;
