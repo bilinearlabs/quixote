@@ -15,6 +15,7 @@ test-utils = ["dep:fake"]
 [dependencies]
 alloy = { version = "1.4.0", features = ["rpc-types", "json", "rpc-client", "json-rpc"] }
 anyhow = "1.0.100"
+async-trait = "0.1"
 axum = { version = "0.8.7", features = ["default", "http2"] }
 hex = "0.4"
 clap = { version = "4.5.51", features = ["derive"] }

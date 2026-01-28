@@ -16,12 +16,11 @@ use alloy::{
     rpc::types::Log,
 };
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use duckdb::{Connection, OptionalExt, types::ValueRef};
 use serde_json::{Map, Number, Value, json};
 use std::{
     collections::{HashMap, HashSet},
-    future::Future,
-    pin::Pin,
     string::ToString,
     sync::{Mutex, RwLock},
 };
@@ -61,107 +60,63 @@ impl Clone for DuckDBStorage {
     }
 }
 
+#[async_trait]
 impl Storage for DuckDBStorage {
-    fn add_events(
-        &self,
-        chain_id: u64,
-        events: &[Log],
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(std::future::ready(self.add_events_sync(chain_id, events)))
+    async fn add_events(&self, chain_id: u64, events: &[Log]) -> Result<()> {
+        self.add_events_sync(chain_id, events)
     }
 
-    fn list_indexed_events(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<EventDescriptorDb>>> + Send + '_>> {
-        Box::pin(std::future::ready(self.list_indexed_events_sync()))
+    async fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> {
+        self.list_indexed_events_sync()
     }
 
-    fn last_block(
-        &self,
-        chain_id: u64,
-        event: &Event,
-    ) -> Pin<Box<dyn Future<Output = Result<u64>> + Send + '_>> {
-        Box::pin(std::future::ready(self.last_block_sync(chain_id, event)))
+    async fn last_block(&self, chain_id: u64, event: &Event) -> Result<u64> {
+        self.last_block_sync(chain_id, event)
     }
 
-    fn first_block(
-        &self,
-        chain_id: u64,
-        event: &Event,
-    ) -> Pin<Box<dyn Future<Output = Result<u64>> + Send + '_>> {
-        Box::pin(std::future::ready(self.first_block_sync(chain_id, event)))
+    async fn first_block(&self, chain_id: u64, event: &Event) -> Result<u64> {
+        self.first_block_sync(chain_id, event)
     }
 
-    fn include_events(
-        &self,
-        chain_id: u64,
-        events: &[Event],
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(std::future::ready(
-            self.include_events_sync(chain_id, events),
-        ))
+    async fn include_events(&self, chain_id: u64, events: &[Event]) -> Result<()> {
+        self.include_events_sync(chain_id, events)
     }
 
-    fn get_event_signature(
-        &self,
-        event_hash: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        Box::pin(std::future::ready(
-            self.get_event_signature_sync(event_hash),
-        ))
+    async fn get_event_signature(&self, event_hash: &str) -> Result<String> {
+        self.get_event_signature_sync(event_hash)
     }
 
-    fn event_index_status(
+    async fn event_index_status(
         &self,
         chain_id: u64,
         event: &Event,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<EventStatus>>> + Send + '_>> {
-        Box::pin(std::future::ready(
-            self.event_index_status_sync(chain_id, event),
-        ))
+    ) -> Result<Option<EventStatus>> {
+        self.event_index_status_sync(chain_id, event)
     }
 
-    fn synchronize_events(
+    async fn synchronize_events(
         &self,
         chain_id: u64,
         event_selectors: &[B256],
         last_processed: Option<u64>,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(std::future::ready(self.synchronize_events_sync(
-            chain_id,
-            event_selectors,
-            last_processed,
-        )))
+    ) -> Result<()> {
+        self.synchronize_events_sync(chain_id, event_selectors, last_processed)
     }
 
-    fn send_raw_query(
-        &self,
-        query: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
-        Box::pin(std::future::ready(self.send_raw_query_sync(query)))
+    async fn send_raw_query(&self, query: &str) -> Result<Value> {
+        self.send_raw_query_sync(query)
     }
 
-    fn list_contracts(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<ContractDescriptorDb>>> + Send + '_>> {
-        Box::pin(std::future::ready(self.list_contracts_sync()))
+    async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
+        self.list_contracts_sync()
     }
 
-    fn set_first_block(
-        &self,
-        chain_id: u64,
-        event: &Event,
-        block_number: u64,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(std::future::ready(self.set_first_block_sync(
-            chain_id,
-            event,
-            block_number,
-        )))
+    async fn set_first_block(&self, chain_id: u64, event: &Event, block_number: u64) -> Result<()> {
+        self.set_first_block_sync(chain_id, event, block_number)
     }
 
-    fn describe_database(&self) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> {
-        Box::pin(std::future::ready(self.describe_database_sync()))
+    async fn describe_database(&self) -> Result<Value> {
+        self.describe_database_sync()
     }
 }
 
