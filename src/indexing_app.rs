@@ -4,7 +4,7 @@
 use crate::{
     CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, OptionalAddressDisplay,
     TxLogChunk,
-    api_rest::start_api_server,
+    api_rest::{TorStateHandle, start_api_server},
     configuration::{DatabaseBackend, IndexerConfiguration},
     constants, error_codes,
     metrics::{MetricsConfig, MetricsHandle},
@@ -26,6 +26,7 @@ pub struct IndexingApp {
     pub seeds: Vec<CollectorSeed>,
     pub metrics_config: MetricsConfig,
     pub metrics: MetricsHandle,
+    pub tor_enabled: bool,
 }
 
 impl IndexingApp {
@@ -84,6 +85,7 @@ impl IndexingApp {
             seeds,
             metrics_config,
             metrics,
+            tor_enabled: config.tor,
         })
     }
 
@@ -144,10 +146,15 @@ impl IndexingApp {
         let event_collector_runner =
             EventCollectorRunner::new(self.seeds.clone(), seed_buffers, self.metrics.clone())?;
 
+        // Optionally start the Tor hidden service.
+        // The returned TorState is shared with the REST API for /tor-info.
+        let tor_state: TorStateHandle = self.start_tor_if_enabled().await;
+
         // Start the REST API server
         start_api_server(
             self.api_server_address.as_str(),
             self.storage_for_api.clone(),
+            tor_state,
             self.cancellation_token.clone(),
         )
         .await
@@ -173,6 +180,44 @@ impl IndexingApp {
         info!("Shutdown complete");
 
         Ok(())
+    }
+
+    /// Start the Tor onion service if `--tor` was passed and the binary was built
+    /// with `--features tor`.  Returns a `TorState` handle on success, `None` otherwise.
+    async fn start_tor_if_enabled(&self) -> TorStateHandle {
+        if !self.tor_enabled {
+            return None;
+        }
+
+        #[cfg(feature = "tor")]
+        {
+            use crate::{
+                api_rest::{create_router, strip_identifying_headers},
+                tor_service::start_tor_service,
+            };
+            use axum::middleware;
+            let router = create_router(self.storage_for_api.clone(), None)
+                .layer(middleware::from_fn(strip_identifying_headers));
+            match start_tor_service(router, self.cancellation_token.clone()).await {
+                Ok(state) => {
+                    info!("Tor hidden service started");
+                    return Some(std::sync::Arc::new(state));
+                }
+                Err(e) => {
+                    error!("Failed to start Tor service: {e:#}");
+                }
+            }
+        }
+
+        #[cfg(not(feature = "tor"))]
+        {
+            warn!(
+                "--tor flag was passed but this binary was not compiled with --features tor. \
+                 Rebuild with `cargo build --features tor` to enable the hidden service."
+            );
+        }
+
+        None
     }
 
     fn spawn_kill_handler(cancellation_token: CancellationToken) -> tokio::task::JoinHandle<()> {

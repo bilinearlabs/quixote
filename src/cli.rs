@@ -115,4 +115,10 @@ pub struct IndexingArgs {
         help = "Optional Access-Control-Allow-Origin value for the metrics endpoint"
     )]
     pub metrics_allow_origin: Option<String>,
+    #[arg(
+        long,
+        help = "Enable Tor hidden service (.onion). Requires the binary to be compiled with --features tor.",
+        default_value_t = false
+    )]
+    pub tor: bool,
 }
