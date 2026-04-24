@@ -186,22 +186,21 @@ mod imp {
 
     /// Start the Tor hidden service and serve `router` over it.
     ///
-    /// Returns a `TorState` handle that is shared with the REST API for the
-    /// `/tor-info` endpoint.  Shuts down gracefully when `cancellation_token` fires.
+    /// `state` must be the same `TorState` that was injected into `router` via
+    /// `create_router` so that `/tor-info` reflects live Tor metrics.
+    /// Shuts down gracefully when `cancellation_token` fires.
     pub async fn start_tor_service(
         router: Router,
         cancellation_token: CancellationToken,
-    ) -> Result<TorState> {
-        let state = TorState::new();
-        let state_clone = state.clone();
-
+        state: TorState,
+    ) -> Result<()> {
         tokio::spawn(async move {
-            if let Err(e) = run_tor_service(router, cancellation_token, state_clone).await {
+            if let Err(e) = run_tor_service(router, cancellation_token, state).await {
                 error!("Tor service terminated with error: {e:#}");
             }
         });
 
-        Ok(state)
+        Ok(())
     }
 
     async fn run_tor_service(

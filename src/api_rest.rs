@@ -73,7 +73,7 @@ pub struct TorInfoResponse {
 ///
 /// When Tor is disabled this is `None` and `/tor-info` returns `enabled: false`.
 #[cfg(feature = "tor")]
-pub type TorStateHandle = Option<Arc<crate::tor_service::TorState>>;
+pub type TorStateHandle = Option<crate::tor_service::TorState>;
 #[cfg(not(feature = "tor"))]
 pub type TorStateHandle = Option<()>;
 

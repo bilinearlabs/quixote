@@ -193,15 +193,16 @@ impl IndexingApp {
         {
             use crate::{
                 api_rest::{create_router, strip_identifying_headers},
-                tor_service::start_tor_service,
+                tor_service::{TorState, start_tor_service},
             };
             use axum::middleware;
-            let router = create_router(self.storage_for_api.clone(), None)
+            let state = TorState::new();
+            let router = create_router(self.storage_for_api.clone(), Some(state.clone()))
                 .layer(middleware::from_fn(strip_identifying_headers));
-            match start_tor_service(router, self.cancellation_token.clone()).await {
-                Ok(state) => {
+            match start_tor_service(router, self.cancellation_token.clone(), state.clone()).await {
+                Ok(()) => {
                     info!("Tor hidden service started");
-                    return Some(std::sync::Arc::new(state));
+                    return Some(state);
                 }
                 Err(e) => {
                     error!("Failed to start Tor service: {e:#}");
