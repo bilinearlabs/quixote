@@ -104,8 +104,7 @@ async fn tor_info_returns_enabled_with_tor_state() {
     // Create a TorState without connecting to the Tor network —
     // we only need the shared handle to verify /tor-info returns enabled: true.
     let state = TorState::new();
-    let state_arc = Arc::new(state);
-    let router = make_router(Some(state_arc));
+    let router = make_router(Some(state));
 
     let req = Request::builder()
         .uri("/tor-info")
@@ -213,7 +212,7 @@ async fn privacy_middleware_strips_identifying_headers() {
 async fn tor_info_includes_circuit_stats() {
     use quixote::tor_service::TorState;
 
-    let state = Arc::new(TorState::new());
+    let state = TorState::new();
     let router = make_router(Some(state));
 
     let req = Request::builder()
