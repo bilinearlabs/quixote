@@ -24,35 +24,57 @@ use tower::ServiceExt; // for Router::oneshot
 /// A minimal in-memory storage factory that satisfies the type constraint
 /// without needing a real database.
 mod stub_storage {
+    use alloy::json_abi::Event;
+    use alloy::{primitives::B256, rpc::types::Log};
     use anyhow::Result;
     use async_trait::async_trait;
     use quixote::{
         EventStatus,
-        storage::{
-            ContractDescriptorDb, EventDescriptorDb, Storage, StorageFactory,
-        },
+        storage::{ContractDescriptorDb, EventDescriptorDb, Storage, StorageFactory},
     };
     use serde_json::Value;
-    use alloy::{primitives::B256, rpc::types::Log};
-    use alloy::json_abi::Event;
 
     #[derive(Default)]
     pub struct Stub;
 
     #[async_trait]
     impl Storage for Stub {
-        async fn add_events(&self, _: u64, _: &[Log]) -> Result<()> { Ok(()) }
-        async fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> { Ok(vec![]) }
-        async fn event_index_status(&self, _: u64, _: &Event) -> Result<Option<EventStatus>> { Ok(None) }
-        async fn include_events(&self, _: u64, _: &[Event]) -> Result<()> { Ok(()) }
-        async fn get_event_signature(&self, _: &str) -> Result<String> { Ok(String::new()) }
-        async fn last_block(&self, _: u64, _: &Event) -> Result<u64> { Ok(0) }
-        async fn first_block(&self, _: u64, _: &Event) -> Result<u64> { Ok(0) }
-        async fn set_first_block(&self, _: u64, _: &Event, _: u64) -> Result<()> { Ok(()) }
-        async fn synchronize_events(&self, _: u64, _: &[B256], _: Option<u64>) -> Result<()> { Ok(()) }
-        async fn send_raw_query(&self, _: &str) -> Result<Value> { Ok(Value::Null) }
-        async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> { Ok(vec![]) }
-        async fn describe_database(&self) -> Result<Value> { Ok(Value::Null) }
+        async fn add_events(&self, _: u64, _: &[Log]) -> Result<()> {
+            Ok(())
+        }
+        async fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> {
+            Ok(vec![])
+        }
+        async fn event_index_status(&self, _: u64, _: &Event) -> Result<Option<EventStatus>> {
+            Ok(None)
+        }
+        async fn include_events(&self, _: u64, _: &[Event]) -> Result<()> {
+            Ok(())
+        }
+        async fn get_event_signature(&self, _: &str) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn last_block(&self, _: u64, _: &Event) -> Result<u64> {
+            Ok(0)
+        }
+        async fn first_block(&self, _: u64, _: &Event) -> Result<u64> {
+            Ok(0)
+        }
+        async fn set_first_block(&self, _: u64, _: &Event, _: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn synchronize_events(&self, _: u64, _: &[B256], _: Option<u64>) -> Result<()> {
+            Ok(())
+        }
+        async fn send_raw_query(&self, _: &str) -> Result<Value> {
+            Ok(Value::Null)
+        }
+        async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
+            Ok(vec![])
+        }
+        async fn describe_database(&self) -> Result<Value> {
+            Ok(Value::Null)
+        }
     }
 
     impl StorageFactory for Stub {
@@ -63,8 +85,7 @@ mod stub_storage {
 }
 
 fn make_router(tor_state: quixote::api_rest::TorStateHandle) -> axum::Router {
-    let factory: Arc<dyn quixote::storage::StorageFactory> =
-        Arc::new(stub_storage::Stub);
+    let factory: Arc<dyn quixote::storage::StorageFactory> = Arc::new(stub_storage::Stub);
     create_router(factory, tor_state)
 }
 
@@ -142,7 +163,11 @@ async fn cors_header_added_for_onion_origin() {
         .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
         .and_then(|v| v.to_str().ok());
 
-    assert_eq!(acao, Some(onion_origin), "ACAO header must echo the .onion origin");
+    assert_eq!(
+        acao,
+        Some(onion_origin),
+        "ACAO header must echo the .onion origin"
+    );
 }
 
 #[tokio::test]
@@ -157,11 +182,12 @@ async fn cors_header_not_added_for_regular_origin() {
 
     let response = router.oneshot(req).await.unwrap();
 
-    let acao = response
-        .headers()
-        .get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
+    let acao = response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN);
 
-    assert!(acao.is_none(), "ACAO header must NOT be set for non-.onion origins");
+    assert!(
+        acao.is_none(),
+        "ACAO header must NOT be set for non-.onion origins"
+    );
 }
 
 // ── Privacy-conscious logging / header stripping ──────────────────────────────

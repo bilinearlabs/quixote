@@ -15,8 +15,9 @@ pub use imp::*;
 mod imp {
     use crate::CancellationToken;
     use anyhow::{Context, Result};
-    use arti_client::{TorClient, TorClientConfig, config::onion_service::OnionServiceConfigBuilder};
-    use tokio::time::{Duration, timeout};
+    use arti_client::{
+        TorClient, TorClientConfig, config::onion_service::OnionServiceConfigBuilder,
+    };
     use axum::Router;
     use axum::body::Body;
     use futures::StreamExt;
@@ -28,6 +29,7 @@ mod imp {
         atomic::{AtomicBool, AtomicU64, Ordering},
     };
     use tokio::sync::RwLock;
+    use tokio::time::{Duration, timeout};
     use tor_cell::relaycell::msg::Connected;
     use tower::ServiceExt;
     use tracing::{error, info, warn};
