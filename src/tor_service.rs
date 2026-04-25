@@ -63,6 +63,12 @@ mod imp {
         circuits_rejected: AtomicU64,
     }
 
+    impl Default for TorState {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl TorState {
         pub fn new() -> Self {
             Self {

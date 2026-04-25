@@ -310,14 +310,13 @@ async fn onion_cors_middleware(req: Request<axum::body::Body>, next: Next) -> Re
 
     let mut response = next.run(req).await;
 
-    if let Some(origin) = origin {
-        if origin.ends_with(".onion") || origin.ends_with(".onion/") {
-            if let Ok(val) = HeaderValue::from_str(&origin) {
-                response
-                    .headers_mut()
-                    .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
-            }
-        }
+    if let Some(origin) = origin
+        && (origin.ends_with(".onion") || origin.ends_with(".onion/"))
+        && let Ok(val) = HeaderValue::from_str(&origin)
+    {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
     }
 
     response

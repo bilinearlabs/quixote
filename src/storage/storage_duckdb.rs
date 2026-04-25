@@ -648,7 +648,7 @@ impl DuckDBStorage {
                 .map(|r| r.unwrap())
                 .collect::<Vec<String>>();
 
-            contracts.extend(addresses.into_iter());
+            contracts.extend(addresses);
         }
 
         Ok(contracts
