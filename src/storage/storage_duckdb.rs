@@ -7,7 +7,7 @@ use crate::{
     EventStatus,
     constants::*,
     error_codes::ERROR_CODE_DATABASE_LOCKED,
-    storage::{ContractDescriptorDb, EventDescriptorDb, Storage, StorageFactory},
+    storage::{ContractDescriptorDb, EventDescriptorDb, EventQuery, Storage, StorageFactory},
 };
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
@@ -105,6 +105,10 @@ impl Storage for DuckDBStorage {
 
     async fn send_raw_query(&self, query: &str) -> Result<Value> {
         self.send_raw_query_sync(query)
+    }
+
+    async fn query_event_table(&self, query: &EventQuery) -> Result<Vec<Value>> {
+        self.query_event_table_sync(query)
     }
 
     async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
@@ -605,6 +609,118 @@ impl DuckDBStorage {
         }
 
         Ok(Value::Array(results))
+    }
+
+    fn query_event_table_sync(&self, q: &EventQuery) -> Result<Vec<Value>> {
+        let mut col_names: Vec<String> = vec![
+            "block_number".into(),
+            "transaction_hash".into(),
+            "log_index".into(),
+            "contract_address".into(),
+        ];
+        col_names.extend(q.columns.iter().map(|c| c.name.clone()));
+
+        let select = col_names
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let where_clause = Self::build_where_clause(&q.where_clauses, &q.columns)?;
+
+        let order_clause = match &q.order_by {
+            Some(col) => {
+                let dir = match q.order_dir {
+                    crate::storage::OrderDir::Asc  => "ASC",
+                    crate::storage::OrderDir::Desc => "DESC",
+                };
+                format!("ORDER BY \"{col}\" {dir}")
+            }
+            None => String::new(),
+        };
+
+        let sql = format!(
+            "SELECT {select} FROM {table} {where_clause} {order_clause} LIMIT {first} OFFSET {skip}",
+            table  = q.table_name,
+            first  = q.first,
+            skip   = q.skip,
+        );
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {e}"))?;
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows_iter = stmt.query([])?;
+        let mut results = Vec::new();
+
+        while let Some(row) = rows_iter.next()? {
+            let mut obj = serde_json::Map::new();
+            for (i, name) in col_names.iter().enumerate() {
+                obj.insert(name.clone(), Self::infer_value_type(row, i)?);
+            }
+            results.push(Value::Object(obj));
+        }
+
+        Ok(results)
+    }
+
+    // ── WHERE clause builder ──────────────────────────────────────────────────
+
+    fn build_where_clause(
+        clauses: &[crate::storage::WhereClause],
+        columns: &[crate::storage::EventColumn],
+    ) -> Result<String> {
+        if clauses.is_empty() {
+            return Ok(String::new());
+        }
+        let parts: Vec<String> = clauses
+            .iter()
+            .map(|wc| Self::build_condition(wc, columns))
+            .collect::<Result<_>>()?;
+        Ok(format!("WHERE {}", parts.join(" AND ")))
+    }
+
+    fn build_condition(
+        wc: &crate::storage::WhereClause,
+        columns: &[crate::storage::EventColumn],
+    ) -> Result<String> {
+        use crate::storage::{FilterOp, FilterValue};
+
+        let is_numeric = matches!(wc.column.as_str(), "block_number" | "log_index")
+            || columns.iter().any(|c| {
+                c.name == wc.column
+                    && (c.selector_type.starts_with("uint") || c.selector_type.starts_with("int"))
+            });
+
+        let col = format!("\"{}\"", wc.column);
+
+        match (&wc.op, &wc.value) {
+            (FilterOp::Eq,  FilterValue::Scalar(v)) => Ok(format!("{col} = {}",  Self::fmt_val(v, is_numeric)?)),
+            (FilterOp::Gt,  FilterValue::Scalar(v)) => Ok(format!("{col} > {}",  Self::fmt_val(v, is_numeric)?)),
+            (FilterOp::Lt,  FilterValue::Scalar(v)) => Ok(format!("{col} < {}",  Self::fmt_val(v, is_numeric)?)),
+            (FilterOp::Gte, FilterValue::Scalar(v)) => Ok(format!("{col} >= {}", Self::fmt_val(v, is_numeric)?)),
+            (FilterOp::Lte, FilterValue::Scalar(v)) => Ok(format!("{col} <= {}", Self::fmt_val(v, is_numeric)?)),
+            (FilterOp::In,  FilterValue::List(vs))  => {
+                let items = vs.iter().map(|v| Self::fmt_val(v, is_numeric)).collect::<Result<Vec<_>>>()?;
+                Ok(format!("{col} IN ({})", items.join(", ")))
+            }
+            _ => Err(anyhow::anyhow!(
+                "operator/value mismatch: 'in' requires a list, others require a scalar"
+            )),
+        }
+    }
+
+    fn fmt_val(v: &str, is_numeric: bool) -> Result<String> {
+        if is_numeric {
+            if v.parse::<u128>().is_err() && v.parse::<i128>().is_err() {
+                return Err(anyhow::anyhow!("expected a number, got '{v}'"));
+            }
+            Ok(v.to_string())
+        } else {
+            Ok(format!("'{}'", v.replace('\'', "''")))
+        }
     }
 
     /// Sync implementation of list_contracts

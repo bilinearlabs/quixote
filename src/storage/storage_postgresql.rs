@@ -5,7 +5,7 @@
 
 use crate::{
     EventStatus,
-    storage::{ContractDescriptorDb, EventDescriptorDb, Storage},
+    storage::{ContractDescriptorDb, EventDescriptorDb, EventQuery, Storage},
 };
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
@@ -16,7 +16,7 @@ use alloy::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
-use sqlx::{Column, Pool, Postgres, Row, TypeInfo, types::Decimal};
+use sqlx::{Column, Pool, Postgres, Row, TypeInfo, postgres::PgRow, types::Decimal};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
@@ -640,59 +640,74 @@ impl Storage for PostgreSqlStorage {
 
         let rows = sqlx::query(&query).fetch_all(&pool).await?;
 
-        let mut results = Vec::new();
-
-        for row in rows {
-            let mut row_obj = serde_json::Map::new();
-
-            for (i, column) in row.columns().iter().enumerate() {
-                let col_name = column.name().to_string();
-                let type_name = column.type_info().name();
-
-                // Convert based on PostgreSQL type
-                let value: Value = match type_name {
-                    "INT2" | "INT4" => {
-                        let v: Option<i32> = row.try_get(i).ok();
-                        v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
-                    }
-                    "INT8" => {
-                        let v: Option<i64> = row.try_get(i).ok();
-                        v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
-                    }
-                    "FLOAT4" | "FLOAT8" => {
-                        let v: Option<f64> = row.try_get(i).ok();
-                        v.and_then(serde_json::Number::from_f64)
-                            .map(Value::Number)
-                            .unwrap_or(Value::Null)
-                    }
-                    "NUMERIC" => {
-                        let v: Option<Decimal> = row.try_get(i).ok();
-                        v.map(|d| Value::String(d.to_string()))
-                            .unwrap_or(Value::Null)
-                    }
-                    "BOOL" => {
-                        let v: Option<bool> = row.try_get(i).ok();
-                        v.map(Value::Bool).unwrap_or(Value::Null)
-                    }
-                    "BYTEA" => {
-                        let v: Option<Vec<u8>> = row.try_get(i).ok();
-                        v.map(|b| Value::String(format!("0x{}", hex::encode(b))))
-                            .unwrap_or(Value::Null)
-                    }
-                    _ => {
-                        // Default: try as string
-                        let v: Option<String> = row.try_get(i).ok();
-                        v.map(Value::String).unwrap_or(Value::Null)
-                    }
-                };
-
-                row_obj.insert(col_name, value);
-            }
-
-            results.push(Value::Object(row_obj));
-        }
+        let results = rows
+            .iter()
+            .map(|row| {
+                let obj: serde_json::Map<String, Value> = row
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, col)| (col.name().to_string(), Self::pg_col_to_json(row, i)))
+                    .collect();
+                Value::Object(obj)
+            })
+            .collect();
 
         Ok(Value::Array(results))
+    }
+
+    async fn query_event_table(&self, q: &EventQuery) -> Result<Vec<Value>> {
+        let pool = self.conn.clone();
+
+        let mut col_names: Vec<String> = vec![
+            "block_number".into(),
+            "transaction_hash".into(),
+            "log_index".into(),
+            "contract_address".into(),
+        ];
+        col_names.extend(q.columns.iter().map(|c| c.name.clone()));
+
+        let select = col_names
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let where_clause = build_pg_where_clause(&q.where_clauses, &q.columns)?;
+
+        let order_clause = match &q.order_by {
+            Some(col) => {
+                let dir = match q.order_dir {
+                    crate::storage::OrderDir::Asc  => "ASC",
+                    crate::storage::OrderDir::Desc => "DESC",
+                };
+                format!("ORDER BY \"{col}\" {dir}")
+            }
+            None => String::new(),
+        };
+
+        let sql = format!(
+            "SELECT {select} FROM {table} {where_clause} {order_clause} LIMIT {first} OFFSET {skip}",
+            table  = q.table_name,
+            first  = q.first,
+            skip   = q.skip,
+        );
+
+        let rows = sqlx::query(&sql).fetch_all(&pool).await?;
+
+        let results = rows
+            .iter()
+            .map(|row| {
+                let obj: serde_json::Map<String, Value> = col_names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| (name.clone(), Self::pg_col_to_json(row, i)))
+                    .collect();
+                Value::Object(obj)
+            })
+            .collect();
+
+        Ok(results)
     }
 
     async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
@@ -776,9 +791,131 @@ impl Storage for PostgreSqlStorage {
     }
 }
 
+// ── PostgreSQL WHERE clause compiler ─────────────────────────────────────────
+
+#[derive(Clone, Copy)]
+enum PgColKind { Numeric, Hex, Text }
+
+fn classify_pg_col(name: &str, cols: &[crate::storage::EventColumn]) -> PgColKind {
+    match name {
+        "block_number" | "log_index" => PgColKind::Numeric,
+        "transaction_hash" | "contract_address" => PgColKind::Hex,
+        _ => {
+            if let Some(col) = cols.iter().find(|c| c.name == name) {
+                let t = col.selector_type.as_str();
+                if t.starts_with("uint") || t.starts_with("int") {
+                    PgColKind::Numeric
+                } else if t == "address" || t.starts_with("bytes") {
+                    PgColKind::Hex
+                } else {
+                    PgColKind::Text
+                }
+            } else {
+                PgColKind::Text
+            }
+        }
+    }
+}
+
+fn fmt_pg_val(v: &str, kind: PgColKind) -> anyhow::Result<String> {
+    match kind {
+        PgColKind::Numeric => {
+            if v.parse::<u128>().is_err() && v.parse::<i128>().is_err() {
+                return Err(anyhow::anyhow!("expected a number, got '{v}'"));
+            }
+            Ok(v.to_string())
+        }
+        PgColKind::Hex => {
+            let stripped = v.strip_prefix("0x").unwrap_or(v);
+            let lower = stripped.to_ascii_lowercase();
+            if lower.is_empty() || !lower.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(anyhow::anyhow!("expected a hex value, got '{v}'"));
+            }
+            Ok(format!("decode('{lower}', 'hex')"))
+        }
+        PgColKind::Text => Ok(format!("'{}'", v.replace('\'', "''"))),
+    }
+}
+
+fn build_pg_condition(
+    wc: &crate::storage::WhereClause,
+    columns: &[crate::storage::EventColumn],
+) -> anyhow::Result<String> {
+    use crate::storage::{FilterOp, FilterValue};
+
+    let kind = classify_pg_col(&wc.column, columns);
+    let col = format!("\"{}\"", wc.column);
+
+    match (&wc.op, &wc.value) {
+        (FilterOp::Eq,  FilterValue::Scalar(v)) => Ok(format!("{col} = {}",  fmt_pg_val(v, kind)?)),
+        (FilterOp::Gt,  FilterValue::Scalar(v)) => Ok(format!("{col} > {}",  fmt_pg_val(v, kind)?)),
+        (FilterOp::Lt,  FilterValue::Scalar(v)) => Ok(format!("{col} < {}",  fmt_pg_val(v, kind)?)),
+        (FilterOp::Gte, FilterValue::Scalar(v)) => Ok(format!("{col} >= {}", fmt_pg_val(v, kind)?)),
+        (FilterOp::Lte, FilterValue::Scalar(v)) => Ok(format!("{col} <= {}", fmt_pg_val(v, kind)?)),
+        (FilterOp::In,  FilterValue::List(vs)) => {
+            let items = vs.iter().map(|v| fmt_pg_val(v, kind)).collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(format!("{col} IN ({})", items.join(", ")))
+        }
+        _ => Err(anyhow::anyhow!(
+            "operator/value mismatch: 'in' requires a list, others require a scalar"
+        )),
+    }
+}
+
+fn build_pg_where_clause(
+    clauses: &[crate::storage::WhereClause],
+    columns: &[crate::storage::EventColumn],
+) -> anyhow::Result<String> {
+    if clauses.is_empty() {
+        return Ok(String::new());
+    }
+    let parts: Vec<String> = clauses
+        .iter()
+        .map(|wc| build_pg_condition(wc, columns))
+        .collect::<anyhow::Result<_>>()?;
+    Ok(format!("WHERE {}", parts.join(" AND ")))
+}
+
 impl PostgreSqlStorage {
     /// Length of the short hash used in table names (5 hex characters).
     const SHORT_HASH_LEN: usize = 5;
+
+    fn pg_col_to_json(row: &PgRow, i: usize) -> Value {
+        let type_name = row.columns()[i].type_info().name();
+        match type_name {
+            "INT2" | "INT4" => {
+                let v: Option<i32> = row.try_get(i).ok();
+                v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
+            }
+            "INT8" => {
+                let v: Option<i64> = row.try_get(i).ok();
+                v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
+            }
+            "FLOAT4" | "FLOAT8" => {
+                let v: Option<f64> = row.try_get(i).ok();
+                v.and_then(serde_json::Number::from_f64)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }
+            "NUMERIC" => {
+                let v: Option<Decimal> = row.try_get(i).ok();
+                v.map(|d| Value::String(d.to_string())).unwrap_or(Value::Null)
+            }
+            "BOOL" => {
+                let v: Option<bool> = row.try_get(i).ok();
+                v.map(Value::Bool).unwrap_or(Value::Null)
+            }
+            "BYTEA" => {
+                let v: Option<Vec<u8>> = row.try_get(i).ok();
+                v.map(|b| Value::String(format!("0x{}", hex::encode(b))))
+                    .unwrap_or(Value::Null)
+            }
+            _ => {
+                let v: Option<String> = row.try_get(i).ok();
+                v.map(Value::String).unwrap_or(Value::Null)
+            }
+        }
+    }
 
     /// Returns a shortened version of an event hash for use in table names.
     ///

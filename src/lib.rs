@@ -10,6 +10,7 @@ pub mod event_processor;
 pub use event_processor::EventProcessor;
 pub mod collector_seed;
 pub use collector_seed::CollectorSeed;
+pub mod api_graphql;
 pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;
@@ -80,7 +81,10 @@ pub mod error_codes {
 /// Module with definitions related to the storage of the indexed data.
 pub mod storage {
     pub mod storage_api;
-    pub use storage_api::{Storage, StorageFactory};
+    pub use storage_api::{
+        EventColumn, EventQuery, FilterOp, FilterValue, OrderDir, Storage, StorageFactory,
+        WhereClause,
+    };
 
     pub mod storage_duckdb;
     pub use storage_duckdb::DuckDBStorage;
