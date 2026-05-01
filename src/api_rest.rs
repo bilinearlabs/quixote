@@ -345,6 +345,7 @@ pub async fn start_api_server(
     storage_backend: Arc<dyn StorageFactory>,
     tor_state: TorStateHandle,
     cancellation_token: CancellationToken,
+    graphql_playground: bool,
 ) -> Result<()> {
     let server_address = server_address.to_string();
     tokio::spawn(async move {
@@ -357,7 +358,7 @@ pub async fn start_api_server(
         };
 
         let app = create_router(storage_backend, tor_state)
-            .merge(api_graphql::create_graphql_router(graphql_schema));
+            .merge(api_graphql::create_graphql_router(graphql_schema, graphql_playground));
         let port = server_address.split(":").nth(1).unwrap().to_string();
 
         let listener = tokio::net::TcpListener::bind(server_address)

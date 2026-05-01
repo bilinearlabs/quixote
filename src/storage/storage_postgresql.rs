@@ -789,6 +789,18 @@ impl Storage for PostgreSqlStorage {
 
         Ok(Value::Array(result))
     }
+
+    async fn run_setup_sql(&self, statements: &[String]) -> Result<()> {
+        for sql in statements {
+            // Use raw_sql (simple query protocol) — prepared statements don't
+            // support DDL like CREATE OR REPLACE VIEW in PostgreSQL.
+            sqlx::raw_sql(sql)
+                .execute(&self.conn)
+                .await
+                .with_context(|| format!("setup_sql failed:\n{sql}"))?;
+        }
+        Ok(())
+    }
 }
 
 // ── PostgreSQL WHERE clause compiler ─────────────────────────────────────────
@@ -1655,5 +1667,284 @@ mod tests {
         );
 
         Ok(())
+    }
+}
+
+// ── WHERE-clause compilation unit tests ──────────────────────────────────────
+
+#[cfg(test)]
+mod query_compilation {
+    use super::{build_pg_condition, build_pg_where_clause, classify_pg_col, fmt_pg_val, PgColKind};
+    use crate::storage::{EventColumn, FilterOp, FilterValue, WhereClause};
+    use pretty_assertions::assert_eq;
+
+    // ── helpers ────────────────────────────────────────────────────────────
+
+    fn uint_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "uint256".to_string() }
+    }
+
+    fn addr_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "address".to_string() }
+    }
+
+    fn bytes_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "bytes32".to_string() }
+    }
+
+    fn text_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "string".to_string() }
+    }
+
+    fn scalar(op: FilterOp, col: &str, val: &str) -> WhereClause {
+        WhereClause { column: col.to_string(), op, value: FilterValue::Scalar(val.to_string()) }
+    }
+
+    fn list(col: &str, vals: &[&str]) -> WhereClause {
+        WhereClause {
+            column: col.to_string(),
+            op: FilterOp::In,
+            value: FilterValue::List(vals.iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    fn compile(clauses: &[WhereClause], cols: &[EventColumn]) -> String {
+        build_pg_where_clause(clauses, cols).expect("unexpected compilation error")
+    }
+
+    // ── column classification ──────────────────────────────────────────────
+
+    #[test]
+    fn block_number_classified_as_numeric() {
+        assert!(matches!(classify_pg_col("block_number", &[]), PgColKind::Numeric));
+    }
+
+    #[test]
+    fn log_index_classified_as_numeric() {
+        assert!(matches!(classify_pg_col("log_index", &[]), PgColKind::Numeric));
+    }
+
+    #[test]
+    fn transaction_hash_classified_as_hex() {
+        assert!(matches!(classify_pg_col("transaction_hash", &[]), PgColKind::Hex));
+    }
+
+    #[test]
+    fn contract_address_classified_as_hex() {
+        assert!(matches!(classify_pg_col("contract_address", &[]), PgColKind::Hex));
+    }
+
+    #[test]
+    fn uint256_param_classified_as_numeric() {
+        assert!(matches!(classify_pg_col("value", &[uint_col("value")]), PgColKind::Numeric));
+    }
+
+    #[test]
+    fn address_param_classified_as_hex() {
+        assert!(matches!(classify_pg_col("from", &[addr_col("from")]), PgColKind::Hex));
+    }
+
+    #[test]
+    fn bytes_param_classified_as_hex() {
+        assert!(matches!(classify_pg_col("data", &[bytes_col("data")]), PgColKind::Hex));
+    }
+
+    #[test]
+    fn string_param_classified_as_text() {
+        assert!(matches!(classify_pg_col("memo", &[text_col("memo")]), PgColKind::Text));
+    }
+
+    // ── value formatting ───────────────────────────────────────────────────
+
+    #[test]
+    fn numeric_value_passes_through_unquoted() {
+        assert_eq!(fmt_pg_val("12345", PgColKind::Numeric).unwrap(), "12345");
+    }
+
+    #[test]
+    fn hex_with_0x_prefix_stripped_and_decoded() {
+        let addr = "0xabcdef1234567890abcdef1234567890abcdef12";
+        let result = fmt_pg_val(addr, PgColKind::Hex).unwrap();
+        assert_eq!(result, "decode('abcdef1234567890abcdef1234567890abcdef12', 'hex')");
+    }
+
+    #[test]
+    fn hex_without_0x_prefix_accepted() {
+        let hex = "deadbeefcafe";
+        let result = fmt_pg_val(hex, PgColKind::Hex).unwrap();
+        assert_eq!(result, "decode('deadbeefcafe', 'hex')");
+    }
+
+    #[test]
+    fn hex_normalized_to_lowercase() {
+        let hex = "0xABCDEF";
+        let result = fmt_pg_val(hex, PgColKind::Hex).unwrap();
+        assert_eq!(result, "decode('abcdef', 'hex')");
+    }
+
+    #[test]
+    fn text_value_is_single_quoted() {
+        assert_eq!(fmt_pg_val("hello", PgColKind::Text).unwrap(), "'hello'");
+    }
+
+    #[test]
+    fn text_single_quotes_are_escaped() {
+        assert_eq!(fmt_pg_val("it's alive", PgColKind::Text).unwrap(), "'it''s alive'");
+    }
+
+    // ── error cases for fmt_pg_val ─────────────────────────────────────────
+
+    #[test]
+    fn non_numeric_string_for_numeric_col_returns_error() {
+        assert!(fmt_pg_val("not-a-number", PgColKind::Numeric).is_err());
+    }
+
+    #[test]
+    fn non_hex_string_for_hex_col_returns_error() {
+        assert!(fmt_pg_val("not-hex!", PgColKind::Hex).is_err());
+    }
+
+    #[test]
+    fn empty_string_for_hex_col_returns_error() {
+        assert!(fmt_pg_val("", PgColKind::Hex).is_err());
+    }
+
+    // ── no filters ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_clauses_produces_empty_string() {
+        assert_eq!(compile(&[], &[]), "");
+    }
+
+    // ── numeric fixed columns ──────────────────────────────────────────────
+
+    #[test]
+    fn eq_on_block_number() {
+        let sql = compile(&[scalar(FilterOp::Eq, "block_number", "42")], &[]);
+        assert_eq!(sql, r#"WHERE "block_number" = 42"#);
+    }
+
+    #[test]
+    fn block_range_produces_and_clause() {
+        let sql = compile(
+            &[
+                scalar(FilterOp::Gte, "block_number", "100"),
+                scalar(FilterOp::Lte, "block_number", "200"),
+            ],
+            &[],
+        );
+        assert_eq!(sql, r#"WHERE "block_number" >= 100 AND "block_number" <= 200"#);
+    }
+
+    // ── hex / BYTEA columns ────────────────────────────────────────────────
+
+    #[test]
+    fn eq_on_contract_address_uses_decode() {
+        let addr = "0xabcdef1234567890abcdef1234567890abcdef12";
+        let sql = compile(&[scalar(FilterOp::Eq, "contract_address", addr)], &[]);
+        assert_eq!(
+            sql,
+            r#"WHERE "contract_address" = decode('abcdef1234567890abcdef1234567890abcdef12', 'hex')"#
+        );
+    }
+
+    #[test]
+    fn in_on_contract_address_uses_decode_for_each_item() {
+        let sql = compile(
+            &[list("contract_address", &["0xaaaa", "0xbbbb"])],
+            &[],
+        );
+        assert_eq!(
+            sql,
+            r#"WHERE "contract_address" IN (decode('aaaa', 'hex'), decode('bbbb', 'hex'))"#
+        );
+    }
+
+    #[test]
+    fn eq_on_address_param_uses_decode() {
+        let addr = "0x1234567890123456789012345678901234567890";
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "from", addr)],
+            &[addr_col("from")],
+        );
+        assert_eq!(
+            sql,
+            r#"WHERE "from" = decode('1234567890123456789012345678901234567890', 'hex')"#
+        );
+    }
+
+    // ── text columns ───────────────────────────────────────────────────────
+
+    #[test]
+    fn eq_on_text_param_is_quoted() {
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "memo", "hello")],
+            &[text_col("memo")],
+        );
+        assert_eq!(sql, r#"WHERE "memo" = 'hello'"#);
+    }
+
+    // ── uint256 event param ────────────────────────────────────────────────
+
+    #[test]
+    fn gte_on_uint256_param_is_numeric() {
+        let sql = compile(
+            &[scalar(FilterOp::Gte, "value", "1000000000000000000")],
+            &[uint_col("value")],
+        );
+        assert_eq!(sql, r#"WHERE "value" >= 1000000000000000000"#);
+    }
+
+    // ── multiple columns ───────────────────────────────────────────────────
+
+    #[test]
+    fn three_clauses_all_joined_with_and() {
+        let sql = compile(
+            &[
+                scalar(FilterOp::Eq, "contract_address", "0xabcd"),
+                scalar(FilterOp::Gte, "block_number", "50"),
+                scalar(FilterOp::Eq, "from", "0x1234"),
+            ],
+            &[addr_col("from")],
+        );
+        assert_eq!(
+            sql,
+            r#"WHERE "contract_address" = decode('abcd', 'hex') AND "block_number" >= 50 AND "from" = decode('1234', 'hex')"#
+        );
+    }
+
+    // ── error cases ────────────────────────────────────────────────────────
+
+    #[test]
+    fn non_hex_for_contract_address_returns_error() {
+        let result = build_pg_where_clause(
+            &[scalar(FilterOp::Eq, "contract_address", "not-hex")],
+            &[],
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected a hex value"));
+    }
+
+    #[test]
+    fn non_numeric_for_block_number_returns_error() {
+        let result = build_pg_where_clause(
+            &[scalar(FilterOp::Eq, "block_number", "abc")],
+            &[],
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected a number"));
+    }
+
+    #[test]
+    fn in_with_scalar_value_returns_error() {
+        let result = build_pg_condition(
+            &WhereClause {
+                column: "block_number".to_string(),
+                op: FilterOp::In,
+                value: FilterValue::Scalar("42".to_string()),
+            },
+            &[],
+        );
+        assert!(result.is_err());
     }
 }

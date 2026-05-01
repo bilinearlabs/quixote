@@ -69,6 +69,9 @@ mod stub_storage {
         async fn send_raw_query(&self, _: &str) -> Result<Value> {
             Ok(Value::Null)
         }
+        async fn run_setup_sql(&self, _: &[String]) -> Result<()> {
+            Ok(())
+        }
         async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
             Ok(vec![])
         }

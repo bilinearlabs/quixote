@@ -76,6 +76,13 @@ pub trait Storage: Send + Sync + 'static + Any {
     /// Sends a raw SQL query to the storage and returns a JSON value.
     async fn send_raw_query(&self, query: &str) -> Result<Value>;
 
+    /// Executes arbitrary DDL/DML statements at startup (CREATE VIEW, CREATE INDEX, etc.).
+    ///
+    /// Unlike `send_raw_query`, this is not restricted to SELECT and is only called
+    /// once during `IndexingApp::build_app`, never exposed through the public API.
+    /// Use the `setup_sql` key in the config YAML to populate this.
+    async fn run_setup_sql(&self, statements: &[String]) -> Result<()>;
+
     /// Lists the contracts indexed in the storage.
     async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>>;
 

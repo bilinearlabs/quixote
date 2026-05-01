@@ -357,11 +357,17 @@ pub async fn playground_handler() -> impl IntoResponse {
     ))
 }
 
-pub fn create_graphql_router(schema: Schema) -> Router {
-    Router::new()
-        .route("/graphql", post(graphql_handler))
-        .route("/graphql/playground", get(playground_handler))
-        .with_state(schema)
+/// Build the Axum router for the GraphQL endpoint.
+///
+/// When `playground` is `true`, the interactive GraphQL Playground UI is served
+/// at `GET /graphql/playground`. Set it to `false` in production to prevent
+/// schema introspection by untrusted clients.
+pub fn create_graphql_router(schema: Schema, playground: bool) -> Router {
+    let mut router = Router::new().route("/graphql", post(graphql_handler));
+    if playground {
+        router = router.route("/graphql/playground", get(playground_handler));
+    }
+    router.with_state(schema)
 }
 
 /// Build the schema from the factory (connects to DB, reads event descriptors).

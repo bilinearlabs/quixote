@@ -122,6 +122,18 @@ impl Storage for DuckDBStorage {
     async fn describe_database(&self) -> Result<Value> {
         self.describe_database_sync()
     }
+
+    async fn run_setup_sql(&self, statements: &[String]) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock: {}", e))?;
+        for sql in statements {
+            conn.execute_batch(sql)
+                .with_context(|| format!("setup_sql failed:\n{sql}"))?;
+        }
+        Ok(())
+    }
 }
 
 impl DuckDBStorage {
@@ -1007,14 +1019,16 @@ impl DuckDBStorage {
                 ",
             );
 
-            event.inputs.iter().for_each(|param| {
-                let db_type = if param.selector_type() == "uint256" {
-                    "VARINT"
-                } else {
-                    "VARCHAR"
-                };
+            // Indexed params first, then non-indexed — must match the order that
+            // decode_log_parts returns (indexed vec, then body vec).
+            for param in event.inputs.iter().filter(|p| p.indexed) {
+                let db_type = if param.selector_type() == "uint256" { "VARINT" } else { "VARCHAR" };
                 statement.push_str(&format!("\"{}\" {db_type},", param.name));
-            });
+            }
+            for param in event.inputs.iter().filter(|p| !p.indexed) {
+                let db_type = if param.selector_type() == "uint256" { "VARINT" } else { "VARCHAR" };
+                statement.push_str(&format!("\"{}\" {db_type},", param.name));
+            }
 
             statement.push_str("PRIMARY KEY (block_number, transaction_hash, log_index));");
 
@@ -2081,4 +2095,284 @@ mod tests {
             "1 transfer event must be stored"
         );
     }
+}
+
+// ── Query compilation unit tests ──────────────────────────────────────
+
+#[cfg(test)]
+mod query_compilation {
+    use super::DuckDBStorage;
+    use crate::storage::{EventColumn, FilterOp, FilterValue, WhereClause};
+    use pretty_assertions::assert_eq;
+
+    // ── helpers ────────────────────────────────────────────────────────────
+
+    fn uint_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "uint256".to_string() }
+    }
+
+    fn uint_col_typed(name: &str, ty: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: ty.to_string() }
+    }
+
+    fn addr_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "address".to_string() }
+    }
+
+    fn bytes32_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "bytes32".to_string() }
+    }
+
+    fn bool_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "bool".to_string() }
+    }
+
+    fn text_col(name: &str) -> EventColumn {
+        EventColumn { name: name.to_string(), selector_type: "string".to_string() }
+    }
+
+    fn scalar(op: FilterOp, col: &str, val: &str) -> WhereClause {
+        WhereClause { column: col.to_string(), op, value: FilterValue::Scalar(val.to_string()) }
+    }
+
+    fn list(col: &str, vals: &[&str]) -> WhereClause {
+        WhereClause {
+            column: col.to_string(),
+            op: FilterOp::In,
+            value: FilterValue::List(vals.iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    fn compile(clauses: &[WhereClause], cols: &[EventColumn]) -> String {
+        DuckDBStorage::build_where_clause(clauses, cols).expect("unexpected compilation error")
+    }
+
+    // ── no filters ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_clauses_produces_empty_string() {
+        assert_eq!(compile(&[], &[]), "");
+    }
+
+    // ── fixed numeric columns (block_number, log_index) ────────────────────
+
+    #[test]
+    fn eq_on_block_number() {
+        let sql = compile(&[scalar(FilterOp::Eq, "block_number", "42")], &[]);
+        assert_eq!(sql, r#"WHERE "block_number" = 42"#);
+    }
+
+    #[test]
+    fn gte_on_block_number() {
+        let sql = compile(&[scalar(FilterOp::Gte, "block_number", "100")], &[]);
+        assert_eq!(sql, r#"WHERE "block_number" >= 100"#);
+    }
+
+    #[test]
+    fn lte_on_block_number() {
+        let sql = compile(&[scalar(FilterOp::Lte, "block_number", "200")], &[]);
+        assert_eq!(sql, r#"WHERE "block_number" <= 200"#);
+    }
+
+    #[test]
+    fn gt_on_log_index() {
+        let sql = compile(&[scalar(FilterOp::Gt, "log_index", "5")], &[]);
+        assert_eq!(sql, r#"WHERE "log_index" > 5"#);
+    }
+
+    #[test]
+    fn lt_on_log_index() {
+        let sql = compile(&[scalar(FilterOp::Lt, "log_index", "10")], &[]);
+        assert_eq!(sql, r#"WHERE "log_index" < 10"#);
+    }
+
+    // ── block range (two conditions ANDed) ─────────────────────────────────
+
+    #[test]
+    fn block_range_produces_and_clause() {
+        let sql = compile(
+            &[
+                scalar(FilterOp::Gte, "block_number", "100"),
+                scalar(FilterOp::Lte, "block_number", "200"),
+            ],
+            &[],
+        );
+        assert_eq!(sql, r#"WHERE "block_number" >= 100 AND "block_number" <= 200"#);
+    }
+
+    // ── text columns (contract_address, transaction_hash, address params) ──
+
+    #[test]
+    fn eq_on_contract_address_is_quoted() {
+        let addr = "0xabcdef1234567890abcdef1234567890abcdef12";
+        let sql = compile(&[scalar(FilterOp::Eq, "contract_address", addr)], &[]);
+        assert_eq!(sql, format!(r#"WHERE "contract_address" = '{addr}'"#));
+    }
+
+    #[test]
+    fn in_on_text_column_produces_in_list() {
+        let sql = compile(
+            &[list("contract_address", &["0xaaaa", "0xbbbb"])],
+            &[],
+        );
+        assert_eq!(sql, r#"WHERE "contract_address" IN ('0xaaaa', '0xbbbb')"#);
+    }
+
+    // ── event-parameter columns ────────────────────────────────────────────
+
+    #[test]
+    fn uint256_param_is_numeric() {
+        let sql = compile(
+            &[scalar(FilterOp::Gte, "value", "1000000000000000000")],
+            &[uint_col("value")],
+        );
+        assert_eq!(sql, r#"WHERE "value" >= 1000000000000000000"#);
+    }
+
+    #[test]
+    fn in_on_uint256_param() {
+        let sql = compile(
+            &[list("value", &["100", "200", "300"])],
+            &[uint_col("value")],
+        );
+        assert_eq!(sql, r#"WHERE "value" IN (100, 200, 300)"#);
+    }
+
+    #[test]
+    fn address_param_is_text_in_duckdb() {
+        // DuckDB stores addresses as VARCHAR ("0x..."), so they're treated as text.
+        let addr = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "from", addr)],
+            &[addr_col("from")],
+        );
+        assert_eq!(sql, format!(r#"WHERE "from" = '{addr}'"#));
+    }
+
+    #[test]
+    fn string_param_is_text() {
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "memo", "hello world")],
+            &[text_col("memo")],
+        );
+        assert_eq!(sql, r#"WHERE "memo" = 'hello world'"#);
+    }
+
+    // ── multiple columns ───────────────────────────────────────────────────
+
+    #[test]
+    fn multiple_columns_joined_with_and() {
+        let sql = compile(
+            &[
+                scalar(FilterOp::Eq, "contract_address", "0xaaaa"),
+                scalar(FilterOp::Gte, "block_number", "50"),
+            ],
+            &[],
+        );
+        assert_eq!(
+            sql,
+            r#"WHERE "contract_address" = '0xaaaa' AND "block_number" >= 50"#
+        );
+    }
+
+    // ── SQL injection defence ──────────────────────────────────────────────
+
+    #[test]
+    fn single_quotes_in_text_values_are_escaped() {
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "memo", "it's a trap")],
+            &[text_col("memo")],
+        );
+        // SQL-safe: the apostrophe becomes two single quotes.
+        assert_eq!(sql, r#"WHERE "memo" = 'it''s a trap'"#);
+    }
+
+    // ── error cases ────────────────────────────────────────────────────────
+
+    #[test]
+    fn non_numeric_value_for_block_number_returns_error() {
+        let result = DuckDBStorage::build_where_clause(
+            &[scalar(FilterOp::Eq, "block_number", "not-a-number")],
+            &[],
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("expected a number"));
+    }
+
+    #[test]
+    fn non_numeric_value_for_uint256_param_returns_error() {
+        let result = DuckDBStorage::build_where_clause(
+            &[scalar(FilterOp::Gte, "value", "0xhex")],
+            &[uint_col("value")],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn in_with_scalar_value_returns_error() {
+        let result = DuckDBStorage::build_where_clause(
+            &[WhereClause {
+                column: "block_number".to_string(),
+                op: FilterOp::In,
+                value: FilterValue::Scalar("42".to_string()),
+            }],
+            &[],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn eq_with_list_value_returns_error() {
+        let result = DuckDBStorage::build_where_clause(
+            &[WhereClause {
+                column: "contract_address".to_string(),
+                op: FilterOp::Eq,
+                value: FilterValue::List(vec!["0xaaaa".to_string()]),
+            }],
+            &[],
+        );
+        assert!(result.is_err());
+    }
+
+    // ── Aave governance column types ───────────────────────────────────────
+    // Verifies the numeric/text classification for types that appear in Aave
+    // Governance V3 events (uint8, uint24, uint40, uint128, bytes32, bool).
+
+    #[test]
+    fn uint8_access_level_is_numeric() {
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "accessLevel", "1")],
+            &[uint_col_typed("accessLevel", "uint8")],
+        );
+        assert_eq!(sql, r#"WHERE "accessLevel" = 1"#);
+    }
+
+    #[test]
+    fn uint128_votes_for_range_is_numeric() {
+        let sql = compile(
+            &[scalar(FilterOp::Gte, "votesFor", "500000")],
+            &[uint_col_typed("votesFor", "uint128")],
+        );
+        assert_eq!(sql, r#"WHERE "votesFor" >= 500000"#);
+    }
+
+    #[test]
+    fn bytes32_ipfs_hash_is_text() {
+        let hash = "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "ipfsHash", hash)],
+            &[bytes32_col("ipfsHash")],
+        );
+        assert_eq!(sql, format!(r#"WHERE "ipfsHash" = '{hash}'"#));
+    }
+
+    #[test]
+    fn bool_support_is_text() {
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "support", "true")],
+            &[bool_col("support")],
+        );
+        assert_eq!(sql, r#"WHERE "support" = 'true'"#);
+    }
+
 }
