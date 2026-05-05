@@ -26,11 +26,11 @@ const MAX_FIRST: u64 = 10_000;
 /// Map a GraphQL camelCase field name to its snake_case database column name.
 fn gql_col_to_db(gql: &str) -> String {
     match gql {
-        "blockNumber"     => "block_number".to_string(),
+        "blockNumber" => "block_number".to_string(),
         "transactionHash" => "transaction_hash".to_string(),
-        "logIndex"        => "log_index".to_string(),
+        "logIndex" => "log_index".to_string(),
         "contractAddress" => "contract_address".to_string(),
-        other             => other.to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -43,19 +43,20 @@ pub fn build_schema(
     factory: Arc<dyn StorageFactory>,
 ) -> Result<Schema> {
     // _empty ensures Query always has at least one field (required by the spec).
-    let mut query = Object::new("Query")
-        .field(Field::new("_empty", TypeRef::named(TypeRef::BOOLEAN), |_| {
-            FieldFuture::from_value(None)
-        }));
+    let mut query = Object::new("Query").field(Field::new(
+        "_empty",
+        TypeRef::named(TypeRef::BOOLEAN),
+        |_| FieldFuture::from_value(None),
+    ));
 
     let mut schema_builder = Schema::build("Query", None, None);
 
     // Shared input type: one field per filter operator.
     let string_filter = InputObject::new("StringFilter")
-        .field(InputValue::new("eq",  TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("in",  TypeRef::named_list(TypeRef::STRING)))
-        .field(InputValue::new("gt",  TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("lt",  TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("eq", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("in", TypeRef::named_list(TypeRef::STRING)))
+        .field(InputValue::new("gt", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("lt", TypeRef::named(TypeRef::STRING)))
         .field(InputValue::new("gte", TypeRef::named(TypeRef::STRING)))
         .field(InputValue::new("lte", TypeRef::named(TypeRef::STRING)));
     schema_builder = schema_builder.register(string_filter);
@@ -76,23 +77,51 @@ pub fn build_schema(
         let start = if event_hash.starts_with("0x") { 2 } else { 0 };
         let short_hash = &event_hash[start..(start + 5).min(event_hash.len())];
         let table_name = format!(
-            "event_{}_{}_{}", chain_id, event_name.to_ascii_lowercase(), short_hash
+            "event_{}_{}_{}",
+            chain_id,
+            event_name.to_ascii_lowercase(),
+            short_hash
         );
 
         // GraphQL type and field name mirror the SQL table name.
         let type_name = table_name.clone();
         let field_name = table_name.clone();
 
-        // --- Build the per-event WHERE input type ---
+        // --- Build the per-event WHERE input type (field-level operators) ---
         let where_type_name = format!("{type_name}_where");
         let mut where_input = InputObject::new(&where_type_name);
-        for &gql_name in &["blockNumber", "transactionHash", "logIndex", "contractAddress"] {
-            where_input = where_input.field(InputValue::new(gql_name, TypeRef::named("StringFilter")));
+        for &gql_name in &[
+            "blockNumber",
+            "transactionHash",
+            "logIndex",
+            "contractAddress",
+        ] {
+            where_input =
+                where_input.field(InputValue::new(gql_name, TypeRef::named("StringFilter")));
         }
         for col in &columns {
-            where_input = where_input.field(InputValue::new(&col.name, TypeRef::named("StringFilter")));
+            where_input =
+                where_input.field(InputValue::new(&col.name, TypeRef::named("StringFilter")));
         }
         schema_builder = schema_builder.register(where_input);
+
+        // --- Build the per-event CONDITION input type (exact-match shorthand) ---
+        let condition_type_name = format!("{type_name}_condition");
+        let mut condition_input = InputObject::new(&condition_type_name);
+        for &gql_name in &[
+            "blockNumber",
+            "transactionHash",
+            "logIndex",
+            "contractAddress",
+        ] {
+            condition_input =
+                condition_input.field(InputValue::new(gql_name, TypeRef::named(TypeRef::STRING)));
+        }
+        for col in &columns {
+            condition_input =
+                condition_input.field(InputValue::new(&col.name, TypeRef::named(TypeRef::STRING)));
+        }
+        schema_builder = schema_builder.register(condition_input);
 
         // --- Build the object type for this event ---
         let mut obj = Object::new(&type_name);
@@ -123,6 +152,7 @@ pub fn build_schema(
         let columns_c = columns.clone();
         let type_name_c = type_name.clone();
         let where_type_name_c = where_type_name.clone();
+        let condition_type_name_c = condition_type_name.clone();
 
         query = query.field(
             Field::new(
@@ -203,6 +233,27 @@ pub fn build_schema(
                             }
                         }
 
+                        // --- Parse `condition` (exact-match shorthand) ---
+                        if let Some(cond_val) = ctx.args.get("condition") {
+                            let cond_obj = cond_val.object().map_err(|e| {
+                                async_graphql::Error::new(format!("invalid 'condition': {e:?}"))
+                            })?;
+                            for (gql_col, val) in cond_obj.iter() {
+                                let gql_col: &str = gql_col.as_ref();
+                                let db_col = gql_col_to_db(gql_col);
+                                let s = val.string().map_err(|_| {
+                                    async_graphql::Error::new(format!(
+                                        "condition value for '{gql_col}' must be a string"
+                                    ))
+                                })?;
+                                where_clauses.push(WhereClause {
+                                    column: db_col,
+                                    op: FilterOp::Eq,
+                                    value: FilterValue::Scalar(s.to_string()),
+                                });
+                            }
+                        }
+
                         // --- Parse `orderBy` ---
                         let order_by = if let Some(v) = ctx.args.get("orderBy") {
                             let gql_name = v.string().map_err(|_| {
@@ -273,11 +324,12 @@ pub fn build_schema(
                     })
                 },
             )
-            .argument(InputValue::new("where",    TypeRef::named(&where_type_name_c)))
-            .argument(InputValue::new("orderBy",  TypeRef::named(TypeRef::STRING)))
-            .argument(InputValue::new("orderDir", TypeRef::named(TypeRef::STRING)))
-            .argument(InputValue::new("first",    TypeRef::named(TypeRef::INT)))
-            .argument(InputValue::new("skip",     TypeRef::named(TypeRef::INT))),
+            .argument(InputValue::new("where",     TypeRef::named(&where_type_name_c)))
+            .argument(InputValue::new("condition", TypeRef::named(&condition_type_name_c)))
+            .argument(InputValue::new("orderBy",   TypeRef::named(TypeRef::STRING)))
+            .argument(InputValue::new("orderDir",  TypeRef::named(TypeRef::STRING)))
+            .argument(InputValue::new("first",     TypeRef::named(TypeRef::INT)))
+            .argument(InputValue::new("skip",      TypeRef::named(TypeRef::INT))),
         );
     }
 
@@ -344,10 +396,7 @@ fn parse_event_columns(sig: &str) -> Vec<EventColumn> {
 
 // --- Axum glue ---
 
-pub async fn graphql_handler(
-    State(schema): State<Schema>,
-    req: GraphQLRequest,
-) -> GraphQLResponse {
+pub async fn graphql_handler(State(schema): State<Schema>, req: GraphQLRequest) -> GraphQLResponse {
     schema.execute(req.into_inner()).await.into()
 }
 
@@ -391,7 +440,12 @@ mod tests {
     fn field_name_for(chain_id: u64, event: &alloy::json_abi::Event) -> String {
         let selector = event.selector().to_string();
         let short_hash = &selector[2..7];
-        format!("event_{}_{}_{}", chain_id, event.name.to_ascii_lowercase(), short_hash)
+        format!(
+            "event_{}_{}_{}",
+            chain_id,
+            event.name.to_ascii_lowercase(),
+            short_hash
+        )
     }
 
     /// Temporary DuckDB file, cleaned up on drop.
@@ -399,7 +453,11 @@ mod tests {
 
     impl TempDb {
         fn new(suffix: &str) -> Self {
-            Self(format!("/tmp/quixote_graphql_{}_{}.duckdb", suffix, std::process::id()))
+            Self(format!(
+                "/tmp/quixote_graphql_{}_{}.duckdb",
+                suffix,
+                std::process::id()
+            ))
         }
         fn path(&self) -> &str {
             &self.0
@@ -424,7 +482,10 @@ mod tests {
                 .include_events(CHAIN_ID, &[event])
                 .await
                 .expect("include events");
-            storage.add_events(CHAIN_ID, logs).await.expect("add events");
+            storage
+                .add_events(CHAIN_ID, logs)
+                .await
+                .expect("add events");
         }
         Arc::new(DuckDBStorage::with_db(path).expect("reopen db")) as Arc<dyn StorageFactory>
     }
@@ -439,18 +500,29 @@ mod tests {
             .with_erc20_transfer()
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory).await.expect("build schema");
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
-        let query = format!("{{ {} {{ blockNumber transactionHash from to value }} }}", fname);
+        let query = format!(
+            "{{ {} {{ blockNumber transactionHash from to value }} }}",
+            fname
+        );
         let res = schema.execute(&query).await;
         assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
         let data = res.data.into_json().unwrap();
         let rows = data[&fname].as_array().expect("expected array");
         assert_eq!(rows.len(), 5);
         for row in rows {
-            assert!(row["blockNumber"].is_string(), "blockNumber must be a string");
-            assert!(row["transactionHash"].is_string(), "transactionHash must be a string");
+            assert!(
+                row["blockNumber"].is_string(),
+                "blockNumber must be a string"
+            );
+            assert!(
+                row["transactionHash"].is_string(),
+                "transactionHash must be a string"
+            );
         }
     }
 
@@ -463,7 +535,9 @@ mod tests {
             .with_erc20_transfer()
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory).await.expect("build schema");
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         // Blocks 100-109 seeded; querying 103-107 should return exactly 5.
@@ -489,7 +563,9 @@ mod tests {
             .with_contract_addresses([addr_a.clone(), addr_b.clone()])
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory).await.expect("build schema");
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let query = format!(
@@ -515,7 +591,9 @@ mod tests {
             .with_address_pool([sender.clone()])
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory).await.expect("build schema");
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let query = format!(
@@ -537,7 +615,9 @@ mod tests {
             .with_erc20_transfer()
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory).await.expect("build schema");
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         // value >= 0 must match all rows (uint256 is always non-negative).
@@ -557,7 +637,9 @@ mod tests {
         let tmp = TempDb::new("invalid_block");
         let logs = LogTestFixture::builder().with_erc20_transfer().build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory).await.expect("build schema");
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let query = format!(
@@ -578,7 +660,9 @@ mod tests {
         let tmp = TempDb::new("bad_orderby");
         let logs = LogTestFixture::builder().with_erc20_transfer().build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory).await.expect("build schema");
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let query = format!(
@@ -594,6 +678,74 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn duckdb_condition_exact_match() {
+        let tmp = TempDb::new("condition_exact");
+        let addr_a = fake_address();
+        let addr_b = fake_address();
+        let logs = LogTestFixture::builder()
+            .with_log_count(6)
+            .with_erc20_transfer()
+            .with_contract_addresses([addr_a.clone(), addr_b.clone()])
+            .build();
+        let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
+
+        let fname = field_name_for(CHAIN_ID, &transfer_event());
+        let query = format!(
+            r#"{{ {}(condition: {{ contractAddress: "{}" }}) {{ contractAddress }} }}"#,
+            fname, addr_a
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data[&fname].as_array().expect("expected array");
+        assert_eq!(
+            rows.len(),
+            3,
+            "condition should match exactly half the logs"
+        );
+        for row in rows {
+            assert_eq!(row["contractAddress"].as_str().unwrap(), addr_a);
+        }
+    }
+
+    #[tokio::test]
+    async fn duckdb_condition_and_where_combine() {
+        let tmp = TempDb::new("condition_where");
+        let addr_a = fake_address();
+        let addr_b = fake_address();
+        let logs = LogTestFixture::builder()
+            .with_log_count(10)
+            .with_start_block(100)
+            .with_erc20_transfer()
+            .with_contract_addresses([addr_a.clone(), addr_b.clone()])
+            .build();
+        let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
+        let schema = build_schema_from_factory(factory)
+            .await
+            .expect("build schema");
+
+        let fname = field_name_for(CHAIN_ID, &transfer_event());
+        // 10 logs: blocks 100-109, alternating addr_a/addr_b.
+        // condition pins addr_a (5 logs: blocks 100,102,104,106,108).
+        // where further restricts to blockNumber >= 104 (3 logs: 104,106,108).
+        let query = format!(
+            r#"{{ {}(condition: {{ contractAddress: "{}" }}, where: {{ blockNumber: {{ gte: "104" }} }}) {{ blockNumber contractAddress }} }}"#,
+            fname, addr_a
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data[&fname].as_array().expect("expected array");
+        assert_eq!(rows.len(), 3);
+        for row in rows {
+            assert_eq!(row["contractAddress"].as_str().unwrap(), addr_a);
+        }
+    }
+
     // ── PostgreSQL integration tests ────────────────────────────────────────
 
     #[sqlx::test(migrations = "./migrations")]
@@ -604,22 +756,33 @@ mod tests {
             .with_log_count(5)
             .with_erc20_transfer()
             .build();
-        storage.include_events(CHAIN_ID, &[transfer_event()]).await?;
+        storage
+            .include_events(CHAIN_ID, &[transfer_event()])
+            .await?;
         storage.add_events(CHAIN_ID, &logs).await?;
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
         let schema = build_schema_from_factory(factory).await?;
 
-        let query = format!("{{ {} {{ blockNumber transactionHash from to value }} }}", fname);
+        let query = format!(
+            "{{ {} {{ blockNumber transactionHash from to value }} }}",
+            fname
+        );
         let res = schema.execute(&query).await;
         assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
         let data = res.data.into_json().unwrap();
         let rows = data[&fname].as_array().expect("expected array");
         assert_eq!(rows.len(), 5);
         for row in rows {
-            assert!(row["blockNumber"].is_string(), "blockNumber must be a string");
-            assert!(row["transactionHash"].is_string(), "transactionHash must be a string");
+            assert!(
+                row["blockNumber"].is_string(),
+                "blockNumber must be a string"
+            );
+            assert!(
+                row["transactionHash"].is_string(),
+                "transactionHash must be a string"
+            );
         }
         Ok(())
     }
@@ -633,7 +796,9 @@ mod tests {
             .with_start_block(100)
             .with_erc20_transfer()
             .build();
-        storage.include_events(CHAIN_ID, &[transfer_event()]).await?;
+        storage
+            .include_events(CHAIN_ID, &[transfer_event()])
+            .await?;
         storage.add_events(CHAIN_ID, &logs).await?;
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
@@ -665,7 +830,9 @@ mod tests {
             .with_erc20_transfer()
             .with_contract_addresses([addr_a.clone(), addr_b.clone()])
             .build();
-        storage.include_events(CHAIN_ID, &[transfer_event()]).await?;
+        storage
+            .include_events(CHAIN_ID, &[transfer_event()])
+            .await?;
         storage.add_events(CHAIN_ID, &logs).await?;
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
@@ -681,6 +848,112 @@ mod tests {
         let data = res.data.into_json().unwrap();
         let rows = data[&fname].as_array().expect("expected array");
         assert_eq!(rows.len(), 3);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn pg_condition_exact_match(pool: sqlx::Pool<sqlx::Postgres>) -> anyhow::Result<()> {
+        use crate::storage::PostgreSqlStorage;
+        let storage = PostgreSqlStorage::new(pool);
+        let addr_a = fake_address();
+        let addr_b = fake_address();
+        let logs = LogTestFixture::builder()
+            .with_log_count(6)
+            .with_erc20_transfer()
+            .with_contract_addresses([addr_a.clone(), addr_b.clone()])
+            .build();
+        storage
+            .include_events(CHAIN_ID, &[transfer_event()])
+            .await?;
+        storage.add_events(CHAIN_ID, &logs).await?;
+
+        let fname = field_name_for(CHAIN_ID, &transfer_event());
+        let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
+        let schema = build_schema_from_factory(factory).await?;
+
+        let query = format!(
+            r#"{{ {}(condition: {{ contractAddress: "{}" }}) {{ contractAddress }} }}"#,
+            fname, addr_a
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data[&fname].as_array().expect("expected array");
+        assert_eq!(rows.len(), 3);
+        for row in rows {
+            assert_eq!(row["contractAddress"].as_str().unwrap(), addr_a);
+        }
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn pg_condition_and_where_combine(
+        pool: sqlx::Pool<sqlx::Postgres>,
+    ) -> anyhow::Result<()> {
+        use crate::storage::PostgreSqlStorage;
+        let storage = PostgreSqlStorage::new(pool);
+        let addr_a = fake_address();
+        let addr_b = fake_address();
+        let logs = LogTestFixture::builder()
+            .with_log_count(10)
+            .with_start_block(100)
+            .with_erc20_transfer()
+            .with_contract_addresses([addr_a.clone(), addr_b.clone()])
+            .build();
+        storage
+            .include_events(CHAIN_ID, &[transfer_event()])
+            .await?;
+        storage.add_events(CHAIN_ID, &logs).await?;
+
+        let fname = field_name_for(CHAIN_ID, &transfer_event());
+        let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
+        let schema = build_schema_from_factory(factory).await?;
+
+        // condition pins addr_a (5 logs: blocks 100,102,104,106,108).
+        // where further restricts to blockNumber >= 104 (3 logs: 104,106,108).
+        let query = format!(
+            r#"{{ {}(condition: {{ contractAddress: "{}" }}, where: {{ blockNumber: {{ gte: "104" }} }}) {{ blockNumber contractAddress }} }}"#,
+            fname, addr_a
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data[&fname].as_array().expect("expected array");
+        assert_eq!(rows.len(), 3);
+        for row in rows {
+            assert_eq!(row["contractAddress"].as_str().unwrap(), addr_a);
+        }
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn pg_where_param_field(pool: sqlx::Pool<sqlx::Postgres>) -> anyhow::Result<()> {
+        use crate::storage::PostgreSqlStorage;
+        let storage = PostgreSqlStorage::new(pool);
+        let sender = fake_address();
+        let logs = LogTestFixture::builder()
+            .with_log_count(4)
+            .with_erc20_transfer()
+            .with_address_pool([sender.clone()])
+            .build();
+        storage
+            .include_events(CHAIN_ID, &[transfer_event()])
+            .await?;
+        storage.add_events(CHAIN_ID, &logs).await?;
+
+        let fname = field_name_for(CHAIN_ID, &transfer_event());
+        let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
+        let schema = build_schema_from_factory(factory).await?;
+
+        let query = format!(
+            r#"{{ {}(where: {{ from: {{ eq: "{}" }} }}) {{ from }} }}"#,
+            fname, sender
+        );
+        let res = schema.execute(&query).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data[&fname].as_array().expect("expected array");
+        assert_eq!(rows.len(), 4);
         Ok(())
     }
 }

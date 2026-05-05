@@ -643,7 +643,7 @@ impl DuckDBStorage {
         let order_clause = match &q.order_by {
             Some(col) => {
                 let dir = match q.order_dir {
-                    crate::storage::OrderDir::Asc  => "ASC",
+                    crate::storage::OrderDir::Asc => "ASC",
                     crate::storage::OrderDir::Desc => "DESC",
                 };
                 format!("ORDER BY \"{col}\" {dir}")
@@ -653,9 +653,9 @@ impl DuckDBStorage {
 
         let sql = format!(
             "SELECT {select} FROM {table} {where_clause} {order_clause} LIMIT {first} OFFSET {skip}",
-            table  = q.table_name,
-            first  = q.first,
-            skip   = q.skip,
+            table = q.table_name,
+            first = q.first,
+            skip = q.skip,
         );
 
         let conn = self
@@ -709,13 +709,26 @@ impl DuckDBStorage {
         let col = format!("\"{}\"", wc.column);
 
         match (&wc.op, &wc.value) {
-            (FilterOp::Eq,  FilterValue::Scalar(v)) => Ok(format!("{col} = {}",  Self::fmt_val(v, is_numeric)?)),
-            (FilterOp::Gt,  FilterValue::Scalar(v)) => Ok(format!("{col} > {}",  Self::fmt_val(v, is_numeric)?)),
-            (FilterOp::Lt,  FilterValue::Scalar(v)) => Ok(format!("{col} < {}",  Self::fmt_val(v, is_numeric)?)),
-            (FilterOp::Gte, FilterValue::Scalar(v)) => Ok(format!("{col} >= {}", Self::fmt_val(v, is_numeric)?)),
-            (FilterOp::Lte, FilterValue::Scalar(v)) => Ok(format!("{col} <= {}", Self::fmt_val(v, is_numeric)?)),
-            (FilterOp::In,  FilterValue::List(vs))  => {
-                let items = vs.iter().map(|v| Self::fmt_val(v, is_numeric)).collect::<Result<Vec<_>>>()?;
+            (FilterOp::Eq, FilterValue::Scalar(v)) => {
+                Ok(format!("{col} = {}", Self::fmt_val(v, is_numeric)?))
+            }
+            (FilterOp::Gt, FilterValue::Scalar(v)) => {
+                Ok(format!("{col} > {}", Self::fmt_val(v, is_numeric)?))
+            }
+            (FilterOp::Lt, FilterValue::Scalar(v)) => {
+                Ok(format!("{col} < {}", Self::fmt_val(v, is_numeric)?))
+            }
+            (FilterOp::Gte, FilterValue::Scalar(v)) => {
+                Ok(format!("{col} >= {}", Self::fmt_val(v, is_numeric)?))
+            }
+            (FilterOp::Lte, FilterValue::Scalar(v)) => {
+                Ok(format!("{col} <= {}", Self::fmt_val(v, is_numeric)?))
+            }
+            (FilterOp::In, FilterValue::List(vs)) => {
+                let items = vs
+                    .iter()
+                    .map(|v| Self::fmt_val(v, is_numeric))
+                    .collect::<Result<Vec<_>>>()?;
                 Ok(format!("{col} IN ({})", items.join(", ")))
             }
             _ => Err(anyhow::anyhow!(
@@ -1022,11 +1035,19 @@ impl DuckDBStorage {
             // Indexed params first, then non-indexed — must match the order that
             // decode_log_parts returns (indexed vec, then body vec).
             for param in event.inputs.iter().filter(|p| p.indexed) {
-                let db_type = if param.selector_type() == "uint256" { "VARINT" } else { "VARCHAR" };
+                let db_type = if param.selector_type() == "uint256" {
+                    "VARINT"
+                } else {
+                    "VARCHAR"
+                };
                 statement.push_str(&format!("\"{}\" {db_type},", param.name));
             }
             for param in event.inputs.iter().filter(|p| !p.indexed) {
-                let db_type = if param.selector_type() == "uint256" { "VARINT" } else { "VARCHAR" };
+                let db_type = if param.selector_type() == "uint256" {
+                    "VARINT"
+                } else {
+                    "VARCHAR"
+                };
                 statement.push_str(&format!("\"{}\" {db_type},", param.name));
             }
 
@@ -2108,31 +2129,53 @@ mod query_compilation {
     // ── helpers ────────────────────────────────────────────────────────────
 
     fn uint_col(name: &str) -> EventColumn {
-        EventColumn { name: name.to_string(), selector_type: "uint256".to_string() }
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "uint256".to_string(),
+        }
     }
 
     fn uint_col_typed(name: &str, ty: &str) -> EventColumn {
-        EventColumn { name: name.to_string(), selector_type: ty.to_string() }
+        EventColumn {
+            name: name.to_string(),
+            selector_type: ty.to_string(),
+        }
     }
 
     fn addr_col(name: &str) -> EventColumn {
-        EventColumn { name: name.to_string(), selector_type: "address".to_string() }
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "address".to_string(),
+        }
     }
 
     fn bytes32_col(name: &str) -> EventColumn {
-        EventColumn { name: name.to_string(), selector_type: "bytes32".to_string() }
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "bytes32".to_string(),
+        }
     }
 
     fn bool_col(name: &str) -> EventColumn {
-        EventColumn { name: name.to_string(), selector_type: "bool".to_string() }
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "bool".to_string(),
+        }
     }
 
     fn text_col(name: &str) -> EventColumn {
-        EventColumn { name: name.to_string(), selector_type: "string".to_string() }
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "string".to_string(),
+        }
     }
 
     fn scalar(op: FilterOp, col: &str, val: &str) -> WhereClause {
-        WhereClause { column: col.to_string(), op, value: FilterValue::Scalar(val.to_string()) }
+        WhereClause {
+            column: col.to_string(),
+            op,
+            value: FilterValue::Scalar(val.to_string()),
+        }
     }
 
     fn list(col: &str, vals: &[&str]) -> WhereClause {
@@ -2197,7 +2240,10 @@ mod query_compilation {
             ],
             &[],
         );
-        assert_eq!(sql, r#"WHERE "block_number" >= 100 AND "block_number" <= 200"#);
+        assert_eq!(
+            sql,
+            r#"WHERE "block_number" >= 100 AND "block_number" <= 200"#
+        );
     }
 
     // ── text columns (contract_address, transaction_hash, address params) ──
@@ -2211,10 +2257,7 @@ mod query_compilation {
 
     #[test]
     fn in_on_text_column_produces_in_list() {
-        let sql = compile(
-            &[list("contract_address", &["0xaaaa", "0xbbbb"])],
-            &[],
-        );
+        let sql = compile(&[list("contract_address", &["0xaaaa", "0xbbbb"])], &[]);
         assert_eq!(sql, r#"WHERE "contract_address" IN ('0xaaaa', '0xbbbb')"#);
     }
 
@@ -2242,10 +2285,7 @@ mod query_compilation {
     fn address_param_is_text_in_duckdb() {
         // DuckDB stores addresses as VARCHAR ("0x..."), so they're treated as text.
         let addr = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
-        let sql = compile(
-            &[scalar(FilterOp::Eq, "from", addr)],
-            &[addr_col("from")],
-        );
+        let sql = compile(&[scalar(FilterOp::Eq, "from", addr)], &[addr_col("from")]);
         assert_eq!(sql, format!(r#"WHERE "from" = '{addr}'"#));
     }
 
@@ -2296,7 +2336,12 @@ mod query_compilation {
             &[],
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("expected a number"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected a number")
+        );
     }
 
     #[test]
@@ -2374,5 +2419,4 @@ mod query_compilation {
         );
         assert_eq!(sql, r#"WHERE "support" = 'true'"#);
     }
-
 }

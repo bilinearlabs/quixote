@@ -78,10 +78,7 @@ mod stub_storage {
         async fn describe_database(&self) -> Result<Value> {
             Ok(Value::Null)
         }
-        async fn query_event_table(
-            &self,
-            _: &quixote::storage::EventQuery,
-        ) -> Result<Vec<Value>> {
+        async fn query_event_table(&self, _: &quixote::storage::EventQuery) -> Result<Vec<Value>> {
             Ok(vec![])
         }
     }

@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 use crate::{
-    CancellationToken,
-    api_graphql,
+    CancellationToken, api_graphql,
     storage::{ContractDescriptorDb, EventDescriptorDb, StorageFactory},
 };
 use anyhow::Result;
@@ -349,16 +348,18 @@ pub async fn start_api_server(
 ) -> Result<()> {
     let server_address = server_address.to_string();
     tokio::spawn(async move {
-        let graphql_schema = match api_graphql::build_schema_from_factory(storage_backend.clone()).await {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to build GraphQL schema: {e}");
-                return;
-            }
-        };
+        let graphql_schema =
+            match api_graphql::build_schema_from_factory(storage_backend.clone()).await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to build GraphQL schema: {e}");
+                    return;
+                }
+            };
 
-        let app = create_router(storage_backend, tor_state)
-            .merge(api_graphql::create_graphql_router(graphql_schema, graphql_playground));
+        let app = create_router(storage_backend, tor_state).merge(
+            api_graphql::create_graphql_router(graphql_schema, graphql_playground),
+        );
         let port = server_address.split(":").nth(1).unwrap().to_string();
 
         let listener = tokio::net::TcpListener::bind(server_address)

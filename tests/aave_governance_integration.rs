@@ -21,8 +21,10 @@
 
 use alloy::json_abi::Event;
 use alloy::rpc::types::Log;
-use quixote::storage::{DuckDBStorage, Storage};
+use quixote::api_graphql::build_schema_from_factory;
+use quixote::storage::{DuckDBStorage, Storage, StorageFactory};
 use serde_json::json;
+use std::sync::Arc;
 
 const CHAIN_ID: u64 = 1;
 const GOVERNANCE_CONTRACT: &str = "0x9aee0b04504cef83a65ac3f0e838d0593bcb2bc7";
@@ -78,6 +80,13 @@ fn payload_sent_event() -> Event {
         "PayloadSent(uint256 indexed proposalId, uint40 payloadId, address indexed payloadsController, uint256 indexed chainId, uint256 payloadNumberOnProposal, uint256 numberOfPayloadsOnProposal)",
     )
     .expect("failed to parse PayloadSent")
+}
+
+fn vote_emitted_event() -> Event {
+    Event::parse(
+        "VoteEmitted(uint256 indexed proposalId, address indexed voter, bool indexed support, uint256 votingPower)",
+    )
+    .expect("failed to parse VoteEmitted")
 }
 
 fn vote_forwarded_event() -> Event {
@@ -317,6 +326,27 @@ fn payload_sent_log(proposal_id: u64, payload_id: u64, block: u64, log_idx: u64)
     )
 }
 
+fn vote_emitted_log(
+    proposal_id: u64,
+    support: bool,
+    voting_power: u128,
+    block: u64,
+    log_idx: u64,
+) -> Log {
+    make_log(
+        &vote_emitted_event(),
+        &[
+            format!("0x{:064x}", proposal_id),
+            VOTER_ADDRESS_TOPIC.to_string(),
+            format!("0x{:064x}", support as u8),
+        ],
+        &format!("0x{:064x}", voting_power),
+        block,
+        0,
+        log_idx,
+    )
+}
+
 fn vote_forwarded_log(proposal_id: u64, support: bool, block: u64, log_idx: u64) -> Log {
     // ABI encoding for an empty (address,uint128)[] array:
     //   offset to array data  = 0x20 (32 bytes)
@@ -338,15 +368,53 @@ fn vote_forwarded_log(proposal_id: u64, support: bool, block: u64, log_idx: u64)
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+struct TempDb(String);
+
+impl TempDb {
+    fn new(suffix: &str) -> Self {
+        Self(format!(
+            "/tmp/quixote_gov_{}_{}.duckdb",
+            suffix,
+            std::process::id()
+        ))
+    }
+    fn path(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Drop for TempDb {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+async fn seed_governance_db(path: &str, events: &[Event], logs: &[Log]) -> Arc<dyn StorageFactory> {
+    {
+        let storage = DuckDBStorage::with_db(path).expect("open db");
+        storage
+            .include_events(CHAIN_ID, events)
+            .await
+            .expect("include events");
+        storage
+            .add_events(CHAIN_ID, logs)
+            .await
+            .expect("add events");
+    }
+    Arc::new(DuckDBStorage::with_db(path).expect("reopen db")) as Arc<dyn StorageFactory>
+}
+
 // Table name formula: event_{chain_id}_{event_name_lowercase}_{short_hash}
 // short_hash = first 5 hex chars of the event selector after "0x"
 fn event_table_name(chain_id: u64, event: &Event) -> String {
     let selector = event.selector().to_string();
     let short_hash = &selector[2..7];
-    format!("event_{}_{}_{}",
+    format!(
+        "event_{}_{}_{}",
         chain_id,
         event.name.to_ascii_lowercase(),
-        short_hash)
+        short_hash
+    )
 }
 
 async fn count_stored(storage: &DuckDBStorage, event: &Event) -> usize {
@@ -374,7 +442,11 @@ async fn all_governance_events_can_be_registered() {
         .unwrap();
 
     let indexed = storage.list_indexed_events().await.unwrap();
-    assert_eq!(indexed.len(), 8, "all 8 governance events must be registered");
+    assert_eq!(
+        indexed.len(),
+        8,
+        "all 8 governance events must be registered"
+    );
     for entry in &indexed {
         assert_eq!(entry.event_count, Some(0), "no logs stored yet");
     }
@@ -578,7 +650,11 @@ async fn run_setup_sql_creates_view() {
             .send_raw_query(&format!("SELECT COUNT(*) AS n FROM {view}"))
             .await
             .unwrap();
-        assert_eq!(rows.as_array().unwrap()[0]["n"].as_u64().unwrap(), 0, "{view} must be empty");
+        assert_eq!(
+            rows.as_array().unwrap()[0]["n"].as_u64().unwrap(),
+            0,
+            "{view} must be empty"
+        );
     }
 }
 
@@ -744,6 +820,46 @@ async fn votes_view_returns_vote_fields() {
 }
 
 #[tokio::test]
+async fn vote_emitted_log_is_stored_with_correct_fields() {
+    let storage = DuckDBStorage::with_db(":memory:").unwrap();
+    storage
+        .include_events(CHAIN_ID, &[vote_emitted_event()])
+        .await
+        .unwrap();
+    storage
+        .add_events(
+            CHAIN_ID,
+            &[vote_emitted_log(
+                42,
+                true,
+                500_000_000_000_000_000_000_000u128,
+                17_500_050,
+                0,
+            )],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(count_stored(&storage, &vote_emitted_event()).await, 1);
+
+    let table = event_table_name(CHAIN_ID, &vote_emitted_event());
+    let rows = storage
+        .send_raw_query(&format!(
+            r#"SELECT "proposalId", "voter", "support", "votingPower" FROM {table}"#
+        ))
+        .await
+        .unwrap();
+    let row = &rows.as_array().unwrap()[0];
+    assert_eq!(row["proposalId"], "42");
+    assert_eq!(
+        row["voter"].as_str().unwrap().to_lowercase(),
+        "0xcafe000000000000000000000000000000000001"
+    );
+    assert_eq!(row["support"], "true");
+    assert_eq!(row["votingPower"], "500000000000000000000000");
+}
+
+#[tokio::test]
 async fn full_governance_lifecycle_is_stored() {
     let storage = DuckDBStorage::with_db(":memory:").unwrap();
     storage
@@ -776,4 +892,105 @@ async fn full_governance_lifecycle_is_stored() {
     assert_eq!(count_stored(&storage, &proposal_canceled_event()).await, 1);
     assert_eq!(count_stored(&storage, &payload_sent_event()).await, 1);
     assert_eq!(count_stored(&storage, &vote_forwarded_event()).await, 2);
+}
+
+// ── GraphQL layer tests ───────────────────────────────────────────────────────
+
+fn graphql_field_name(event: &Event) -> String {
+    let selector = event.selector().to_string();
+    let short_hash = &selector[2..7];
+    format!(
+        "event_{}_{}_{}",
+        CHAIN_ID,
+        event.name.to_ascii_lowercase(),
+        short_hash
+    )
+}
+
+#[tokio::test]
+async fn graphql_condition_filters_vote_emitted_by_proposal() {
+    let tmp = TempDb::new("gql_condition_vote");
+    let logs = vec![
+        vote_emitted_log(10, true, 1_000_000, 17_600_000, 0),
+        vote_emitted_log(10, false, 2_000_000, 17_600_001, 1),
+        vote_emitted_log(99, true, 3_000_000, 17_600_002, 2), // different proposal — must be excluded
+    ];
+    let factory = seed_governance_db(tmp.path(), &[vote_emitted_event()], &logs).await;
+    let schema = build_schema_from_factory(factory)
+        .await
+        .expect("build schema");
+
+    let fname = graphql_field_name(&vote_emitted_event());
+    let query = format!(
+        r#"{{ {}(condition: {{ proposalId: "10" }}) {{ proposalId voter support votingPower }} }}"#,
+        fname
+    );
+    let res = schema.execute(&query).await;
+    assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let rows = data[&fname].as_array().expect("expected array");
+    assert_eq!(rows.len(), 2, "only votes for proposal 10");
+    for row in rows {
+        assert_eq!(row["proposalId"].as_str().unwrap(), "10");
+    }
+}
+
+#[tokio::test]
+async fn graphql_where_filters_vote_emitted_by_block_range() {
+    let tmp = TempDb::new("gql_where_block");
+    let logs = vec![
+        vote_emitted_log(5, true, 1_000_000, 17_600_000, 0),
+        vote_emitted_log(5, true, 2_000_000, 17_600_100, 1),
+        vote_emitted_log(5, true, 3_000_000, 17_600_200, 2),
+    ];
+    let factory = seed_governance_db(tmp.path(), &[vote_emitted_event()], &logs).await;
+    let schema = build_schema_from_factory(factory)
+        .await
+        .expect("build schema");
+
+    let fname = graphql_field_name(&vote_emitted_event());
+    // Only the last two blocks (>= 17_600_100) should be returned.
+    let query = format!(
+        r#"{{ {}(where: {{ blockNumber: {{ gte: "17600100" }} }}) {{ blockNumber proposalId }} }}"#,
+        fname
+    );
+    let res = schema.execute(&query).await;
+    assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let rows = data[&fname].as_array().expect("expected array");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        let bn: u64 = row["blockNumber"].as_str().unwrap().parse().unwrap();
+        assert!(bn >= 17_600_100);
+    }
+}
+
+#[tokio::test]
+async fn graphql_condition_and_where_combine_on_governance_events() {
+    let tmp = TempDb::new("gql_combined");
+    let logs = vec![
+        vote_emitted_log(42, true, 1_000_000, 17_600_000, 0),
+        vote_emitted_log(42, false, 2_000_000, 17_600_050, 1),
+        vote_emitted_log(42, true, 3_000_000, 17_600_100, 2),
+        vote_emitted_log(99, true, 4_000_000, 17_600_100, 3), // different proposal
+    ];
+    let factory = seed_governance_db(tmp.path(), &[vote_emitted_event()], &logs).await;
+    let schema = build_schema_from_factory(factory)
+        .await
+        .expect("build schema");
+
+    let fname = graphql_field_name(&vote_emitted_event());
+    // condition pins proposalId=42, where restricts to blockNumber >= 17_600_050 → 2 rows.
+    let query = format!(
+        r#"{{ {}(condition: {{ proposalId: "42" }}, where: {{ blockNumber: {{ gte: "17600050" }} }}) {{ proposalId blockNumber }} }}"#,
+        fname
+    );
+    let res = schema.execute(&query).await;
+    assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    let rows = data[&fname].as_array().expect("expected array");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["proposalId"].as_str().unwrap(), "42");
+    }
 }

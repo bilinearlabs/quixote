@@ -77,11 +77,11 @@ impl IndexingApp {
 
         // Run any use-case-specific DDL (CREATE VIEW, CREATE INDEX, …) declared in the
         // config. This runs after all event tables exist so views can reference them.
-        if !config.setup_sql.is_empty() {
-            if let Err(e) = storage.run_setup_sql(&config.setup_sql).await {
-                error!("Failed to execute setup_sql: {}", e);
-                std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
-            }
+        if !config.setup_sql.is_empty()
+            && let Err(e) = storage.run_setup_sql(&config.setup_sql).await
+        {
+            error!("Failed to execute setup_sql: {}", e);
+            std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
         }
 
         let api_server_address =

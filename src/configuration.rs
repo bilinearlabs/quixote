@@ -66,7 +66,9 @@ fn detect_backend_from_url(url: &str) -> DatabaseBackend {
 /// - Multiple keys create AND conditions between them.
 pub type FilterMap = HashMap<String, Vec<String>>;
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Configuration as parsed from a file. Fields are optional to allow partial configs.
 #[derive(Debug, Deserialize, Clone, Default)]
