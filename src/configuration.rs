@@ -88,7 +88,7 @@ pub struct FileConfiguration {
     pub frontend_address: Option<String>,
     pub frontend_port: Option<u16>,
     /// Serve the GraphQL Playground UI at /graphql/playground. Defaults to true.
-    /// Set to false in production to hide schema introspection.
+    /// Note: introspection is enabled by default regardless of this setting.
     #[serde(default = "default_true")]
     pub graphql_playground: bool,
 }

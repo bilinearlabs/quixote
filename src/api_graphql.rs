@@ -409,8 +409,11 @@ pub async fn playground_handler() -> impl IntoResponse {
 /// Build the Axum router for the GraphQL endpoint.
 ///
 /// When `playground` is `true`, the interactive GraphQL Playground UI is served
-/// at `GET /graphql/playground`. Set it to `false` in production to prevent
-/// schema introspection by untrusted clients.
+/// at `GET /graphql/playground`.
+///
+/// Note: introspection (`__schema`, `__type`) is enabled by default on the
+/// `POST /graphql` endpoint regardless of this setting — it is a property of
+/// the schema, not the playground.
 pub fn create_graphql_router(schema: Schema, playground: bool) -> Router {
     let mut router = Router::new().route("/graphql", post(graphql_handler));
     if playground {
