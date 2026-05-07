@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Bilinear Labs
 // SPDX-License-Identifier: MIT
 
+use crate::api_graphql_aave;
 use crate::storage::{
     EventColumn, EventDescriptorDb, EventQuery, FilterOp, FilterValue, OrderDir, StorageFactory,
     WhereClause,
@@ -332,6 +333,9 @@ pub fn build_schema(
             .argument(InputValue::new("skip",      TypeRef::named(TypeRef::INT))),
         );
     }
+
+    // Register Aave governance types (allProposalsViews, ProposalsConnection, etc.)
+    (schema_builder, query) = api_graphql_aave::register_aave_governance(schema_builder, query, factory);
 
     schema_builder
         .register(query)
