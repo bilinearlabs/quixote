@@ -158,9 +158,13 @@ impl Storage for PostgreSqlStorage {
             let mut contract_addresses: Vec<Vec<u8>> = Vec::with_capacity(table_events.len());
 
             // Determine param types: 0 = TEXT, 1 = NUMERIC (uint256), 2 = BYTEA (address)
+            // Indexed params first, then non-indexed — must match the order that
+            // decode_log_parts returns (indexed vec, then body vec).
             let param_types: Vec<u8> = parsed_event
                 .inputs
                 .iter()
+                .filter(|p| p.indexed)
+                .chain(parsed_event.inputs.iter().filter(|p| !p.indexed))
                 .map(|p| match p.selector_type().as_ref() {
                     "uint256" => 1,
                     "address" => 2,
@@ -227,10 +231,12 @@ impl Storage for PostgreSqlStorage {
                 }
             }
 
-            // Build column names
+            // Build column names in indexed-first order, matching decode_log_parts output.
             let param_names: Vec<String> = parsed_event
                 .inputs
                 .iter()
+                .filter(|p| p.indexed)
+                .chain(parsed_event.inputs.iter().filter(|p| !p.indexed))
                 .map(|p| format!("\"{}\"", p.name))
                 .collect();
             let all_columns = format!(
@@ -467,7 +473,11 @@ impl Storage for PostgreSqlStorage {
                         contract_address BYTEA NOT NULL,"
             );
 
-            for param in &event.inputs {
+            // Indexed params first, then non-indexed — must match the order that
+            // decode_log_parts returns (indexed vec, then body vec).
+            for param in event.inputs.iter().filter(|p| p.indexed)
+                .chain(event.inputs.iter().filter(|p| !p.indexed))
+            {
                 let db_type = match param.selector_type().as_ref() {
                     "uint256" => "NUMERIC(78,0)",
                     "address" => "BYTEA",
