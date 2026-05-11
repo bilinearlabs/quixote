@@ -83,7 +83,6 @@ const PROPOSAL_DETAIL_STRING_FIELDS: &[&str] = &[
 
 const PROPOSAL_VOTE_FIELDS: &[&str] = &[
     "voter",
-    "support",
     "votingPower",
     "votingNetwork",
     "votedAt",
@@ -95,7 +94,6 @@ const PROPOSAL_PAYLOAD_FIELDS: &[&str] = &[
     "chainId",
     "payloadsController",
     "creator",
-    "maximumAccessLevelRequired",
     "state",
     "createdAt",
     "queuedAt",
@@ -351,6 +349,29 @@ fn with_int_field(obj: Object, field_name: &'static str) -> Object {
     ))
 }
 
+/// Add a nullable BOOLEAN field to an Object.
+fn with_bool_field(obj: Object, field_name: &'static str) -> Object {
+    obj.field(Field::new(
+        field_name,
+        TypeRef::named(TypeRef::BOOLEAN),
+        move |ctx| {
+            FieldFuture::new(async move {
+                let gql = ctx
+                    .parent_value
+                    .downcast_ref::<serde_json::Value>()
+                    .and_then(|v| v.get(field_name))
+                    .and_then(|v| match v {
+                        serde_json::Value::Bool(b) => Some(*b),
+                        serde_json::Value::String(s) => s.parse::<bool>().ok(),
+                        _ => None,
+                    })
+                    .map(GqlValue::Boolean);
+                Ok(gql.map(FieldValue::value))
+            })
+        },
+    ))
+}
+
 /// Register a connection type with a single `nodes` field.
 /// The parent value must be `Vec<serde_json::Value>`.
 fn register_connection(
@@ -478,14 +499,16 @@ pub fn register_aave_governance(
 
     // ── ProposalVote ──────────────────────────────────────────────────────────
     {
-        let obj = build_string_object("ProposalVote", PROPOSAL_VOTE_FIELDS);
+        let mut obj = build_string_object("ProposalVote", PROPOSAL_VOTE_FIELDS);
+        obj = with_bool_field(obj, "support");
         schema_builder = schema_builder.register(obj);
         schema_builder = register_connection(schema_builder, "VotesConnection", "ProposalVote");
     }
 
     // ── ProposalPayload ───────────────────────────────────────────────────────
     {
-        let obj = build_string_object("ProposalPayload", PROPOSAL_PAYLOAD_FIELDS);
+        let mut obj = build_string_object("ProposalPayload", PROPOSAL_PAYLOAD_FIELDS);
+        obj = with_int_field(obj, "maximumAccessLevelRequired");
         schema_builder = schema_builder.register(obj);
         schema_builder =
             register_connection(schema_builder, "PayloadsConnection", "ProposalPayload");
@@ -757,45 +780,45 @@ WHERE pc."proposalId" = {proposal_id}"#
                             .args
                             .get("pSupport")
                             .and_then(|v| v.boolean().ok())
-                            .map(|b| format!("WHERE \"support\" = '{b}'"))
+                            .map(|b| format!("WHERE \"support\" = {b}"))
                             .unwrap_or_default();
 
                         let sql = format!(
                             r#"SELECT voter, support, "votingPower", "votingNetwork",
-       CAST("votedAt" AS TEXT) AS "votedAt"
+       TO_CHAR(TO_TIMESTAMP("votedAt"), 'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "votedAt"
 FROM (
     SELECT
         "voter",
-        "support",
-        CAST("votingPower" AS TEXT)  AS "votingPower",
-        'ethereum'                   AS "votingNetwork",
-        b.block_timestamp            AS "votedAt"
+        CAST("support" AS BOOLEAN)              AS "support",
+        CAST("votingPower" AS TEXT)             AS "votingPower",
+        '0x' || encode(v.contract_address, 'hex') AS "votingNetwork",
+        b.block_timestamp                       AS "votedAt"
     FROM event_1_voteemitted_0c611 v
     LEFT JOIN blocks_1 b ON b.block_number = v.block_number
     WHERE v."proposalId" = {proposal_id}
     UNION ALL
     SELECT
         "voter",
-        "support",
-        CAST("votingPower" AS TEXT)  AS "votingPower",
-        'polygon'                    AS "votingNetwork",
-        b.block_timestamp            AS "votedAt"
+        CAST("support" AS BOOLEAN)              AS "support",
+        CAST("votingPower" AS TEXT)             AS "votingPower",
+        '0x' || encode(v.contract_address, 'hex') AS "votingNetwork",
+        b.block_timestamp                       AS "votedAt"
     FROM event_137_voteemitted_0c611 v
     LEFT JOIN blocks_137 b ON b.block_number = v.block_number
     WHERE v."proposalId" = {proposal_id}
     UNION ALL
     SELECT
         "voter",
-        "support",
-        CAST("votingPower" AS TEXT)  AS "votingPower",
-        'avalanche'                  AS "votingNetwork",
-        b.block_timestamp            AS "votedAt"
+        CAST("support" AS BOOLEAN)              AS "support",
+        CAST("votingPower" AS TEXT)             AS "votingPower",
+        '0x' || encode(v.contract_address, 'hex') AS "votingNetwork",
+        b.block_timestamp                       AS "votedAt"
     FROM event_43114_voteemitted_0c611 v
     LEFT JOIN blocks_43114 b ON b.block_number = v.block_number
     WHERE v."proposalId" = {proposal_id}
 ) votes
 {support_where}
-ORDER BY "votedAt" DESC
+ORDER BY CAST("votingPower" AS NUMERIC) DESC
 LIMIT {limit} OFFSET {offset}"#
                         );
 
@@ -851,7 +874,7 @@ LIMIT {limit} OFFSET {offset}"#
   CAST(ap."chainId" AS TEXT)                                  AS "chainId",
   ap."payloadsController",
   pc_ev."creator"                                             AS creator,
-  CAST(pc_ev."maximumAccessLevelRequired" AS TEXT)            AS "maximumAccessLevelRequired",
+  CAST(pc_ev."maximumAccessLevelRequired" AS INT)             AS "maximumAccessLevelRequired",
   CASE
     WHEN pcan_ev."payloadId" IS NOT NULL THEN 'cancelled'
     WHEN pe."payloadId"      IS NOT NULL THEN 'executed'
@@ -859,10 +882,10 @@ LIMIT {limit} OFFSET {offset}"#
     WHEN pc_ev."payloadId"   IS NOT NULL THEN 'created'
     ELSE NULL
   END                                                         AS state,
-  CAST(b_pc.block_timestamp  AS TEXT)                         AS "createdAt",
-  CAST(b_pq.block_timestamp  AS TEXT)                         AS "queuedAt",
-  CAST(b_pe.block_timestamp  AS TEXT)                         AS "executedAt",
-  CAST(b_pcan.block_timestamp AS TEXT)                        AS "cancelledAt"
+  TO_CHAR(TO_TIMESTAMP(b_pc.block_timestamp),  'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "createdAt",
+  TO_CHAR(TO_TIMESTAMP(b_pq.block_timestamp),  'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "queuedAt",
+  TO_CHAR(TO_TIMESTAMP(b_pe.block_timestamp),  'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "executedAt",
+  TO_CHAR(TO_TIMESTAMP(b_pcan.block_timestamp),'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "cancelledAt"
 FROM aave_payloads ap
 LEFT JOIN aave_payload_created_events pc_ev
        ON pc_ev.chain_id = ap."chainId" AND pc_ev."payloadId" = ap."payloadId"
