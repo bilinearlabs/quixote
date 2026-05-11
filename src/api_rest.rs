@@ -345,11 +345,12 @@ pub async fn start_api_server(
     tor_state: TorStateHandle,
     cancellation_token: CancellationToken,
     graphql_playground: bool,
+    graphql_aave: bool,
 ) -> Result<()> {
     let server_address = server_address.to_string();
     tokio::spawn(async move {
         let graphql_schema =
-            match api_graphql::build_schema_from_factory(storage_backend.clone()).await {
+            match api_graphql::build_schema_from_factory(storage_backend.clone(), graphql_aave).await {
                 Ok(s) => s,
                 Err(e) => {
                     error!("Failed to build GraphQL schema: {e}");

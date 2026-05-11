@@ -28,6 +28,7 @@ pub struct IndexingApp {
     pub metrics: MetricsHandle,
     pub tor_enabled: bool,
     pub graphql_playground: bool,
+    pub graphql_aave: bool,
 }
 
 impl IndexingApp {
@@ -97,6 +98,7 @@ impl IndexingApp {
             metrics,
             tor_enabled: config.tor,
             graphql_playground: config.graphql_playground,
+            graphql_aave: config.graphql_aave,
         })
     }
 
@@ -168,6 +170,7 @@ impl IndexingApp {
             tor_state,
             self.cancellation_token.clone(),
             self.graphql_playground,
+            self.graphql_aave,
         )
         .await
         .with_context(|| "Failure in the REST API server")?;

@@ -79,7 +79,6 @@ const PROPOSAL_DETAIL_STRING_FIELDS: &[&str] = &[
     "votingMachineAddress",
     "quorum",
     "requiredDifferential",
-    "coolDownBeforeVotingStart",
 ];
 
 const PROPOSAL_VOTE_FIELDS: &[&str] = &[
@@ -264,7 +263,7 @@ fn parse_front_matter(body: &str) -> IpfsMetadata {
     let description = if md_body.trim().is_empty() {
         None
     } else {
-        Some(md_body.to_string())
+        Some(md_body.trim_start().to_string())
     };
 
     IpfsMetadata {
@@ -384,9 +383,8 @@ fn register_connection(
 ///
 /// - `include_description`: when false, the `description` field is skipped
 ///   (`ProposalView` in `allProposalsViews` does not expose it).
-/// - `truncate_sd`: when true, `shortDescription` is clipped to ~500 chars
-///   (`allProposalsViews`). Set to false for `getProposalDetail` which needs
-///   the full markdown text.
+/// - `truncate_sd`: when true, `shortDescription` is clipped to ~500 chars.
+///   Both `allProposalsViews` and `getProposalDetail` pass true to match Aave.
 async fn resolve_and_merge_ipfs(
     rows: &mut Vec<serde_json::Value>,
     ipfs: &Arc<IpfsResolver>,
@@ -472,6 +470,7 @@ pub fn register_aave_governance(
         for &f in PROPOSAL_INT_FIELDS {
             obj = with_int_field(obj, f);
         }
+        obj = with_int_field(obj, "coolDownBeforeVotingStart");
         schema_builder = schema_builder.register(obj);
         schema_builder =
             register_connection(schema_builder, "ProposalDetailConnection", "ProposalDetail");
@@ -547,7 +546,7 @@ pub fn register_aave_governance(
   CAST(NULL AS TEXT)                  AS author,
   CAST(NULL AS TEXT)                  AS "shortDescription",
   CAST(NULL AS TEXT)                  AS discussions,
-  "snapshotBlockHash",
+  SUBSTRING("snapshotBlockHash" FROM 3) AS "snapshotBlockHash",
   CAST("votingDuration" AS INT)       AS "votingDuration",
   CAST("votesFor" AS TEXT)            AS "votesFor",
   CAST("votesAgainst" AS TEXT)        AS "votesAgainst",
@@ -618,7 +617,7 @@ LIMIT {first} OFFSET {offset}"#
   CAST(NULL AS TEXT)                                                               AS "shortDescription",
   CAST(NULL AS TEXT)                                                               AS description,
   CAST(NULL AS TEXT)                                                               AS discussions,
-  va."snapshotBlockHash",
+  SUBSTRING(va."snapshotBlockHash" FROM 3)                                         AS "snapshotBlockHash",
   COALESCE(CAST(va."votingDuration" AS INT), 259200)                             AS "votingDuration",
   COALESCE(pq."votesFor", pf."votesFor", ve_agg."liveVotesFor"::TEXT, '0')       AS "votesFor",
   COALESCE(pq."votesAgainst", pf."votesAgainst", ve_agg."liveVotesAgainst"::TEXT, '0') AS "votesAgainst",
@@ -638,27 +637,35 @@ LIMIT {first} OFFSET {offset}"#
       WHEN va."proposalId"   IS NOT NULL THEN 2
       ELSE 1
   END AS "stateId",
-  CAST(b_pc.block_timestamp   AS TEXT)                                            AS "createdAt",
-  CAST(b_va.block_timestamp   AS TEXT)                                            AS "votingActivatedAt",
-  CAST(b_pq.block_timestamp   AS TEXT)                                            AS "queuedAt",
-  CAST(b_pex.block_timestamp  AS TEXT)                                            AS "executedAt",
-  CAST(b_pf.block_timestamp   AS TEXT)                                            AS "failedAt",
-  CAST(b_pcan.block_timestamp AS TEXT)                                            AS "cancelledAt",
-  CAST(b_va.block_timestamp   AS TEXT)                                            AS "votingStartTime",
+  TO_CHAR(TO_TIMESTAMP(b_pc.block_timestamp),   'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "createdAt",
+  TO_CHAR(TO_TIMESTAMP(b_va.block_timestamp),   'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "votingActivatedAt",
+  TO_CHAR(TO_TIMESTAMP(b_pq.block_timestamp),   'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "queuedAt",
+  TO_CHAR(TO_TIMESTAMP(b_pex.block_timestamp),  'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "executedAt",
+  TO_CHAR(TO_TIMESTAMP(b_pf.block_timestamp),   'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "failedAt",
+  TO_CHAR(TO_TIMESTAMP(b_pcan.block_timestamp), 'YYYY-MM-DD"T"HH24:MI:SS"+00:00"') AS "cancelledAt",
+  CAST(b_pvcb.block_timestamp AS TEXT)                                             AS "votingStartTime",
   CAST(
-      CASE WHEN b_va.block_timestamp IS NOT NULL
-           THEN b_va.block_timestamp + COALESCE(CAST(va."votingDuration" AS NUMERIC), 259200)
+      CASE WHEN b_pvcb.block_timestamp IS NOT NULL
+           THEN b_pvcb.block_timestamp + COALESCE(CAST(va."votingDuration" AS NUMERIC), 259200)
            ELSE NULL END
   AS TEXT)                                                                        AS "votingEndTime",
-  va."snapshotBlockHash"                                                           AS "l1BlockHash",
-  CAST(NULL AS TEXT)                                                               AS "votingMachineAddress",
-  CAST(NULL AS TEXT)                                                               AS quorum,
-  CAST(NULL AS TEXT)                                                               AS "requiredDifferential",
-  CAST(NULL AS TEXT)                                                               AS "coolDownBeforeVotingStart"
+  SUBSTRING(va."snapshotBlockHash" FROM 3)                                        AS "l1BlockHash",
+  '0x' || encode(pvcb.contract_address, 'hex')                                    AS "votingMachineAddress",
+  CAST(vc."yesThreshold" AS TEXT)                                                  AS quorum,
+  CAST(vc."yesNoDifferential" AS TEXT)                                             AS "requiredDifferential",
+  CAST(vc."coolDownBeforeVotingStart" AS INT)                                      AS "coolDownBeforeVotingStart"
 FROM event_1_proposalcreated_cc914 pc
 LEFT JOIN blocks_1 b_pc    ON b_pc.block_number   = pc.block_number
 LEFT JOIN event_1_votingactivated_45f1d  va   ON va."proposalId"   = pc."proposalId"
 LEFT JOIN blocks_1 b_va    ON b_va.block_number   = va.block_number
+LEFT JOIN event_43114_proposalvoteconfigurationbridged_b97f8 pvcb ON pvcb."proposalId" = pc."proposalId"
+LEFT JOIN blocks_43114 b_pvcb ON b_pvcb.block_number = pvcb.block_number
+LEFT JOIN (
+    SELECT DISTINCT ON ("accessLevel")
+        "accessLevel", "yesThreshold", "yesNoDifferential", "coolDownBeforeVotingStart"
+    FROM event_1_votingconfigupdated_a743f
+    ORDER BY "accessLevel", block_number DESC
+) vc ON vc."accessLevel" = pc."accessLevel"
 LEFT JOIN event_1_proposalqueued_e39e7   pq   ON pq."proposalId"   = pc."proposalId"
 LEFT JOIN blocks_1 b_pq    ON b_pq.block_number   = pq.block_number
 LEFT JOIN event_1_proposalfailed_2bed8   pf   ON pf."proposalId"   = pc."proposalId"
@@ -697,7 +704,7 @@ WHERE pc."proposalId" = {proposal_id}"#
                             _ => vec![],
                         };
 
-                        resolve_and_merge_ipfs(&mut rows, &ipfs, true, false).await;
+                        resolve_and_merge_ipfs(&mut rows, &ipfs, true, true).await;
 
                         Ok(Some(FieldValue::owned_any(rows)))
                     })
@@ -761,6 +768,16 @@ FROM (
         "voter",
         "support",
         CAST("votingPower" AS TEXT)  AS "votingPower",
+        'ethereum'                   AS "votingNetwork",
+        b.block_timestamp            AS "votedAt"
+    FROM event_1_voteemitted_0c611 v
+    LEFT JOIN blocks_1 b ON b.block_number = v.block_number
+    WHERE v."proposalId" = {proposal_id}
+    UNION ALL
+    SELECT
+        "voter",
+        "support",
+        CAST("votingPower" AS TEXT)  AS "votingPower",
         'polygon'                    AS "votingNetwork",
         b.block_timestamp            AS "votedAt"
     FROM event_137_voteemitted_0c611 v
@@ -807,12 +824,6 @@ LIMIT {limit} OFFSET {offset}"#
     }
 
     // ── getProposalPayloads ───────────────────────────────────────────────────
-    //
-    // Only `proposalId`, `payloadId`, `chainId`, and `payloadsController` are
-    // available from the indexed PayloadSent event. The remaining fields
-    // (creator, maximumAccessLevelRequired, state, *At timestamps) require
-    // payload-controller events on each L2 which are not currently indexed;
-    // they are returned as null.
     {
         let factory_c = factory.clone();
         query = query.field(
@@ -835,20 +846,42 @@ LIMIT {limit} OFFSET {offset}"#
 
                         let sql = format!(
                             r#"SELECT
-  CAST("proposalId" AS TEXT)     AS "proposalId",
-  "payloadId",
-  CAST("chainId" AS TEXT)        AS "chainId",
-  "payloadsController",
-  CAST(NULL AS TEXT)             AS creator,
-  CAST(NULL AS TEXT)             AS "maximumAccessLevelRequired",
-  CAST(NULL AS TEXT)             AS state,
-  CAST(NULL AS TEXT)             AS "createdAt",
-  CAST(NULL AS TEXT)             AS "queuedAt",
-  CAST(NULL AS TEXT)             AS "executedAt",
-  CAST(NULL AS TEXT)             AS "cancelledAt"
-FROM aave_payloads
-WHERE "proposalId" = {proposal_id}
-ORDER BY "payloadNumberOnProposal" ASC"#
+  CAST(ap."proposalId" AS TEXT)                               AS "proposalId",
+  ap."payloadId",
+  CAST(ap."chainId" AS TEXT)                                  AS "chainId",
+  ap."payloadsController",
+  pc_ev."creator"                                             AS creator,
+  CAST(pc_ev."maximumAccessLevelRequired" AS TEXT)            AS "maximumAccessLevelRequired",
+  CASE
+    WHEN pcan_ev."payloadId" IS NOT NULL THEN 'cancelled'
+    WHEN pe."payloadId"      IS NOT NULL THEN 'executed'
+    WHEN pq_ev."payloadId"   IS NOT NULL THEN 'queued'
+    WHEN pc_ev."payloadId"   IS NOT NULL THEN 'created'
+    ELSE NULL
+  END                                                         AS state,
+  CAST(b_pc.block_timestamp  AS TEXT)                         AS "createdAt",
+  CAST(b_pq.block_timestamp  AS TEXT)                         AS "queuedAt",
+  CAST(b_pe.block_timestamp  AS TEXT)                         AS "executedAt",
+  CAST(b_pcan.block_timestamp AS TEXT)                        AS "cancelledAt"
+FROM aave_payloads ap
+LEFT JOIN aave_payload_created_events pc_ev
+       ON pc_ev.chain_id = ap."chainId" AND pc_ev."payloadId" = ap."payloadId"
+LEFT JOIN aave_blocks b_pc
+       ON b_pc.chain_id = pc_ev.chain_id AND b_pc.block_number = pc_ev.block_number
+LEFT JOIN aave_payload_queued_events pq_ev
+       ON pq_ev.chain_id = ap."chainId" AND pq_ev."payloadId" = ap."payloadId"
+LEFT JOIN aave_blocks b_pq
+       ON b_pq.chain_id = pq_ev.chain_id AND b_pq.block_number = pq_ev.block_number
+LEFT JOIN aave_payload_executions pe
+       ON pe.chain_id = ap."chainId" AND pe."payloadId" = ap."payloadId"
+LEFT JOIN aave_blocks b_pe
+       ON b_pe.chain_id = pe.chain_id AND b_pe.block_number = pe.block_number
+LEFT JOIN aave_payload_cancelled_events pcan_ev
+       ON pcan_ev.chain_id = ap."chainId" AND pcan_ev."payloadId" = ap."payloadId"
+LEFT JOIN aave_blocks b_pcan
+       ON b_pcan.chain_id = pcan_ev.chain_id AND b_pcan.block_number = pcan_ev.block_number
+WHERE ap."proposalId" = {proposal_id}
+ORDER BY ap."payloadNumberOnProposal" ASC"#
                         );
 
                         let storage = factory
