@@ -11,7 +11,6 @@ pub use event_processor::EventProcessor;
 pub mod collector_seed;
 pub use collector_seed::CollectorSeed;
 pub mod api_graphql;
-pub mod api_graphql_aave;
 pub mod api_rest;
 pub mod cli;
 pub mod indexing_app;

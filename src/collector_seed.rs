@@ -620,7 +620,6 @@ mod tests {
             metrics_allow_origin: None,
             tor: false,
             graphql_playground: true,
-            graphql_aave: false,
             setup_sql: vec![],
         }
     }
@@ -652,7 +651,6 @@ mod tests {
             metrics_allow_origin: None,
             tor: false,
             graphql_playground: true,
-            graphql_aave: false,
             setup_sql: vec![],
         }
     }
@@ -700,7 +698,6 @@ mod tests {
             metrics_allow_origin: None,
             tor: false,
             graphql_playground: true,
-            graphql_aave: false,
             setup_sql: vec![],
         }
     }
@@ -741,7 +738,6 @@ mod tests {
             metrics_allow_origin: None,
             tor: false,
             graphql_playground: true,
-            graphql_aave: false,
             setup_sql: vec![],
         }
     }

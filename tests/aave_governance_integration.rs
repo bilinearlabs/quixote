@@ -916,7 +916,7 @@ async fn graphql_condition_filters_vote_emitted_by_proposal() {
         vote_emitted_log(99, true, 3_000_000, 17_600_002, 2), // different proposal — must be excluded
     ];
     let factory = seed_governance_db(tmp.path(), &[vote_emitted_event()], &logs).await;
-    let schema = build_schema_from_factory(factory, false)
+    let schema = build_schema_from_factory(factory)
         .await
         .expect("build schema");
 
@@ -944,7 +944,7 @@ async fn graphql_where_filters_vote_emitted_by_block_range() {
         vote_emitted_log(5, true, 3_000_000, 17_600_200, 2),
     ];
     let factory = seed_governance_db(tmp.path(), &[vote_emitted_event()], &logs).await;
-    let schema = build_schema_from_factory(factory, false)
+    let schema = build_schema_from_factory(factory)
         .await
         .expect("build schema");
 
@@ -975,7 +975,7 @@ async fn graphql_condition_and_where_combine_on_governance_events() {
         vote_emitted_log(99, true, 4_000_000, 17_600_100, 3), // different proposal
     ];
     let factory = seed_governance_db(tmp.path(), &[vote_emitted_event()], &logs).await;
-    let schema = build_schema_from_factory(factory, false)
+    let schema = build_schema_from_factory(factory)
         .await
         .expect("build schema");
 

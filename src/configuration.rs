@@ -91,9 +91,6 @@ pub struct FileConfiguration {
     /// Note: introspection is enabled by default regardless of this setting.
     #[serde(default = "default_true")]
     pub graphql_playground: bool,
-    /// Enable the Aave governance GraphQL queries. Defaults to false.
-    #[serde(default)]
-    pub graphql_aave: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -132,8 +129,6 @@ pub struct IndexerConfiguration {
     pub tor: bool,
     /// Whether to serve the GraphQL Playground at /graphql/playground.
     pub graphql_playground: bool,
-    /// Whether to enable the Aave governance GraphQL queries.
-    pub graphql_aave: bool,
     /// SQL statements executed once at startup — see `FileConfiguration::setup_sql`.
     pub setup_sql: Vec<String>,
 }
@@ -226,7 +221,6 @@ impl IndexerConfiguration {
             metrics_allow_origin: args.metrics_allow_origin,
             tor: args.tor,
             graphql_playground: file_config.graphql_playground,
-            graphql_aave: file_config.graphql_aave,
             setup_sql: file_config.setup_sql,
         }
     }
@@ -308,7 +302,6 @@ impl FileConfiguration {
             frontend_address: Some(args.frontend_address.clone()),
             frontend_port: Some(args.frontend_port),
             graphql_playground: true,
-            graphql_aave: false,
             setup_sql: vec![],
         }
     }
