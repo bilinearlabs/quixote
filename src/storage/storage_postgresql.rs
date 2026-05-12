@@ -475,7 +475,10 @@ impl Storage for PostgreSqlStorage {
 
             // Indexed params first, then non-indexed — must match the order that
             // decode_log_parts returns (indexed vec, then body vec).
-            for param in event.inputs.iter().filter(|p| p.indexed)
+            for param in event
+                .inputs
+                .iter()
+                .filter(|p| p.indexed)
                 .chain(event.inputs.iter().filter(|p| !p.indexed))
             {
                 let db_type = match param.selector_type().as_ref() {
