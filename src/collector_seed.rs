@@ -618,6 +618,7 @@ mod tests {
             metrics_address: "127.0.0.1".to_string(),
             metrics_port: 5054,
             metrics_allow_origin: None,
+            tor: false,
         }
     }
 
@@ -646,6 +647,7 @@ mod tests {
             metrics_address: "127.0.0.1".to_string(),
             metrics_port: 5054,
             metrics_allow_origin: None,
+            tor: false,
         }
     }
 
@@ -690,6 +692,7 @@ mod tests {
             metrics_address: "127.0.0.1".to_string(),
             metrics_port: 5054,
             metrics_allow_origin: None,
+            tor: false,
         }
     }
 
@@ -727,6 +730,7 @@ mod tests {
             metrics_address: "127.0.0.1".to_string(),
             metrics_port: 5054,
             metrics_allow_origin: None,
+            tor: false,
         }
     }
 

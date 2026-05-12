@@ -19,6 +19,8 @@ pub mod metrics;
 pub mod streamlit_wrapper;
 pub use configuration::IndexerConfiguration;
 pub mod telemetry;
+#[cfg(feature = "tor")]
+pub mod tor_service;
 
 /// Module with constants used throughout the application.
 pub mod constants {

@@ -113,6 +113,7 @@ pub struct IndexerConfiguration {
     pub metrics_address: String,
     pub metrics_port: u16,
     pub metrics_allow_origin: Option<String>,
+    pub tor: bool,
 }
 
 impl IndexerConfiguration {
@@ -201,6 +202,7 @@ impl IndexerConfiguration {
             metrics_address: args.metrics_address,
             metrics_port: args.metrics_port,
             metrics_allow_origin: args.metrics_allow_origin,
+            tor: args.tor,
         }
     }
 
@@ -324,6 +326,7 @@ mod tests {
             metrics_address: "127.0.0.1".to_string(),
             metrics_port: 5054,
             metrics_allow_origin: None,
+            tor: false,
         }
     }
 
