@@ -374,8 +374,8 @@ mod tests {
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         let metrics = crate::metrics::MetricsHandle::default();
-        // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
-        seed_fixture.block_range = 10;
+        // A block range of 100 blocks is the safest choice to avoid throttling the RPC server.
+        seed_fixture.block_range = 100;
         let mut collector =
             EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
