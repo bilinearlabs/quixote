@@ -76,11 +76,87 @@ pub trait Storage: Send + Sync + 'static + Any {
     /// Sends a raw SQL query to the storage and returns a JSON value.
     async fn send_raw_query(&self, query: &str) -> Result<Value>;
 
+    /// Executes arbitrary DDL/DML statements at startup (CREATE VIEW, CREATE INDEX, etc.).
+    ///
+    /// Unlike `send_raw_query`, this is not restricted to SELECT and is only called
+    /// once during `IndexingApp::build_app`, never exposed through the public API.
+    /// Use the `setup_sql` key in the config YAML to populate this.
+    async fn run_setup_sql(&self, statements: &[String]) -> Result<()>;
+
     /// Lists the contracts indexed in the storage.
     async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>>;
 
     /// Returns the database schema including all tables and their column definitions.
     async fn describe_database(&self) -> Result<Value>;
+
+    /// Queries a specific event table with validated filter parameters.
+    ///
+    /// Returns rows as JSON objects with all values serialized as strings.
+    /// Both backends normalize their native types (BYTEA, NUMERIC, VARINT) to strings
+    /// so callers see a consistent representation regardless of the database engine.
+    async fn query_event_table(&self, query: &EventQuery) -> Result<Vec<Value>>;
+}
+
+/// A single column from a dynamically created event table.
+#[derive(Clone)]
+pub struct EventColumn {
+    /// The column / event-parameter name, taken verbatim from the ABI.
+    pub name: String,
+    /// Solidity selector type string, e.g. `"address"`, `"uint256"`, `"bytes32"`.
+    pub selector_type: String,
+}
+
+/// Filter comparison operator.
+#[derive(Clone, Debug)]
+pub enum FilterOp {
+    Eq,
+    In,
+    Gt,
+    Lt,
+    Gte,
+    Lte,
+}
+
+/// Value associated with a filter: scalar for all ops except `In`, list for `In`.
+#[derive(Clone, Debug)]
+pub enum FilterValue {
+    Scalar(String),
+    List(Vec<String>),
+}
+
+/// A single column predicate in a structured WHERE clause.
+#[derive(Clone, Debug)]
+pub struct WhereClause {
+    /// Snake_case column name as stored in the database (e.g. `block_number`).
+    pub column: String,
+    pub op: FilterOp,
+    pub value: FilterValue,
+}
+
+/// Sort direction for ORDER BY.
+#[derive(Clone, Debug, Default)]
+pub enum OrderDir {
+    #[default]
+    Asc,
+    Desc,
+}
+
+/// Validated query parameters for [`Storage::query_event_table`].
+pub struct EventQuery {
+    /// Fully-qualified table name, e.g. `event_1_transfer_ddf25`.
+    /// Must be constructed by trusted code; never built from raw user input.
+    pub table_name: String,
+    /// Event-parameter columns (excludes the four fixed columns).
+    pub columns: Vec<EventColumn>,
+    /// Structured WHERE predicates; each clause is combined with AND.
+    pub where_clauses: Vec<WhereClause>,
+    /// Column to sort by (snake_case, pre-validated against known columns).
+    pub order_by: Option<String>,
+    pub order_dir: OrderDir,
+    /// Maximum rows to return (LIMIT); caller must cap at 10 000.
+    pub first: u64,
+    /// Rows to skip before returning (OFFSET).
+    pub skip: u64,
 }
 
 /// Trait for creating storage instances.

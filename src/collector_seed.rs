@@ -619,6 +619,8 @@ mod tests {
             metrics_port: 5054,
             metrics_allow_origin: None,
             tor: false,
+            graphql_playground: true,
+            setup_sql: vec![],
         }
     }
 
@@ -648,6 +650,8 @@ mod tests {
             metrics_port: 5054,
             metrics_allow_origin: None,
             tor: false,
+            graphql_playground: true,
+            setup_sql: vec![],
         }
     }
 
@@ -693,6 +697,8 @@ mod tests {
             metrics_port: 5054,
             metrics_allow_origin: None,
             tor: false,
+            graphql_playground: true,
+            setup_sql: vec![],
         }
     }
 
@@ -731,6 +737,8 @@ mod tests {
             metrics_port: 5054,
             metrics_allow_origin: None,
             tor: false,
+            graphql_playground: true,
+            setup_sql: vec![],
         }
     }
 

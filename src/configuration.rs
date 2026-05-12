@@ -66,11 +66,20 @@ fn detect_backend_from_url(url: &str) -> DatabaseBackend {
 /// - Multiple keys create AND conditions between them.
 pub type FilterMap = HashMap<String, Vec<String>>;
 
+fn default_true() -> bool {
+    true
+}
+
 /// Configuration as parsed from a file. Fields are optional to allow partial configs.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct FileConfiguration {
     #[serde(default)]
     pub index_jobs: Vec<IndexJob>,
+    /// SQL statements executed once at startup after all event tables are created.
+    /// Use this for CREATE VIEW, CREATE INDEX, or any use-case-specific DDL that
+    /// should not live in the generic indexer code.
+    #[serde(default)]
+    pub setup_sql: Vec<String>,
     #[serde(default)]
     pub database_backend: DatabaseBackend,
     pub database_path: Option<String>,
@@ -78,6 +87,10 @@ pub struct FileConfiguration {
     pub api_server_port: Option<u16>,
     pub frontend_address: Option<String>,
     pub frontend_port: Option<u16>,
+    /// Serve the GraphQL Playground UI at /graphql/playground. Defaults to true.
+    /// Note: introspection is enabled by default regardless of this setting.
+    #[serde(default = "default_true")]
+    pub graphql_playground: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -114,6 +127,10 @@ pub struct IndexerConfiguration {
     pub metrics_port: u16,
     pub metrics_allow_origin: Option<String>,
     pub tor: bool,
+    /// Whether to serve the GraphQL Playground at /graphql/playground.
+    pub graphql_playground: bool,
+    /// SQL statements executed once at startup — see `FileConfiguration::setup_sql`.
+    pub setup_sql: Vec<String>,
 }
 
 impl IndexerConfiguration {
@@ -203,6 +220,8 @@ impl IndexerConfiguration {
             metrics_port: args.metrics_port,
             metrics_allow_origin: args.metrics_allow_origin,
             tor: args.tor,
+            graphql_playground: file_config.graphql_playground,
+            setup_sql: file_config.setup_sql,
         }
     }
 
@@ -282,6 +301,8 @@ impl FileConfiguration {
                 .and_then(|p| p.parse().ok()),
             frontend_address: Some(args.frontend_address.clone()),
             frontend_port: Some(args.frontend_port),
+            graphql_playground: true,
+            setup_sql: vec![],
         }
     }
 

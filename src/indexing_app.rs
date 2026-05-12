@@ -27,6 +27,7 @@ pub struct IndexingApp {
     pub metrics_config: MetricsConfig,
     pub metrics: MetricsHandle,
     pub tor_enabled: bool,
+    pub graphql_playground: bool,
 }
 
 impl IndexingApp {
@@ -74,6 +75,15 @@ impl IndexingApp {
             }
         };
 
+        // Run any use-case-specific DDL (CREATE VIEW, CREATE INDEX, …) declared in the
+        // config. This runs after all event tables exist so views can reference them.
+        if !config.setup_sql.is_empty()
+            && let Err(e) = storage.run_setup_sql(&config.setup_sql).await
+        {
+            error!("Failed to execute setup_sql: {}", e);
+            std::process::exit(error_codes::ERROR_CODE_WRONG_INPUT_ARGUMENTS);
+        }
+
         let api_server_address =
             format!("{}:{}", config.api_server_address, config.api_server_port);
 
@@ -86,6 +96,7 @@ impl IndexingApp {
             metrics_config,
             metrics,
             tor_enabled: config.tor,
+            graphql_playground: config.graphql_playground,
         })
     }
 
@@ -156,6 +167,7 @@ impl IndexingApp {
             self.storage_for_api.clone(),
             tor_state,
             self.cancellation_token.clone(),
+            self.graphql_playground,
         )
         .await
         .with_context(|| "Failure in the REST API server")?;

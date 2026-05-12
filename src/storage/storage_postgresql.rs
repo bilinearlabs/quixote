@@ -5,7 +5,7 @@
 
 use crate::{
     EventStatus,
-    storage::{ContractDescriptorDb, EventDescriptorDb, Storage},
+    storage::{ContractDescriptorDb, EventDescriptorDb, EventQuery, Storage},
 };
 use alloy::{
     dyn_abi::{DecodedEvent, DynSolValue, EventExt},
@@ -16,7 +16,7 @@ use alloy::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
-use sqlx::{Column, Pool, Postgres, Row, TypeInfo, types::Decimal};
+use sqlx::{Column, Pool, Postgres, Row, TypeInfo, postgres::PgRow, types::Decimal};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
@@ -158,9 +158,13 @@ impl Storage for PostgreSqlStorage {
             let mut contract_addresses: Vec<Vec<u8>> = Vec::with_capacity(table_events.len());
 
             // Determine param types: 0 = TEXT, 1 = NUMERIC (uint256), 2 = BYTEA (address)
+            // Indexed params first, then non-indexed — must match the order that
+            // decode_log_parts returns (indexed vec, then body vec).
             let param_types: Vec<u8> = parsed_event
                 .inputs
                 .iter()
+                .filter(|p| p.indexed)
+                .chain(parsed_event.inputs.iter().filter(|p| !p.indexed))
                 .map(|p| match p.selector_type().as_ref() {
                     "uint256" => 1,
                     "address" => 2,
@@ -227,10 +231,12 @@ impl Storage for PostgreSqlStorage {
                 }
             }
 
-            // Build column names
+            // Build column names in indexed-first order, matching decode_log_parts output.
             let param_names: Vec<String> = parsed_event
                 .inputs
                 .iter()
+                .filter(|p| p.indexed)
+                .chain(parsed_event.inputs.iter().filter(|p| !p.indexed))
                 .map(|p| format!("\"{}\"", p.name))
                 .collect();
             let all_columns = format!(
@@ -467,7 +473,14 @@ impl Storage for PostgreSqlStorage {
                         contract_address BYTEA NOT NULL,"
             );
 
-            for param in &event.inputs {
+            // Indexed params first, then non-indexed — must match the order that
+            // decode_log_parts returns (indexed vec, then body vec).
+            for param in event
+                .inputs
+                .iter()
+                .filter(|p| p.indexed)
+                .chain(event.inputs.iter().filter(|p| !p.indexed))
+            {
                 let db_type = match param.selector_type().as_ref() {
                     "uint256" => "NUMERIC(78,0)",
                     "address" => "BYTEA",
@@ -640,59 +653,74 @@ impl Storage for PostgreSqlStorage {
 
         let rows = sqlx::query(&query).fetch_all(&pool).await?;
 
-        let mut results = Vec::new();
-
-        for row in rows {
-            let mut row_obj = serde_json::Map::new();
-
-            for (i, column) in row.columns().iter().enumerate() {
-                let col_name = column.name().to_string();
-                let type_name = column.type_info().name();
-
-                // Convert based on PostgreSQL type
-                let value: Value = match type_name {
-                    "INT2" | "INT4" => {
-                        let v: Option<i32> = row.try_get(i).ok();
-                        v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
-                    }
-                    "INT8" => {
-                        let v: Option<i64> = row.try_get(i).ok();
-                        v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
-                    }
-                    "FLOAT4" | "FLOAT8" => {
-                        let v: Option<f64> = row.try_get(i).ok();
-                        v.and_then(serde_json::Number::from_f64)
-                            .map(Value::Number)
-                            .unwrap_or(Value::Null)
-                    }
-                    "NUMERIC" => {
-                        let v: Option<Decimal> = row.try_get(i).ok();
-                        v.map(|d| Value::String(d.to_string()))
-                            .unwrap_or(Value::Null)
-                    }
-                    "BOOL" => {
-                        let v: Option<bool> = row.try_get(i).ok();
-                        v.map(Value::Bool).unwrap_or(Value::Null)
-                    }
-                    "BYTEA" => {
-                        let v: Option<Vec<u8>> = row.try_get(i).ok();
-                        v.map(|b| Value::String(format!("0x{}", hex::encode(b))))
-                            .unwrap_or(Value::Null)
-                    }
-                    _ => {
-                        // Default: try as string
-                        let v: Option<String> = row.try_get(i).ok();
-                        v.map(Value::String).unwrap_or(Value::Null)
-                    }
-                };
-
-                row_obj.insert(col_name, value);
-            }
-
-            results.push(Value::Object(row_obj));
-        }
+        let results = rows
+            .iter()
+            .map(|row| {
+                let obj: serde_json::Map<String, Value> = row
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, col)| (col.name().to_string(), Self::pg_col_to_json(row, i)))
+                    .collect();
+                Value::Object(obj)
+            })
+            .collect();
 
         Ok(Value::Array(results))
+    }
+
+    async fn query_event_table(&self, q: &EventQuery) -> Result<Vec<Value>> {
+        let pool = self.conn.clone();
+
+        let mut col_names: Vec<String> = vec![
+            "block_number".into(),
+            "transaction_hash".into(),
+            "log_index".into(),
+            "contract_address".into(),
+        ];
+        col_names.extend(q.columns.iter().map(|c| c.name.clone()));
+
+        let select = col_names
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let where_clause = build_pg_where_clause(&q.where_clauses, &q.columns)?;
+
+        let order_clause = match &q.order_by {
+            Some(col) => {
+                let dir = match q.order_dir {
+                    crate::storage::OrderDir::Asc => "ASC",
+                    crate::storage::OrderDir::Desc => "DESC",
+                };
+                format!("ORDER BY \"{col}\" {dir}")
+            }
+            None => String::new(),
+        };
+
+        let sql = format!(
+            "SELECT {select} FROM {table} {where_clause} {order_clause} LIMIT {first} OFFSET {skip}",
+            table = q.table_name,
+            first = q.first,
+            skip = q.skip,
+        );
+
+        let rows = sqlx::query(&sql).fetch_all(&pool).await?;
+
+        let results = rows
+            .iter()
+            .map(|row| {
+                let obj: serde_json::Map<String, Value> = col_names
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| (name.clone(), Self::pg_col_to_json(row, i)))
+                    .collect();
+                Value::Object(obj)
+            })
+            .collect();
+
+        Ok(results)
     }
 
     async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
@@ -774,11 +802,153 @@ impl Storage for PostgreSqlStorage {
 
         Ok(Value::Array(result))
     }
+
+    async fn run_setup_sql(&self, statements: &[String]) -> Result<()> {
+        for sql in statements {
+            // Use raw_sql (simple query protocol) — prepared statements don't
+            // support DDL like CREATE OR REPLACE VIEW in PostgreSQL.
+            sqlx::raw_sql(sql)
+                .execute(&self.conn)
+                .await
+                .with_context(|| format!("setup_sql failed:\n{sql}"))?;
+        }
+        Ok(())
+    }
+}
+
+// ── PostgreSQL WHERE clause compiler ─────────────────────────────────────────
+
+#[derive(Clone, Copy)]
+enum PgColKind {
+    Numeric,
+    Hex,
+    Text,
+}
+
+fn classify_pg_col(name: &str, cols: &[crate::storage::EventColumn]) -> PgColKind {
+    match name {
+        "block_number" | "log_index" => PgColKind::Numeric,
+        "transaction_hash" | "contract_address" => PgColKind::Hex,
+        _ => {
+            if let Some(col) = cols.iter().find(|c| c.name == name) {
+                let t = col.selector_type.as_str();
+                if t.starts_with("uint") || t.starts_with("int") {
+                    PgColKind::Numeric
+                } else if t == "address" || t.starts_with("bytes") {
+                    PgColKind::Hex
+                } else {
+                    PgColKind::Text
+                }
+            } else {
+                PgColKind::Text
+            }
+        }
+    }
+}
+
+fn fmt_pg_val(v: &str, kind: PgColKind) -> anyhow::Result<String> {
+    match kind {
+        PgColKind::Numeric => {
+            if v.parse::<u128>().is_err() && v.parse::<i128>().is_err() {
+                return Err(anyhow::anyhow!("expected a number, got '{v}'"));
+            }
+            Ok(v.to_string())
+        }
+        PgColKind::Hex => {
+            let stripped = v.strip_prefix("0x").unwrap_or(v);
+            let lower = stripped.to_ascii_lowercase();
+            if lower.is_empty() || !lower.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(anyhow::anyhow!("expected a hex value, got '{v}'"));
+            }
+            Ok(format!("decode('{lower}', 'hex')"))
+        }
+        PgColKind::Text => Ok(format!("'{}'", v.replace('\'', "''"))),
+    }
+}
+
+fn build_pg_condition(
+    wc: &crate::storage::WhereClause,
+    columns: &[crate::storage::EventColumn],
+) -> anyhow::Result<String> {
+    use crate::storage::{FilterOp, FilterValue};
+
+    let kind = classify_pg_col(&wc.column, columns);
+    let col = format!("\"{}\"", wc.column);
+
+    match (&wc.op, &wc.value) {
+        (FilterOp::Eq, FilterValue::Scalar(v)) => Ok(format!("{col} = {}", fmt_pg_val(v, kind)?)),
+        (FilterOp::Gt, FilterValue::Scalar(v)) => Ok(format!("{col} > {}", fmt_pg_val(v, kind)?)),
+        (FilterOp::Lt, FilterValue::Scalar(v)) => Ok(format!("{col} < {}", fmt_pg_val(v, kind)?)),
+        (FilterOp::Gte, FilterValue::Scalar(v)) => Ok(format!("{col} >= {}", fmt_pg_val(v, kind)?)),
+        (FilterOp::Lte, FilterValue::Scalar(v)) => Ok(format!("{col} <= {}", fmt_pg_val(v, kind)?)),
+        (FilterOp::In, FilterValue::List(vs)) => {
+            let items = vs
+                .iter()
+                .map(|v| fmt_pg_val(v, kind))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(format!("{col} IN ({})", items.join(", ")))
+        }
+        _ => Err(anyhow::anyhow!(
+            "operator/value mismatch: 'in' requires a list, others require a scalar"
+        )),
+    }
+}
+
+fn build_pg_where_clause(
+    clauses: &[crate::storage::WhereClause],
+    columns: &[crate::storage::EventColumn],
+) -> anyhow::Result<String> {
+    if clauses.is_empty() {
+        return Ok(String::new());
+    }
+    let parts: Vec<String> = clauses
+        .iter()
+        .map(|wc| build_pg_condition(wc, columns))
+        .collect::<anyhow::Result<_>>()?;
+    Ok(format!("WHERE {}", parts.join(" AND ")))
 }
 
 impl PostgreSqlStorage {
     /// Length of the short hash used in table names (5 hex characters).
     const SHORT_HASH_LEN: usize = 5;
+
+    fn pg_col_to_json(row: &PgRow, i: usize) -> Value {
+        let type_name = row.columns()[i].type_info().name();
+        match type_name {
+            "INT2" | "INT4" => {
+                let v: Option<i32> = row.try_get(i).ok();
+                v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
+            }
+            "INT8" => {
+                let v: Option<i64> = row.try_get(i).ok();
+                v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null)
+            }
+            "FLOAT4" | "FLOAT8" => {
+                let v: Option<f64> = row.try_get(i).ok();
+                v.and_then(serde_json::Number::from_f64)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }
+            "NUMERIC" => {
+                let v: Option<Decimal> = row.try_get(i).ok();
+                v.map(|d| Value::String(d.to_string()))
+                    .unwrap_or(Value::Null)
+            }
+            "BOOL" => {
+                let v: Option<bool> = row.try_get(i).ok();
+                v.map(Value::Bool).unwrap_or(Value::Null)
+            }
+            "BYTEA" => {
+                let v: Option<Vec<u8>> = row.try_get(i).ok();
+                v.map(|b| Value::String(format!("0x{}", hex::encode(b))))
+                    .unwrap_or(Value::Null)
+            }
+            _ => {
+                let v: Option<String> = row.try_get(i).ok();
+                v.map(Value::String).unwrap_or(Value::Null)
+            }
+        }
+    }
 
     /// Returns a shortened version of an event hash for use in table names.
     ///
@@ -1518,5 +1688,334 @@ mod tests {
         );
 
         Ok(())
+    }
+}
+
+// ── WHERE-clause compilation unit tests ──────────────────────────────────────
+
+#[cfg(test)]
+mod query_compilation {
+    use super::{
+        PgColKind, build_pg_condition, build_pg_where_clause, classify_pg_col, fmt_pg_val,
+    };
+    use crate::storage::{EventColumn, FilterOp, FilterValue, WhereClause};
+    use pretty_assertions::assert_eq;
+
+    // ── helpers ────────────────────────────────────────────────────────────
+
+    fn uint_col(name: &str) -> EventColumn {
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "uint256".to_string(),
+        }
+    }
+
+    fn addr_col(name: &str) -> EventColumn {
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "address".to_string(),
+        }
+    }
+
+    fn bytes_col(name: &str) -> EventColumn {
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "bytes32".to_string(),
+        }
+    }
+
+    fn text_col(name: &str) -> EventColumn {
+        EventColumn {
+            name: name.to_string(),
+            selector_type: "string".to_string(),
+        }
+    }
+
+    fn scalar(op: FilterOp, col: &str, val: &str) -> WhereClause {
+        WhereClause {
+            column: col.to_string(),
+            op,
+            value: FilterValue::Scalar(val.to_string()),
+        }
+    }
+
+    fn list(col: &str, vals: &[&str]) -> WhereClause {
+        WhereClause {
+            column: col.to_string(),
+            op: FilterOp::In,
+            value: FilterValue::List(vals.iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    fn compile(clauses: &[WhereClause], cols: &[EventColumn]) -> String {
+        build_pg_where_clause(clauses, cols).expect("unexpected compilation error")
+    }
+
+    // ── column classification ──────────────────────────────────────────────
+
+    #[test]
+    fn block_number_classified_as_numeric() {
+        assert!(matches!(
+            classify_pg_col("block_number", &[]),
+            PgColKind::Numeric
+        ));
+    }
+
+    #[test]
+    fn log_index_classified_as_numeric() {
+        assert!(matches!(
+            classify_pg_col("log_index", &[]),
+            PgColKind::Numeric
+        ));
+    }
+
+    #[test]
+    fn transaction_hash_classified_as_hex() {
+        assert!(matches!(
+            classify_pg_col("transaction_hash", &[]),
+            PgColKind::Hex
+        ));
+    }
+
+    #[test]
+    fn contract_address_classified_as_hex() {
+        assert!(matches!(
+            classify_pg_col("contract_address", &[]),
+            PgColKind::Hex
+        ));
+    }
+
+    #[test]
+    fn uint256_param_classified_as_numeric() {
+        assert!(matches!(
+            classify_pg_col("value", &[uint_col("value")]),
+            PgColKind::Numeric
+        ));
+    }
+
+    #[test]
+    fn address_param_classified_as_hex() {
+        assert!(matches!(
+            classify_pg_col("from", &[addr_col("from")]),
+            PgColKind::Hex
+        ));
+    }
+
+    #[test]
+    fn bytes_param_classified_as_hex() {
+        assert!(matches!(
+            classify_pg_col("data", &[bytes_col("data")]),
+            PgColKind::Hex
+        ));
+    }
+
+    #[test]
+    fn string_param_classified_as_text() {
+        assert!(matches!(
+            classify_pg_col("memo", &[text_col("memo")]),
+            PgColKind::Text
+        ));
+    }
+
+    // ── value formatting ───────────────────────────────────────────────────
+
+    #[test]
+    fn numeric_value_passes_through_unquoted() {
+        assert_eq!(fmt_pg_val("12345", PgColKind::Numeric).unwrap(), "12345");
+    }
+
+    #[test]
+    fn hex_with_0x_prefix_stripped_and_decoded() {
+        let addr = "0xabcdef1234567890abcdef1234567890abcdef12";
+        let result = fmt_pg_val(addr, PgColKind::Hex).unwrap();
+        assert_eq!(
+            result,
+            "decode('abcdef1234567890abcdef1234567890abcdef12', 'hex')"
+        );
+    }
+
+    #[test]
+    fn hex_without_0x_prefix_accepted() {
+        let hex = "deadbeefcafe";
+        let result = fmt_pg_val(hex, PgColKind::Hex).unwrap();
+        assert_eq!(result, "decode('deadbeefcafe', 'hex')");
+    }
+
+    #[test]
+    fn hex_normalized_to_lowercase() {
+        let hex = "0xABCDEF";
+        let result = fmt_pg_val(hex, PgColKind::Hex).unwrap();
+        assert_eq!(result, "decode('abcdef', 'hex')");
+    }
+
+    #[test]
+    fn text_value_is_single_quoted() {
+        assert_eq!(fmt_pg_val("hello", PgColKind::Text).unwrap(), "'hello'");
+    }
+
+    #[test]
+    fn text_single_quotes_are_escaped() {
+        assert_eq!(
+            fmt_pg_val("it's alive", PgColKind::Text).unwrap(),
+            "'it''s alive'"
+        );
+    }
+
+    // ── error cases for fmt_pg_val ─────────────────────────────────────────
+
+    #[test]
+    fn non_numeric_string_for_numeric_col_returns_error() {
+        assert!(fmt_pg_val("not-a-number", PgColKind::Numeric).is_err());
+    }
+
+    #[test]
+    fn non_hex_string_for_hex_col_returns_error() {
+        assert!(fmt_pg_val("not-hex!", PgColKind::Hex).is_err());
+    }
+
+    #[test]
+    fn empty_string_for_hex_col_returns_error() {
+        assert!(fmt_pg_val("", PgColKind::Hex).is_err());
+    }
+
+    // ── no filters ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_clauses_produces_empty_string() {
+        assert_eq!(compile(&[], &[]), "");
+    }
+
+    // ── numeric fixed columns ──────────────────────────────────────────────
+
+    #[test]
+    fn eq_on_block_number() {
+        let sql = compile(&[scalar(FilterOp::Eq, "block_number", "42")], &[]);
+        assert_eq!(sql, r#"WHERE "block_number" = 42"#);
+    }
+
+    #[test]
+    fn block_range_produces_and_clause() {
+        let sql = compile(
+            &[
+                scalar(FilterOp::Gte, "block_number", "100"),
+                scalar(FilterOp::Lte, "block_number", "200"),
+            ],
+            &[],
+        );
+        assert_eq!(
+            sql,
+            r#"WHERE "block_number" >= 100 AND "block_number" <= 200"#
+        );
+    }
+
+    // ── hex / BYTEA columns ────────────────────────────────────────────────
+
+    #[test]
+    fn eq_on_contract_address_uses_decode() {
+        let addr = "0xabcdef1234567890abcdef1234567890abcdef12";
+        let sql = compile(&[scalar(FilterOp::Eq, "contract_address", addr)], &[]);
+        assert_eq!(
+            sql,
+            r#"WHERE "contract_address" = decode('abcdef1234567890abcdef1234567890abcdef12', 'hex')"#
+        );
+    }
+
+    #[test]
+    fn in_on_contract_address_uses_decode_for_each_item() {
+        let sql = compile(&[list("contract_address", &["0xaaaa", "0xbbbb"])], &[]);
+        assert_eq!(
+            sql,
+            r#"WHERE "contract_address" IN (decode('aaaa', 'hex'), decode('bbbb', 'hex'))"#
+        );
+    }
+
+    #[test]
+    fn eq_on_address_param_uses_decode() {
+        let addr = "0x1234567890123456789012345678901234567890";
+        let sql = compile(&[scalar(FilterOp::Eq, "from", addr)], &[addr_col("from")]);
+        assert_eq!(
+            sql,
+            r#"WHERE "from" = decode('1234567890123456789012345678901234567890', 'hex')"#
+        );
+    }
+
+    // ── text columns ───────────────────────────────────────────────────────
+
+    #[test]
+    fn eq_on_text_param_is_quoted() {
+        let sql = compile(
+            &[scalar(FilterOp::Eq, "memo", "hello")],
+            &[text_col("memo")],
+        );
+        assert_eq!(sql, r#"WHERE "memo" = 'hello'"#);
+    }
+
+    // ── uint256 event param ────────────────────────────────────────────────
+
+    #[test]
+    fn gte_on_uint256_param_is_numeric() {
+        let sql = compile(
+            &[scalar(FilterOp::Gte, "value", "1000000000000000000")],
+            &[uint_col("value")],
+        );
+        assert_eq!(sql, r#"WHERE "value" >= 1000000000000000000"#);
+    }
+
+    // ── multiple columns ───────────────────────────────────────────────────
+
+    #[test]
+    fn three_clauses_all_joined_with_and() {
+        let sql = compile(
+            &[
+                scalar(FilterOp::Eq, "contract_address", "0xabcd"),
+                scalar(FilterOp::Gte, "block_number", "50"),
+                scalar(FilterOp::Eq, "from", "0x1234"),
+            ],
+            &[addr_col("from")],
+        );
+        assert_eq!(
+            sql,
+            r#"WHERE "contract_address" = decode('abcd', 'hex') AND "block_number" >= 50 AND "from" = decode('1234', 'hex')"#
+        );
+    }
+
+    // ── error cases ────────────────────────────────────────────────────────
+
+    #[test]
+    fn non_hex_for_contract_address_returns_error() {
+        let result =
+            build_pg_where_clause(&[scalar(FilterOp::Eq, "contract_address", "not-hex")], &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected a hex value")
+        );
+    }
+
+    #[test]
+    fn non_numeric_for_block_number_returns_error() {
+        let result = build_pg_where_clause(&[scalar(FilterOp::Eq, "block_number", "abc")], &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected a number")
+        );
+    }
+
+    #[test]
+    fn in_with_scalar_value_returns_error() {
+        let result = build_pg_condition(
+            &WhereClause {
+                column: "block_number".to_string(),
+                op: FilterOp::In,
+                value: FilterValue::Scalar("42".to_string()),
+            },
+            &[],
+        );
+        assert!(result.is_err());
     }
 }
