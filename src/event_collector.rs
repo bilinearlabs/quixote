@@ -374,8 +374,8 @@ mod tests {
     ) {
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         let metrics = crate::metrics::MetricsHandle::default();
-        // A block range of 10 blocks is the safest choice to avoid throttling the RPC server.
-        seed_fixture.block_range = 10;
+        // A block range of 100 blocks is the safest choice to avoid throttling the RPC server.
+        seed_fixture.block_range = 100;
         let mut collector =
             EventCollector::new(provider_fixture, producer_buffer, &seed_fixture, metrics);
         collector.sync_mode = BlockNumberOrTag::Number(TARGET_BLOCK_SHORT_TEST);
@@ -412,10 +412,6 @@ mod tests {
         provider_fixture: Arc<dyn Provider + Send + Sync + 'static>,
         mut seed_fixture: CollectorSeed,
     ) {
-        // Wait for check_transfer_events_for_a_block_range to complete first to avoid
-        // rate limiting interference between the two tests.
-        sleep(Duration::from_secs(25)).await;
-
         let (producer_buffer, mut consumer_buffer) = mpsc::channel(1000);
         let metrics = crate::metrics::MetricsHandle::default();
         // 10k throttles the RPC at the second request.
