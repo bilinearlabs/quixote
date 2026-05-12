@@ -42,12 +42,16 @@ pub fn build_schema(
     events: Vec<EventDescriptorDb>,
     factory: Arc<dyn StorageFactory>,
 ) -> Result<Schema> {
-    // _empty ensures Query always has at least one field (required by the spec).
-    let mut query = Object::new("Query").field(Field::new(
-        "_empty",
-        TypeRef::named(TypeRef::BOOLEAN),
-        |_| FieldFuture::from_value(None),
-    ));
+    // _empty is a fallback field required by the spec when no events are indexed yet.
+    let mut query = if events.is_empty() {
+        Object::new("Query").field(Field::new(
+            "_empty",
+            TypeRef::named(TypeRef::BOOLEAN),
+            |_| FieldFuture::from_value(None),
+        ))
+    } else {
+        Object::new("Query")
+    };
 
     let mut schema_builder = Schema::build("Query", None, None);
 
