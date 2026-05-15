@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Bilinear Labs
 // SPDX-License-Identifier: MIT
 
+use crate::configuration::GraphqlLayerConfig;
 use crate::storage::{
     EventColumn, EventDescriptorDb, EventQuery, FilterOp, FilterValue, OrderDir, StorageFactory,
     WhereClause,
@@ -41,6 +42,7 @@ fn gql_col_to_db(gql: &str) -> String {
 pub fn build_schema(
     events: Vec<EventDescriptorDb>,
     factory: Arc<dyn StorageFactory>,
+    graphql_config: Option<&GraphqlLayerConfig>,
 ) -> Result<Schema> {
     // _empty is a fallback field required by the spec when no events are indexed yet.
     let mut query = if events.is_empty() {
@@ -337,6 +339,12 @@ pub fn build_schema(
         );
     }
 
+    if let Some(cfg) = graphql_config {
+        (schema_builder, query) =
+            crate::api_the_graph::register_the_graph_entities(schema_builder, query, cfg, factory)
+                .map_err(|e| anyhow::anyhow!("Failed to register The Graph entities: {e}"))?;
+    }
+
     schema_builder
         .register(query)
         .finish()
@@ -427,10 +435,13 @@ pub fn create_graphql_router(schema: Schema, playground: bool) -> Router {
 }
 
 /// Build the schema from the factory (connects to DB, reads event descriptors).
-pub async fn build_schema_from_factory(factory: Arc<dyn StorageFactory>) -> Result<Schema> {
+pub async fn build_schema_from_factory(
+    factory: Arc<dyn StorageFactory>,
+    graphql_config: Option<&GraphqlLayerConfig>,
+) -> Result<Schema> {
     let storage = factory.create_storage()?;
     let events = storage.list_indexed_events().await?;
-    build_schema(events, factory)
+    build_schema(events, factory, graphql_config)
 }
 
 #[cfg(test)]
@@ -507,7 +518,7 @@ mod tests {
             .with_erc20_transfer()
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -542,7 +553,7 @@ mod tests {
             .with_erc20_transfer()
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -570,7 +581,7 @@ mod tests {
             .with_contract_addresses([addr_a.clone(), addr_b.clone()])
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -598,7 +609,7 @@ mod tests {
             .with_address_pool([sender.clone()])
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -622,7 +633,7 @@ mod tests {
             .with_erc20_transfer()
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -644,7 +655,7 @@ mod tests {
         let tmp = TempDb::new("invalid_block");
         let logs = LogTestFixture::builder().with_erc20_transfer().build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -667,7 +678,7 @@ mod tests {
         let tmp = TempDb::new("bad_orderby");
         let logs = LogTestFixture::builder().with_erc20_transfer().build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -696,7 +707,7 @@ mod tests {
             .with_contract_addresses([addr_a.clone(), addr_b.clone()])
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -731,7 +742,7 @@ mod tests {
             .with_contract_addresses([addr_a.clone(), addr_b.clone()])
             .build();
         let factory = seed_duckdb(tmp.path(), transfer_event(), &logs).await;
-        let schema = build_schema_from_factory(factory)
+        let schema = build_schema_from_factory(factory, None)
             .await
             .expect("build schema");
 
@@ -770,7 +781,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory).await?;
+        let schema = build_schema_from_factory(factory, None)?;
 
         let query = format!(
             "{{ {} {{ blockNumber transactionHash from to value }} }}",
@@ -810,7 +821,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory).await?;
+        let schema = build_schema_from_factory(factory, None)?;
 
         let query = format!(
             r#"{{ {}(where: {{ blockNumber: {{ gte: "103", lte: "107" }} }}) {{ blockNumber }} }}"#,
@@ -844,7 +855,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory).await?;
+        let schema = build_schema_from_factory(factory, None)?;
 
         let query = format!(
             r#"{{ {}(where: {{ contractAddress: {{ eq: "{}" }} }}) {{ contractAddress }} }}"#,
@@ -876,7 +887,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory).await?;
+        let schema = build_schema_from_factory(factory, None)?;
 
         let query = format!(
             r#"{{ {}(condition: {{ contractAddress: "{}" }}) {{ contractAddress }} }}"#,
@@ -914,7 +925,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory).await?;
+        let schema = build_schema_from_factory(factory, None)?;
 
         // condition pins addr_a (5 logs: blocks 100,102,104,106,108).
         // where further restricts to blockNumber >= 104 (3 logs: 104,106,108).
@@ -950,7 +961,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory).await?;
+        let schema = build_schema_from_factory(factory, None)?;
 
         let query = format!(
             r#"{{ {}(where: {{ from: {{ eq: "{}" }} }}) {{ from }} }}"#,

@@ -5,7 +5,7 @@ use crate::{
     CancellationToken, CollectorSeed, EventCollectorRunner, EventProcessor, OptionalAddressDisplay,
     TxLogChunk,
     api_rest::{TorStateHandle, start_api_server},
-    configuration::{DatabaseBackend, IndexerConfiguration},
+    configuration::{DatabaseBackend, GraphqlLayerConfig, IndexerConfiguration},
     constants, error_codes,
     metrics::{MetricsConfig, MetricsHandle},
     storage::{DuckDBStorage, PostgreSqlStorage, Storage, StorageFactory},
@@ -28,6 +28,7 @@ pub struct IndexingApp {
     pub metrics: MetricsHandle,
     pub tor_enabled: bool,
     pub graphql_playground: bool,
+    pub graphql_config: Option<GraphqlLayerConfig>,
 }
 
 impl IndexingApp {
@@ -97,6 +98,7 @@ impl IndexingApp {
             metrics,
             tor_enabled: config.tor,
             graphql_playground: config.graphql_playground,
+            graphql_config: config.graphql.clone(),
         })
     }
 
@@ -168,6 +170,7 @@ impl IndexingApp {
             tor_state,
             self.cancellation_token.clone(),
             self.graphql_playground,
+            self.graphql_config.clone(),
         )
         .await
         .with_context(|| "Failure in the REST API server")?;

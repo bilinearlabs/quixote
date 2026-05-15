@@ -943,6 +943,10 @@ impl PostgreSqlStorage {
                 v.map(|b| Value::String(format!("0x{}", hex::encode(b))))
                     .unwrap_or(Value::Null)
             }
+            "JSON" | "JSONB" => {
+                let v: Option<serde_json::Value> = row.try_get(i).ok();
+                v.unwrap_or(Value::Null)
+            }
             _ => {
                 let v: Option<String> = row.try_get(i).ok();
                 v.map(Value::String).unwrap_or(Value::Null)

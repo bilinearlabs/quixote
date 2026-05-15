@@ -621,6 +621,7 @@ mod tests {
             tor: false,
             graphql_playground: true,
             setup_sql: vec![],
+            graphql: None,
         }
     }
 
@@ -652,6 +653,7 @@ mod tests {
             tor: false,
             graphql_playground: true,
             setup_sql: vec![],
+            graphql: None,
         }
     }
 
@@ -699,6 +701,7 @@ mod tests {
             tor: false,
             graphql_playground: true,
             setup_sql: vec![],
+            graphql: None,
         }
     }
 
@@ -739,6 +742,7 @@ mod tests {
             tor: false,
             graphql_playground: true,
             setup_sql: vec![],
+            graphql: None,
         }
     }
 

@@ -70,6 +70,66 @@ fn default_true() -> bool {
     true
 }
 
+/// Configuration for the generic GraphQL / The Graph compatibility layer.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphqlLayerConfig {
+    pub schema: String,
+    pub entities: Vec<GraphqlEntityConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphqlEntityConfig {
+    #[serde(rename = "type")]
+    pub type_name: String,
+    pub view: String,
+    pub id_column: String,
+    #[serde(default)]
+    pub queries: Vec<GraphqlQueryConfig>,
+    #[serde(default)]
+    pub relations: Vec<GraphqlRelationConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphqlQueryConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub query_type: String,
+    #[serde(default)]
+    pub filters: Vec<GraphqlFilterConfig>,
+    pub column: Option<String>,
+    /// Columns that can appear as `orderBy` values. Generates a `{EntityName}_orderBy` enum.
+    #[serde(default)]
+    pub order_by_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphqlFilterConfig {
+    /// Name of the field inside the `where` input object (e.g. `state`, `id_in`).
+    /// Fields ending in `_in` are treated as list/IN filters.
+    #[serde(alias = "arg")]
+    pub field: String,
+    pub column: String,
+    #[serde(default)]
+    pub required: bool,
+    /// GQL scalar type: "String" (default), "Int", or "Boolean".
+    #[serde(rename = "type", default = "default_string_type")]
+    pub arg_type: String,
+}
+
+fn default_string_type() -> String {
+    "String".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GraphqlRelationConfig {
+    pub field: String,
+    pub view: String,
+    pub foreign_key: String,
+    pub parent_column: Option<String>,
+    #[serde(default)]
+    pub singleton: bool,
+}
+
 /// Configuration as parsed from a file. Fields are optional to allow partial configs.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct FileConfiguration {
@@ -91,6 +151,7 @@ pub struct FileConfiguration {
     /// Note: introspection is enabled by default regardless of this setting.
     #[serde(default = "default_true")]
     pub graphql_playground: bool,
+    pub graphql: Option<GraphqlLayerConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -131,6 +192,8 @@ pub struct IndexerConfiguration {
     pub graphql_playground: bool,
     /// SQL statements executed once at startup — see `FileConfiguration::setup_sql`.
     pub setup_sql: Vec<String>,
+    /// Optional generic GraphQL / The Graph compatibility layer configuration.
+    pub graphql: Option<GraphqlLayerConfig>,
 }
 
 impl IndexerConfiguration {
@@ -222,6 +285,7 @@ impl IndexerConfiguration {
             tor: args.tor,
             graphql_playground: file_config.graphql_playground,
             setup_sql: file_config.setup_sql,
+            graphql: file_config.graphql,
         }
     }
 
@@ -303,6 +367,7 @@ impl FileConfiguration {
             frontend_port: Some(args.frontend_port),
             graphql_playground: true,
             setup_sql: vec![],
+            graphql: None,
         }
     }
 

@@ -5309,6 +5309,7 @@ dependencies = [
  "arti-client",
  "async-graphql",
  "async-graphql-axum",
+ "async-graphql-parser",
  "async-trait",
  "axum",
  "bs58",
