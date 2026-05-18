@@ -408,8 +408,85 @@ fn parse_event_columns(sig: &str) -> Vec<EventColumn> {
 
 // --- Axum glue ---
 
+/// Strip variable declarations that are declared in an operation signature but never
+/// referenced in the selection set.
+///
+/// The Graph's query engine ignores such "phantom" variables; the GraphQL spec (and
+/// `async_graphql`) treat them as a validation error. This preprocessor removes them
+/// so that queries written for The Graph work transparently on this server.
+///
+/// Algorithm: count how many times each `$name` token appears in the raw query string.
+/// A variable that appears exactly once is only in its own declaration — it is never
+/// used in the body. Those declarations are then removed from the operation's
+/// variable-list.
+fn strip_unused_variable_declarations(query: &str) -> String {
+    use regex::Regex;
+    use std::collections::{HashMap, HashSet};
+
+    // Fast-path: no variables at all.
+    if !query.contains('$') {
+        return query.to_string();
+    }
+
+    // Count occurrences of every `$varName` token in the query.
+    let token_re = Regex::new(r"\$(\w+)").expect("static regex");
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for cap in token_re.captures_iter(query) {
+        if let Some(m) = cap.get(1) {
+            *counts.entry(m.as_str()).or_insert(0) += 1;
+        }
+    }
+
+    // Variables that appear only once are solely in their declaration, never in the body.
+    let unused: HashSet<&str> = counts
+        .iter()
+        .filter_map(|(&name, &n)| if n == 1 { Some(name) } else { None })
+        .collect();
+
+    if unused.is_empty() {
+        return query.to_string();
+    }
+
+    // Rewrite each operation's variable list, dropping unused declarations.
+    // Matches: `query Name(` or `mutation Name(` etc. — the parens contain the var list.
+    let op_re = Regex::new(r"(?s)((?:query|mutation|subscription)\s+\w*\s*)\(([^)]*)\)")
+        .expect("static regex");
+
+    op_re
+        .replace_all(query, |caps: &regex::Captures| {
+            let op_prefix = &caps[1];
+            let var_list = &caps[2];
+
+            let kept: Vec<&str> = var_list
+                .split(',')
+                .map(str::trim)
+                .filter(|decl| {
+                    // Each declaration looks like `$name: Type[!][= default]`.
+                    // Keep it unless the name is in the unused set.
+                    decl.find(':').is_none_or(|colon_idx| {
+                        let name_part = decl[..colon_idx].trim();
+                        name_part
+                            .strip_prefix('$')
+                            .map(|n| !unused.contains(n.trim()))
+                            .unwrap_or(true)
+                    })
+                })
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if kept.is_empty() {
+                op_prefix.to_string()
+            } else {
+                format!("{}({})", op_prefix, kept.join(", "))
+            }
+        })
+        .into_owned()
+}
+
 pub async fn graphql_handler(State(schema): State<Schema>, req: GraphQLRequest) -> GraphQLResponse {
-    schema.execute(req.into_inner()).await.into()
+    let mut request = req.into_inner();
+    request.query = strip_unused_variable_declarations(&request.query);
+    schema.execute(request).await.into()
 }
 
 pub async fn playground_handler() -> impl IntoResponse {
@@ -450,6 +527,49 @@ mod tests {
     use crate::storage::{DuckDBStorage, Storage};
     use crate::test_utils::*;
     use std::sync::Arc;
+
+    // ── strip_unused_variable_declarations tests ──────────────────────────────
+
+    #[test]
+    fn strip_unused_vars_noop_when_all_used() {
+        let q = r#"query getProposals($first: Int!, $skip: Int!) {
+  proposals(first: $first, skip: $skip) { id }
+}"#;
+        assert_eq!(strip_unused_variable_declarations(q), q);
+    }
+
+    #[test]
+    fn strip_unused_vars_removes_trailing_unused_var() {
+        let q = r#"query getProposals($first: Int!, $skip: Int!, $stateFilter: Int) {
+  proposals(first: $first, skip: $skip) { id }
+}"#;
+        let out = strip_unused_variable_declarations(q);
+        assert!(!out.contains("stateFilter"), "stateFilter should be removed");
+        assert!(out.contains("$first"), "$first should remain");
+        assert!(out.contains("$skip"), "$skip should remain");
+    }
+
+    #[test]
+    fn strip_unused_vars_removes_leading_unused_var() {
+        let q = r#"query Q($unused: String, $id: ID!) { node(id: $id) { name } }"#;
+        let out = strip_unused_variable_declarations(q);
+        assert!(!out.contains("$unused"), "unused should be removed");
+        assert!(out.contains("$id"), "id should remain");
+    }
+
+    #[test]
+    fn strip_unused_vars_removes_all_vars_when_none_used() {
+        let q = r#"query Q($a: String, $b: Int) { node { name } }"#;
+        let out = strip_unused_variable_declarations(q);
+        assert!(!out.contains("$a") || !out.contains('('), "unused vars should be gone");
+        assert!(!out.contains("$b") || !out.contains('('), "unused vars should be gone");
+    }
+
+    #[test]
+    fn strip_unused_vars_noop_when_no_variables() {
+        let q = r#"{ proposals { id } }"#;
+        assert_eq!(strip_unused_variable_declarations(q), q);
+    }
 
     const CHAIN_ID: u64 = 1;
 
@@ -781,7 +901,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory, None)?;
+        let schema = build_schema_from_factory(factory, None).await?;
 
         let query = format!(
             "{{ {} {{ blockNumber transactionHash from to value }} }}",
@@ -821,7 +941,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory, None)?;
+        let schema = build_schema_from_factory(factory, None).await?;
 
         let query = format!(
             r#"{{ {}(where: {{ blockNumber: {{ gte: "103", lte: "107" }} }}) {{ blockNumber }} }}"#,
@@ -855,7 +975,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory, None)?;
+        let schema = build_schema_from_factory(factory, None).await?;
 
         let query = format!(
             r#"{{ {}(where: {{ contractAddress: {{ eq: "{}" }} }}) {{ contractAddress }} }}"#,
@@ -887,7 +1007,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory, None)?;
+        let schema = build_schema_from_factory(factory, None).await?;
 
         let query = format!(
             r#"{{ {}(condition: {{ contractAddress: "{}" }}) {{ contractAddress }} }}"#,
@@ -925,7 +1045,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory, None)?;
+        let schema = build_schema_from_factory(factory, None).await?;
 
         // condition pins addr_a (5 logs: blocks 100,102,104,106,108).
         // where further restricts to blockNumber >= 104 (3 logs: 104,106,108).
@@ -961,7 +1081,7 @@ mod tests {
 
         let fname = field_name_for(CHAIN_ID, &transfer_event());
         let factory = Arc::new(storage) as Arc<dyn StorageFactory>;
-        let schema = build_schema_from_factory(factory, None)?;
+        let schema = build_schema_from_factory(factory, None).await?;
 
         let query = format!(
             r#"{{ {}(where: {{ from: {{ eq: "{}" }} }}) {{ from }} }}"#,

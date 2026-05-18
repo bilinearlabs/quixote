@@ -161,9 +161,7 @@ fn json_to_gql(v: &Value) -> async_graphql::Value {
                 async_graphql::Value::Number(i.into())
             } else if let Some(f) = n.as_f64() {
                 async_graphql::Value::Number(
-                    serde_json::Number::from_f64(f)
-                        .unwrap_or_else(|| 0i64.into())
-                        .into(),
+                    serde_json::Number::from_f64(f).unwrap_or_else(|| 0i64.into()),
                 )
             } else {
                 async_graphql::Value::Null
@@ -287,34 +285,34 @@ fn build_list_query(
                 let mut conditions: Vec<String> = vec![];
 
                 // Parse `where` input object
-                if let Some(where_acc) = ctx.args.get("where") {
-                    if let Ok(obj) = where_acc.object() {
-                        for f in &filter_defs {
-                            if let Some(val_acc) = obj.get(&f.field) {
-                                if f.field.ends_with("_in") {
-                                    // List/IN filter
-                                    if let Ok(list) = val_acc.list() {
-                                        let lits: Vec<String> = list
-                                            .iter()
-                                            .filter_map(|v| gql_to_sql_literal(v.as_value()))
-                                            .collect();
-                                        if !lits.is_empty() {
-                                            conditions.push(format!(
-                                                r#""{}" IN ({})"#,
-                                                f.column,
-                                                lits.join(", ")
-                                            ));
-                                        }
+                if let Some(where_acc) = ctx.args.get("where")
+                    && let Ok(obj) = where_acc.object()
+                {
+                    for f in &filter_defs {
+                        if let Some(val_acc) = obj.get(&f.field) {
+                            if f.field.ends_with("_in") {
+                                // List/IN filter
+                                if let Ok(list) = val_acc.list() {
+                                    let lits: Vec<String> = list
+                                        .iter()
+                                        .filter_map(|v| gql_to_sql_literal(v.as_value()))
+                                        .collect();
+                                    if !lits.is_empty() {
+                                        conditions.push(format!(
+                                            r#""{}" IN ({})"#,
+                                            f.column,
+                                            lits.join(", ")
+                                        ));
                                     }
-                                } else if let Some(lit) = gql_to_sql_literal(val_acc.as_value()) {
-                                    conditions.push(format!(r#""{}" = {}"#, f.column, lit));
                                 }
-                            } else if f.required {
-                                return Err(async_graphql::Error::new(format!(
-                                    "{} is required",
-                                    f.field
-                                )));
+                            } else if let Some(lit) = gql_to_sql_literal(val_acc.as_value()) {
+                                conditions.push(format!(r#""{}" = {}"#, f.column, lit));
                             }
+                        } else if f.required {
+                            return Err(async_graphql::Error::new(format!(
+                                "{} is required",
+                                f.field
+                            )));
                         }
                     }
                 }
@@ -734,4 +732,455 @@ pub fn register_the_graph_entities(
     }
 
     Ok((schema_builder, query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::configuration::{
+        GraphqlEntityConfig, GraphqlFilterConfig, GraphqlLayerConfig, GraphqlQueryConfig,
+    };
+    use crate::storage::{
+        ContractDescriptorDb, EventDescriptorDb, EventQuery, Storage, StorageFactory,
+    };
+    use crate::EventStatus;
+    use alloy::{json_abi::Event as AbiEvent, primitives::B256, rpc::types::Log};
+    use anyhow::Result;
+    use async_graphql::dynamic::{Object, Schema};
+    use async_trait::async_trait;
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+
+    // ── Mock storage ──────────────────────────────────────────────────────────
+
+    struct MockStorage {
+        rows: Vec<Value>,
+    }
+
+    #[async_trait]
+    impl Storage for MockStorage {
+        async fn send_raw_query(&self, _sql: &str) -> Result<Value> {
+            Ok(Value::Array(self.rows.clone()))
+        }
+        async fn add_events(&self, _: u64, _: &[Log]) -> Result<()> { unimplemented!() }
+        async fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> { Ok(vec![]) }
+        async fn event_index_status(&self, _: u64, _: &AbiEvent) -> Result<Option<EventStatus>> { unimplemented!() }
+        async fn include_events(&self, _: u64, _: &[AbiEvent]) -> Result<()> { unimplemented!() }
+        async fn get_event_signature(&self, _: &str) -> Result<String> { unimplemented!() }
+        async fn last_block(&self, _: u64, _: &AbiEvent) -> Result<u64> { unimplemented!() }
+        async fn first_block(&self, _: u64, _: &AbiEvent) -> Result<u64> { unimplemented!() }
+        async fn set_first_block(&self, _: u64, _: &AbiEvent, _: u64) -> Result<()> { unimplemented!() }
+        async fn synchronize_events(&self, _: u64, _: &[B256], _: Option<u64>) -> Result<()> { unimplemented!() }
+        async fn run_setup_sql(&self, _: &[String]) -> Result<()> { unimplemented!() }
+        async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> { unimplemented!() }
+        async fn describe_database(&self) -> Result<Value> { unimplemented!() }
+        async fn query_event_table(&self, _: &EventQuery) -> Result<Vec<Value>> { unimplemented!() }
+    }
+
+    struct MockFactory {
+        rows: Vec<Value>,
+    }
+
+    impl MockFactory {
+        fn with_rows(rows: Vec<Value>) -> Arc<dyn StorageFactory> {
+            Arc::new(Self { rows })
+        }
+        fn empty() -> Arc<dyn StorageFactory> {
+            Arc::new(Self { rows: vec![] })
+        }
+    }
+
+    impl StorageFactory for MockFactory {
+        fn create_storage(&self) -> Result<Box<dyn Storage>> {
+            Ok(Box::new(MockStorage { rows: self.rows.clone() }))
+        }
+    }
+
+    // ── SDL temp file ─────────────────────────────────────────────────────────
+
+    struct TempSdl(String);
+
+    impl TempSdl {
+        fn new(suffix: &str, content: &str) -> Self {
+            let path = format!(
+                "/tmp/quixote_schema_{}_{}.graphql",
+                suffix,
+                std::process::id()
+            );
+            std::fs::write(&path, content).expect("write SDL file");
+            Self(path)
+        }
+        fn path(&self) -> &str {
+            &self.0
+        }
+    }
+
+    impl Drop for TempSdl {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    // ── SDL and config helpers ────────────────────────────────────────────────
+
+    const TOKEN_SDL: &str = r#"
+type Token @entity {
+  id: ID!
+  name: String!
+  symbol: String!
+}
+"#;
+
+    fn token_config(schema_path: &str) -> GraphqlLayerConfig {
+        GraphqlLayerConfig {
+            schema: schema_path.to_string(),
+            entities: vec![GraphqlEntityConfig {
+                type_name: "Token".to_string(),
+                view: "tokens".to_string(),
+                id_column: "id".to_string(),
+                queries: vec![
+                    GraphqlQueryConfig {
+                        name: "tokens".to_string(),
+                        query_type: "list".to_string(),
+                        filters: vec![
+                            GraphqlFilterConfig {
+                                field: "symbol".to_string(),
+                                column: "symbol".to_string(),
+                                required: false,
+                                arg_type: "String".to_string(),
+                            },
+                            GraphqlFilterConfig {
+                                field: "id_in".to_string(),
+                                column: "id".to_string(),
+                                required: false,
+                                arg_type: "String".to_string(),
+                            },
+                        ],
+                        column: None,
+                        order_by_fields: vec!["id".to_string(), "name".to_string()],
+                    },
+                    GraphqlQueryConfig {
+                        name: "token".to_string(),
+                        query_type: "single".to_string(),
+                        filters: vec![],
+                        column: None,
+                        order_by_fields: vec![],
+                    },
+                    GraphqlQueryConfig {
+                        name: "tokensByIds".to_string(),
+                        query_type: "batch".to_string(),
+                        filters: vec![],
+                        column: None,
+                        order_by_fields: vec![],
+                    },
+                    GraphqlQueryConfig {
+                        name: "tokenSearch".to_string(),
+                        query_type: "search".to_string(),
+                        filters: vec![],
+                        column: Some("name".to_string()),
+                        order_by_fields: vec![],
+                    },
+                ],
+                relations: vec![],
+            }],
+        }
+    }
+
+    fn make_schema(sdl_path: &str, rows: Vec<Value>) -> Schema {
+        let cfg = token_config(sdl_path);
+        let factory = MockFactory::with_rows(rows);
+        let (sb, query) = register_the_graph_entities(
+            Schema::build("Query", None, None),
+            Object::new("Query"),
+            &cfg,
+            factory,
+        )
+        .expect("register entities");
+        sb.register(query).finish().expect("build schema")
+    }
+
+    // ── Unit tests for helper functions ───────────────────────────────────────
+
+    #[test]
+    fn gql_to_sql_literal_escapes_single_quotes_in_strings() {
+        let v = async_graphql::Value::String("it's alive".to_string());
+        assert_eq!(gql_to_sql_literal(&v), Some("'it''s alive'".to_string()));
+    }
+
+    #[test]
+    fn gql_to_sql_literal_wraps_numbers_in_quotes() {
+        let v = async_graphql::Value::Number(42i64.into());
+        assert_eq!(gql_to_sql_literal(&v), Some("'42'".to_string()));
+    }
+
+    #[test]
+    fn gql_to_sql_literal_renders_booleans_unquoted() {
+        assert_eq!(
+            gql_to_sql_literal(&async_graphql::Value::Boolean(true)),
+            Some("true".to_string())
+        );
+        assert_eq!(
+            gql_to_sql_literal(&async_graphql::Value::Boolean(false)),
+            Some("false".to_string())
+        );
+    }
+
+    #[test]
+    fn gql_to_sql_literal_returns_none_for_null() {
+        assert_eq!(gql_to_sql_literal(&async_graphql::Value::Null), None);
+    }
+
+    #[test]
+    fn coerce_int_parses_number_value() {
+        assert_eq!(
+            coerce_json_to_gql(&json!(42), "Int"),
+            async_graphql::Value::Number(42i64.into())
+        );
+    }
+
+    #[test]
+    fn coerce_int_parses_string_value() {
+        assert_eq!(
+            coerce_json_to_gql(&json!("99"), "Int"),
+            async_graphql::Value::Number(99i64.into())
+        );
+    }
+
+    #[test]
+    fn coerce_int_returns_null_for_non_numeric_string() {
+        assert_eq!(
+            coerce_json_to_gql(&json!("not-a-number"), "Int"),
+            async_graphql::Value::Null
+        );
+    }
+
+    #[test]
+    fn coerce_boolean_from_bool_value() {
+        assert_eq!(
+            coerce_json_to_gql(&json!(true), "Boolean"),
+            async_graphql::Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn coerce_boolean_from_string_true_variants() {
+        for s in &["true", "TRUE", "t", "1"] {
+            assert_eq!(
+                coerce_json_to_gql(&json!(s), "Boolean"),
+                async_graphql::Value::Boolean(true),
+                "expected true for '{s}'"
+            );
+        }
+    }
+
+    #[test]
+    fn coerce_boolean_from_string_false_returns_false() {
+        assert_eq!(
+            coerce_json_to_gql(&json!("false"), "Boolean"),
+            async_graphql::Value::Boolean(false)
+        );
+    }
+
+    #[test]
+    fn coerce_string_type_passes_through() {
+        assert_eq!(
+            coerce_json_to_gql(&json!("hello"), "String"),
+            async_graphql::Value::String("hello".to_string())
+        );
+    }
+
+    // ── Schema registration tests ─────────────────────────────────────────────
+
+    #[test]
+    fn register_entities_fails_on_missing_schema_file() {
+        let cfg = GraphqlLayerConfig {
+            schema: "/tmp/__nonexistent_schema_quixote__.graphql".to_string(),
+            entities: vec![],
+        };
+        let result = register_the_graph_entities(
+            Schema::build("Query", None, None),
+            Object::new("Query"),
+            &cfg,
+            MockFactory::empty(),
+        );
+        match result {
+            Err(e) => assert!(e.contains("failed to read schema"), "unexpected error: {e}"),
+            Ok(_) => panic!("expected an error for missing schema file"),
+        }
+    }
+
+    #[test]
+    fn register_entities_fails_on_invalid_sdl() {
+        let sdl = TempSdl::new("invalid_sdl", "not valid graphql !!!");
+        let cfg = GraphqlLayerConfig {
+            schema: sdl.path().to_string(),
+            entities: vec![],
+        };
+        let result = register_the_graph_entities(
+            Schema::build("Query", None, None),
+            Object::new("Query"),
+            &cfg,
+            MockFactory::empty(),
+        );
+        assert!(result.is_err(), "should fail for unparseable SDL");
+    }
+
+    #[test]
+    fn register_entities_succeeds_and_exposes_entity_type_in_sdl() {
+        let sdl = TempSdl::new("valid_sdl", TOKEN_SDL);
+        let cfg = token_config(sdl.path());
+        let (sb, query) = register_the_graph_entities(
+            Schema::build("Query", None, None),
+            Object::new("Query"),
+            &cfg,
+            MockFactory::empty(),
+        )
+        .expect("register should succeed");
+        let schema = sb.register(query).finish().expect("schema should build");
+        let schema_sdl = schema.sdl();
+        assert!(schema_sdl.contains("Token"), "Token type must appear in schema SDL");
+    }
+
+    // ── Resolver tests with mock storage ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_query_returns_all_rows_from_storage() {
+        let sdl = TempSdl::new("list", TOKEN_SDL);
+        let schema = make_schema(
+            sdl.path(),
+            vec![
+                json!({"id": "1", "name": "Ethereum", "symbol": "ETH"}),
+                json!({"id": "2", "name": "Bitcoin", "symbol": "BTC"}),
+            ],
+        );
+
+        let res = schema.execute("{ tokens { id name symbol } }").await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data["tokens"].as_array().expect("array");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["id"].as_str().unwrap(), "1");
+        assert_eq!(rows[1]["symbol"].as_str().unwrap(), "BTC");
+    }
+
+    #[tokio::test]
+    async fn list_query_returns_empty_list_when_storage_is_empty() {
+        let sdl = TempSdl::new("list_empty", TOKEN_SDL);
+        let schema = make_schema(sdl.path(), vec![]);
+
+        let res = schema.execute("{ tokens { id } }").await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        assert!(data["tokens"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn single_query_returns_first_row_from_storage() {
+        let sdl = TempSdl::new("single", TOKEN_SDL);
+        let schema = make_schema(
+            sdl.path(),
+            vec![json!({"id": "42", "name": "Ether", "symbol": "ETH"})],
+        );
+
+        let res = schema.execute(r#"{ token(id: "42") { id name } }"#).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        assert_eq!(data["token"]["id"].as_str().unwrap(), "42");
+        assert_eq!(data["token"]["name"].as_str().unwrap(), "Ether");
+    }
+
+    #[tokio::test]
+    async fn single_query_returns_null_when_storage_is_empty() {
+        let sdl = TempSdl::new("single_null", TOKEN_SDL);
+        let schema = make_schema(sdl.path(), vec![]);
+
+        let res = schema.execute(r#"{ token(id: "999") { id } }"#).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        assert!(data["token"].is_null());
+    }
+
+    #[tokio::test]
+    async fn batch_query_returns_rows_from_storage() {
+        let sdl = TempSdl::new("batch", TOKEN_SDL);
+        let schema = make_schema(
+            sdl.path(),
+            vec![
+                json!({"id": "1", "name": "Ethereum", "symbol": "ETH"}),
+                json!({"id": "3", "name": "USDC", "symbol": "USDC"}),
+            ],
+        );
+
+        let res = schema
+            .execute(r#"{ tokensByIds(ids: ["1", "3"]) { id symbol } }"#)
+            .await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data["tokensByIds"].as_array().expect("array");
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn batch_query_with_empty_ids_returns_empty() {
+        let sdl = TempSdl::new("batch_empty", TOKEN_SDL);
+        let schema = make_schema(sdl.path(), vec![]);
+
+        let res = schema.execute(r#"{ tokensByIds(ids: []) { id } }"#).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        assert!(data["tokensByIds"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_query_returns_rows_from_storage() {
+        let sdl = TempSdl::new("search", TOKEN_SDL);
+        let schema = make_schema(
+            sdl.path(),
+            vec![
+                json!({"id": "1", "name": "Ethereum", "symbol": "ETH"}),
+                json!({"id": "2", "name": "EthereumClassic", "symbol": "ETC"}),
+            ],
+        );
+
+        let res = schema
+            .execute(r#"{ tokenSearch(text: "Ethereum") { id name } }"#)
+            .await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        let rows = data["tokenSearch"].as_array().expect("array");
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn search_query_with_only_special_chars_returns_empty_without_querying() {
+        let sdl = TempSdl::new("search_special", TOKEN_SDL);
+        // Even with rows in storage, filtering on special-only text is caught before SQL
+        let schema = make_schema(
+            sdl.path(),
+            vec![json!({"id": "1", "name": "Ethereum", "symbol": "ETH"})],
+        );
+
+        let res = schema.execute(r#"{ tokenSearch(text: "!!!") { id } }"#).await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        assert!(data["tokenSearch"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_query_passes_pagination_arguments_to_storage() {
+        let sdl = TempSdl::new("pagination", TOKEN_SDL);
+        // Mock returns exactly the rows it has regardless of SQL, so we just verify no errors
+        // and pagination args are accepted without complaint.
+        let schema = make_schema(
+            sdl.path(),
+            vec![json!({"id": "2", "name": "Beta", "symbol": "B"})],
+        );
+
+        let res = schema
+            .execute(r#"{ tokens(first: 2, skip: 1, orderBy: id, orderDirection: asc) { id } }"#)
+            .await;
+        assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
+        let data = res.data.into_json().unwrap();
+        assert!(data["tokens"].as_array().is_some());
+    }
 }
