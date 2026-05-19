@@ -244,7 +244,7 @@ mod imp {
             .context("Failed to launch onion service")?;
 
         // The onion address is known immediately after launch (derived from the key).
-        if let Some(name) = onion_service.onion_name() {
+        if let Some(name) = onion_service.onion_address() {
             let addr = name.to_string();
             state.set_onion_address(addr.clone()).await;
             info!("Tor onion service listening at http://{addr}");

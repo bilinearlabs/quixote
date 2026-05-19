@@ -207,12 +207,46 @@ impl IndexingApp {
         #[cfg(feature = "tor")]
         {
             use crate::{
+                api_graphql,
                 api_rest::{create_router, strip_identifying_headers},
                 tor_service::{TorState, start_tor_service},
             };
+            use axum::http::HeaderValue;
             use axum::middleware;
+            use tower_http::cors::{AllowOrigin, CorsLayer};
             let state = TorState::new();
+            let graphql_schema = match api_graphql::build_schema_from_factory(
+                self.storage_for_api.clone(),
+                self.graphql_config.as_ref(),
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to build GraphQL schema for Tor service: {e}");
+                    return None;
+                }
+            };
+            let cors = CorsLayer::new()
+                .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+                    origin
+                        .to_str()
+                        .map(|s| {
+                            s.ends_with(".onion")
+                                || s.starts_with("http://localhost")
+                                || s.starts_with("http://127.0.0.1")
+                        })
+                        .unwrap_or(false)
+                }))
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION]);
             let router = create_router(self.storage_for_api.clone(), Some(state.clone()))
+                .merge(api_graphql::create_graphql_router(graphql_schema, false))
+                .layer(cors)
                 .layer(middleware::from_fn(strip_identifying_headers));
             match start_tor_service(router, self.cancellation_token.clone(), state.clone()).await {
                 Ok(()) => {
