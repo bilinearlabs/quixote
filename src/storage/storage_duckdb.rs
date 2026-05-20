@@ -1441,12 +1441,10 @@ mod tests {
             .conn
             .lock()
             .expect("failed to lock connection for verification");
-        match conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}"), [], |row| {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}"), [], |row| {
             row.get(0)
-        }) {
-            Ok(count) => count,
-            Err(_) => 0,
-        }
+        })
+        .unwrap_or_default()
     }
 
     /// Test chain ID used in all tests
@@ -1596,7 +1594,7 @@ mod tests {
     #[test]
     fn uint256_values_are_stored_as_decimal() {
         let erc721 = erc721_transfer_event();
-        let storage = storage_with(&[erc721.clone()]);
+        let storage = storage_with(std::slice::from_ref(&erc721));
 
         // Token id in hex format (0xbeef = 48879 decimal)
         let token_id_hex = "0x000000000000000000000000000000000000000000000000000000000000beef";
@@ -1648,7 +1646,7 @@ mod tests {
     #[test]
     fn addresses_are_stripped_correctly() {
         let erc20 = erc20_transfer_event();
-        let storage = storage_with(&[erc20.clone()]);
+        let storage = storage_with(std::slice::from_ref(&erc20));
 
         // This is the address we want to store
         let from_address = "0x000083970c0bd792a6d1402a12c65628bcb3f8b4";
@@ -1948,7 +1946,7 @@ mod tests {
                     test_case.event_signature
                 )
             });
-            let storage = storage_with(&[event.clone()]);
+            let storage = storage_with(std::slice::from_ref(&event));
 
             // Each test event has exactly one parameter
             let param = &event.inputs[0];

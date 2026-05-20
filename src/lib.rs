@@ -12,6 +12,7 @@ pub mod collector_seed;
 pub use collector_seed::CollectorSeed;
 pub mod api_graphql;
 pub mod api_rest;
+pub mod api_the_graph;
 pub mod cli;
 pub mod indexing_app;
 pub use indexing_app::IndexingApp;

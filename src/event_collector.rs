@@ -361,8 +361,7 @@ mod tests {
         let json = std::fs::read_to_string("./test/fixtures/usdc_abi.json")
             .expect("Failed to read USDC ABI file");
         let abi: JsonAbi = serde_json::from_str(&json).expect("Failed to parse USDC ABI");
-        let events = abi.events().cloned().collect::<Vec<Event>>();
-        events
+        abi.events().cloned().collect::<Vec<Event>>()
     }
 
     /// This test ensures that the fetcher retrieves the expected amount of transfer events for a given block range.

@@ -3,6 +3,7 @@
 
 use crate::{
     CancellationToken, api_graphql,
+    configuration::GraphqlLayerConfig,
     storage::{ContractDescriptorDb, EventDescriptorDb, StorageFactory},
 };
 use anyhow::Result;
@@ -10,8 +11,8 @@ use axum::http::Request;
 use axum::{
     Router,
     extract::State,
-    http::{HeaderValue, StatusCode, header},
-    middleware::{self, Next},
+    http::{StatusCode, header},
+    middleware::Next,
     response::{Json, Response},
     routing::{get, post},
 };
@@ -297,31 +298,6 @@ pub async fn strip_identifying_headers(mut req: Request<axum::body::Body>, next:
     next.run(req).await
 }
 
-/// Axum middleware that adds `Access-Control-Allow-Origin` for `.onion` origins.
-///
-/// This allows browser clients running inside Tor Browser (whose origin is a
-/// `.onion` URL) to call the API without CORS errors.
-async fn onion_cors_middleware(req: Request<axum::body::Body>, next: Next) -> Response {
-    let origin = req
-        .headers()
-        .get(header::ORIGIN)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned());
-
-    let mut response = next.run(req).await;
-
-    if let Some(origin) = origin
-        && (origin.ends_with(".onion") || origin.ends_with(".onion/"))
-        && let Ok(val) = HeaderValue::from_str(&origin)
-    {
-        response
-            .headers_mut()
-            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, val);
-    }
-
-    response
-}
-
 /// Combined state passed to every handler: storage factory + optional Tor state.
 type AppState = (Arc<dyn StorageFactory>, TorStateHandle);
 
@@ -334,7 +310,6 @@ pub fn create_router(factory: Arc<dyn StorageFactory>, tor_state: TorStateHandle
         .route("/raw_query", post(raw_query_handler))
         .route("/db_schema", get(db_schema_handler))
         .route("/tor-info", get(tor_info_handler))
-        .layer(middleware::from_fn(onion_cors_middleware))
         .with_state(state)
 }
 
@@ -345,17 +320,22 @@ pub async fn start_api_server(
     tor_state: TorStateHandle,
     cancellation_token: CancellationToken,
     graphql_playground: bool,
+    graphql_config: Option<GraphqlLayerConfig>,
 ) -> Result<()> {
     let server_address = server_address.to_string();
     tokio::spawn(async move {
-        let graphql_schema =
-            match api_graphql::build_schema_from_factory(storage_backend.clone()).await {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Failed to build GraphQL schema: {e}");
-                    return;
-                }
-            };
+        let graphql_schema = match api_graphql::build_schema_from_factory(
+            storage_backend.clone(),
+            graphql_config.as_ref(),
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                error!("Failed to build GraphQL schema: {e}");
+                return;
+            }
+        };
 
         let app = create_router(storage_backend, tor_state).merge(
             api_graphql::create_graphql_router(graphql_schema, graphql_playground),
