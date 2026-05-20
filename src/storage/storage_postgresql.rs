@@ -1070,10 +1070,7 @@ mod tests {
         let first_block = rec.first_block;
         match first_block {
             Some(decimal) => Ok(u64::try_from(decimal).unwrap_or(0)),
-            None => anyhow::bail!(
-                "First block not found for event {}",
-                event.selector()
-            ),
+            None => anyhow::bail!("First block not found for event {}", event.selector()),
         }
     }
 
