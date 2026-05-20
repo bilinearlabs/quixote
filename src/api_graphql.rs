@@ -544,7 +544,10 @@ mod tests {
   proposals(first: $first, skip: $skip) { id }
 }"#;
         let out = strip_unused_variable_declarations(q);
-        assert!(!out.contains("stateFilter"), "stateFilter should be removed");
+        assert!(
+            !out.contains("stateFilter"),
+            "stateFilter should be removed"
+        );
         assert!(out.contains("$first"), "$first should remain");
         assert!(out.contains("$skip"), "$skip should remain");
     }
@@ -561,8 +564,14 @@ mod tests {
     fn strip_unused_vars_removes_all_vars_when_none_used() {
         let q = r#"query Q($a: String, $b: Int) { node { name } }"#;
         let out = strip_unused_variable_declarations(q);
-        assert!(!out.contains("$a") || !out.contains('('), "unused vars should be gone");
-        assert!(!out.contains("$b") || !out.contains('('), "unused vars should be gone");
+        assert!(
+            !out.contains("$a") || !out.contains('('),
+            "unused vars should be gone"
+        );
+        assert!(
+            !out.contains("$b") || !out.contains('('),
+            "unused vars should be gone"
+        );
     }
 
     #[test]

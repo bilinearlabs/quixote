@@ -7,7 +7,10 @@
 
 use crate::configuration::{GraphqlEntityConfig, GraphqlLayerConfig, GraphqlQueryConfig};
 use crate::storage::StorageFactory;
-use async_graphql::dynamic::{Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object, SchemaBuilder, TypeRef};
+use async_graphql::dynamic::{
+    Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object, SchemaBuilder,
+    TypeRef,
+};
 use async_graphql_parser::{
     parse_schema,
     types::{BaseType, TypeKind, TypeSystemDefinition},
@@ -323,11 +326,7 @@ fn build_list_query(
                     .and_then(|v| v.i64().ok())
                     .map(|n| n.min(1000))
                     .unwrap_or(100);
-                let skip = ctx
-                    .args
-                    .get("skip")
-                    .and_then(|v| v.i64().ok())
-                    .unwrap_or(0);
+                let skip = ctx.args.get("skip").and_then(|v| v.i64().ok()).unwrap_or(0);
 
                 // orderBy: accept enum value or string
                 let order_col = ctx
@@ -362,7 +361,11 @@ fn build_list_query(
                             }
                         }
                         async_graphql::Value::String(s) => {
-                            if s.eq_ignore_ascii_case("asc") { "ASC" } else { "DESC" }
+                            if s.eq_ignore_ascii_case("asc") {
+                                "ASC"
+                            } else {
+                                "DESC"
+                            }
                         }
                         _ => "DESC",
                     })
@@ -394,7 +397,10 @@ fn build_list_query(
     }
     if has_orderby {
         field = field
-            .argument(InputValue::new("orderBy", TypeRef::named(&orderby_type_name)))
+            .argument(InputValue::new(
+                "orderBy",
+                TypeRef::named(&orderby_type_name),
+            ))
             .argument(InputValue::new(
                 "orderDirection",
                 TypeRef::named("OrderDirection"),
@@ -409,36 +415,32 @@ fn build_single_query(
     factory: Arc<dyn StorageFactory>,
 ) -> Field {
     let type_name = entity.type_name.clone();
-    Field::new(
-        qcfg.name,
-        TypeRef::named(&type_name),
-        move |ctx| {
-            let entity = entity.clone();
-            let factory = factory.clone();
-            FieldFuture::new(async move {
-                let id = ctx
-                    .args
-                    .get("id")
-                    .map(|v| match v.as_value() {
-                        async_graphql::Value::String(s) => s.clone(),
-                        async_graphql::Value::Number(n) => n.to_string(),
-                        async_graphql::Value::Enum(n) => n.as_str().to_string(),
-                        other => other.to_string(),
-                    })
-                    .ok_or_else(|| async_graphql::Error::new("id is required"))?;
+    Field::new(qcfg.name, TypeRef::named(&type_name), move |ctx| {
+        let entity = entity.clone();
+        let factory = factory.clone();
+        FieldFuture::new(async move {
+            let id = ctx
+                .args
+                .get("id")
+                .map(|v| match v.as_value() {
+                    async_graphql::Value::String(s) => s.clone(),
+                    async_graphql::Value::Number(n) => n.to_string(),
+                    async_graphql::Value::Enum(n) => n.as_str().to_string(),
+                    other => other.to_string(),
+                })
+                .ok_or_else(|| async_graphql::Error::new("id is required"))?;
 
-                let id_lit = key_to_sql_literal(&id);
-                let sql = format!(
-                    r#"SELECT * FROM "{}" WHERE "{}" = {} LIMIT 1"#,
-                    entity.view, entity.id_column, id_lit
-                );
+            let id_lit = key_to_sql_literal(&id);
+            let sql = format!(
+                r#"SELECT * FROM "{}" WHERE "{}" = {} LIMIT 1"#,
+                entity.view, entity.id_column, id_lit
+            );
 
-                let rows = run_query(&factory, &sql).await?;
-                let mut merged = prefetch_and_merge(&factory, rows, &entity).await?;
-                Ok(merged.pop().map(FieldValue::owned_any))
-            })
-        },
-    )
+            let rows = run_query(&factory, &sql).await?;
+            let mut merged = prefetch_and_merge(&factory, rows, &entity).await?;
+            Ok(merged.pop().map(FieldValue::owned_any))
+        })
+    })
     .argument(InputValue::new("id", TypeRef::named_nn(TypeRef::ID)))
 }
 
@@ -570,11 +572,11 @@ pub fn register_the_graph_entities(
     let schema_src = std::fs::read_to_string(&graphql_config.schema)
         .map_err(|e| format!("failed to read schema '{}': {e}", graphql_config.schema))?;
 
-    let doc = parse_schema::<String>(schema_src)
-        .map_err(|e| format!("SDL parse error: {e}"))?;
+    let doc = parse_schema::<String>(schema_src).map_err(|e| format!("SDL parse error: {e}"))?;
 
     // Collect all SDL object types and identify which are @entity
-    type FieldList = Vec<async_graphql_parser::Positioned<async_graphql_parser::types::FieldDefinition>>;
+    type FieldList =
+        Vec<async_graphql_parser::Positioned<async_graphql_parser::types::FieldDefinition>>;
     let mut entity_fields: HashMap<String, FieldList> = HashMap::new();
     let mut nested_fields: HashMap<String, FieldList> = HashMap::new();
     let mut object_type_names: HashSet<String> = HashSet::new();
@@ -724,7 +726,7 @@ pub fn register_the_graph_entities(
                     return Err(format!(
                         "unknown query type '{}' for entity '{}'",
                         other, entity.type_name
-                    ))
+                    ));
                 }
             };
             query = query.field(field);
@@ -737,13 +739,13 @@ pub fn register_the_graph_entities(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EventStatus;
     use crate::configuration::{
         GraphqlEntityConfig, GraphqlFilterConfig, GraphqlLayerConfig, GraphqlQueryConfig,
     };
     use crate::storage::{
         ContractDescriptorDb, EventDescriptorDb, EventQuery, Storage, StorageFactory,
     };
-    use crate::EventStatus;
     use alloy::{json_abi::Event as AbiEvent, primitives::B256, rpc::types::Log};
     use anyhow::Result;
     use async_graphql::dynamic::{Object, Schema};
@@ -762,19 +764,45 @@ mod tests {
         async fn send_raw_query(&self, _sql: &str) -> Result<Value> {
             Ok(Value::Array(self.rows.clone()))
         }
-        async fn add_events(&self, _: u64, _: &[Log]) -> Result<()> { unimplemented!() }
-        async fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> { Ok(vec![]) }
-        async fn event_index_status(&self, _: u64, _: &AbiEvent) -> Result<Option<EventStatus>> { unimplemented!() }
-        async fn include_events(&self, _: u64, _: &[AbiEvent]) -> Result<()> { unimplemented!() }
-        async fn get_event_signature(&self, _: &str) -> Result<String> { unimplemented!() }
-        async fn last_block(&self, _: u64, _: &AbiEvent) -> Result<u64> { unimplemented!() }
-        async fn first_block(&self, _: u64, _: &AbiEvent) -> Result<u64> { unimplemented!() }
-        async fn set_first_block(&self, _: u64, _: &AbiEvent, _: u64) -> Result<()> { unimplemented!() }
-        async fn synchronize_events(&self, _: u64, _: &[B256], _: Option<u64>) -> Result<()> { unimplemented!() }
-        async fn run_setup_sql(&self, _: &[String]) -> Result<()> { unimplemented!() }
-        async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> { unimplemented!() }
-        async fn describe_database(&self) -> Result<Value> { unimplemented!() }
-        async fn query_event_table(&self, _: &EventQuery) -> Result<Vec<Value>> { unimplemented!() }
+        async fn add_events(&self, _: u64, _: &[Log]) -> Result<()> {
+            unimplemented!()
+        }
+        async fn list_indexed_events(&self) -> Result<Vec<EventDescriptorDb>> {
+            Ok(vec![])
+        }
+        async fn event_index_status(&self, _: u64, _: &AbiEvent) -> Result<Option<EventStatus>> {
+            unimplemented!()
+        }
+        async fn include_events(&self, _: u64, _: &[AbiEvent]) -> Result<()> {
+            unimplemented!()
+        }
+        async fn get_event_signature(&self, _: &str) -> Result<String> {
+            unimplemented!()
+        }
+        async fn last_block(&self, _: u64, _: &AbiEvent) -> Result<u64> {
+            unimplemented!()
+        }
+        async fn first_block(&self, _: u64, _: &AbiEvent) -> Result<u64> {
+            unimplemented!()
+        }
+        async fn set_first_block(&self, _: u64, _: &AbiEvent, _: u64) -> Result<()> {
+            unimplemented!()
+        }
+        async fn synchronize_events(&self, _: u64, _: &[B256], _: Option<u64>) -> Result<()> {
+            unimplemented!()
+        }
+        async fn run_setup_sql(&self, _: &[String]) -> Result<()> {
+            unimplemented!()
+        }
+        async fn list_contracts(&self) -> Result<Vec<ContractDescriptorDb>> {
+            unimplemented!()
+        }
+        async fn describe_database(&self) -> Result<Value> {
+            unimplemented!()
+        }
+        async fn query_event_table(&self, _: &EventQuery) -> Result<Vec<Value>> {
+            unimplemented!()
+        }
     }
 
     struct MockFactory {
@@ -792,7 +820,9 @@ mod tests {
 
     impl StorageFactory for MockFactory {
         fn create_storage(&self) -> Result<Box<dyn Storage>> {
-            Ok(Box::new(MockStorage { rows: self.rows.clone() }))
+            Ok(Box::new(MockStorage {
+                rows: self.rows.clone(),
+            }))
         }
     }
 
@@ -1038,7 +1068,10 @@ type Token @entity {
         .expect("register should succeed");
         let schema = sb.register(query).finish().expect("schema should build");
         let schema_sdl = schema.sdl();
-        assert!(schema_sdl.contains("Token"), "Token type must appear in schema SDL");
+        assert!(
+            schema_sdl.contains("Token"),
+            "Token type must appear in schema SDL"
+        );
     }
 
     // ── Resolver tests with mock storage ─────────────────────────────────────
@@ -1160,7 +1193,9 @@ type Token @entity {
             vec![json!({"id": "1", "name": "Ethereum", "symbol": "ETH"})],
         );
 
-        let res = schema.execute(r#"{ tokenSearch(text: "!!!") { id } }"#).await;
+        let res = schema
+            .execute(r#"{ tokenSearch(text: "!!!") { id } }"#)
+            .await;
         assert!(res.errors.is_empty(), "errors: {:?}", res.errors);
         let data = res.data.into_json().unwrap();
         assert!(data["tokenSearch"].as_array().unwrap().is_empty());

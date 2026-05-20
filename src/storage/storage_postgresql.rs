@@ -1072,7 +1072,7 @@ mod tests {
             Some(decimal) => Ok(u64::try_from(decimal).unwrap_or(0)),
             None => anyhow::bail!(
                 "First block not found for event {}",
-                event.selector().to_string()
+                event.selector()
             ),
         }
     }
@@ -1301,7 +1301,7 @@ mod tests {
         let storage = PostgreSqlStorage::new(pool.clone());
 
         let num_logs = (Faker.fake::<u8>() % 50 + 1) as usize;
-        let latest_block = Some(Faker.fake::<u64>());
+        let latest_block = Faker.fake::<u64>();
 
         let logs = LogTestFixture::builder()
             .with_log_count(num_logs)
@@ -1327,7 +1327,7 @@ mod tests {
                     approval_event().selector(),
                     erc721_transfer_event().selector(),
                 ],
-                latest_block,
+                Some(latest_block),
             )
             .await?;
 
@@ -1337,13 +1337,13 @@ mod tests {
             storage
                 .last_block(TEST_CHAIN_ID_MAINNET, &approval_event())
                 .await?,
-            latest_block.unwrap()
+            latest_block
         );
         assert_eq!(
             storage
                 .last_block(TEST_CHAIN_ID_MAINNET, &erc721_transfer_event())
                 .await?,
-            latest_block.unwrap()
+            latest_block
         );
 
         Ok(())
@@ -1361,7 +1361,7 @@ mod tests {
         let transfer_event = transfer_event();
 
         storage
-            .include_events(TEST_CHAIN_ID_MAINNET, &[transfer_event.clone()])
+            .include_events(TEST_CHAIN_ID_MAINNET, std::slice::from_ref(&transfer_event))
             .await?;
 
         // Build some logs that only contain transfer events
@@ -1405,7 +1405,7 @@ mod tests {
 
         // The LogTestFixture cycles through event kinds, so with 2 event types,
         // indices 0, 2, 4, ... are transfers. Count them.
-        let transfer_count_in_mixed = (mixed_log_count + 1) / 2;
+        let transfer_count_in_mixed = mixed_log_count.div_ceil(2);
 
         // The former call should not return an error, so if we get here, it means the unknown event was ignored.
         // The total count should be: num_logs (from first insertion) + transfer_count_in_mixed (from mixed insertion)

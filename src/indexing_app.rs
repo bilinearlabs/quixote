@@ -243,7 +243,10 @@ impl IndexingApp {
                     axum::http::Method::POST,
                     axum::http::Method::OPTIONS,
                 ])
-                .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::AUTHORIZATION]);
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                ]);
             let router = create_router(self.storage_for_api.clone(), Some(state.clone()))
                 .merge(api_graphql::create_graphql_router(graphql_schema, false))
                 .layer(cors)
